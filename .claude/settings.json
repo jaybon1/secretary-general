@@ -1,0 +1,50 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"$CLAUDE_PROJECT_DIR/src/cli.ts\" hook session-start",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"$CLAUDE_PROJECT_DIR/src/cli.ts\" hook prompt",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"$CLAUDE_PROJECT_DIR/src/cli.ts\" hook stop",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
+  "effortLevel": "medium",
+  "enabledMcpjsonServers": ["secretary"],
+  "permissions": {
+    "defaultMode": "auto",
+    "allow": [
+      "PowerShell(claude stop *)",
+      "Bash(claude stop *)",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job.ps1 *)"
+    ]
+  }
+}

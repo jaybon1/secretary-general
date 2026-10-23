@@ -1,0 +1,14 @@
+node_modules/
+
+# Personal memory data — never commit
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+backups/
+
+.claude/settings.local.json
+
+# Embedding model download and the semantic helper's state file
+models/
+*.embedder.json

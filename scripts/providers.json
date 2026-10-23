@@ -1,0 +1,10 @@
+{
+  "default": "subscription",
+  "providers": {
+    "subscription": {
+      "type": "claude-subscription",
+      "effort": "high",
+      "note": "이 PC에 로그인된 Claude 구독(claude auth login). 비서·업무 세션·run-job이 모두 이 구독으로 돈다."
+    }
+  }
+}

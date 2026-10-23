@@ -1,0 +1,187 @@
+/**
+ * Recall pipeline:  candidates (FTS5, free)  →  rerank  →  merge with semantic hits  →  pack under a hard token budget.
+ *
+ * The rerank stage is a plug-in point. Today it's a cheap heuristic; later a
+ * probabilistic judge model can replace it without touching storage or packing.
+ * Semantic hits (semantic.ts) are optional: when the helper isn't ready, recall is word search alone.
+ */
+import { CANDIDATE_POOL } from './config.ts';
+import { semanticClient, type SemanticHits, type SemanticSearch } from './semantic.ts';
+import type { Memory, Store } from './store.ts';
+import { estimateTokens, formatLocal, queryTerms, searchTerms } from './text.ts';
+
+export interface Candidate {
+  memory: Memory;
+  /** FTS5 bm25 rank (lower = better). */
+  rank: number;
+}
+
+export interface Scored {
+  memory: Memory;
+  score: number;
+}
+
+export interface CorpusStats {
+  docCount: number;
+  docFreq: Map<string, number>;
+}
+
+export interface Reranker {
+  readonly name: string;
+  rerank(query: string, candidates: Candidate[], corpus: CorpusStats): Promise<Scored[]> | Scored[];
+}
+
+export interface RecallOptions {
+  budgetTokens: number;
+  includeInvalid?: boolean;
+  /** Candidates scoring below this are dropped rather than spent on. */
+  minScore?: number;
+  /** Memories to leave out, e.g. ones this session's context already holds. */
+  excludeIds?: ReadonlySet<number>;
+  reranker?: Reranker;
+  /** Meaning-based search merged with word search. Default: the helper process, 1.5 s timeout; null turns it off. */
+  semantic?: SemanticSearch | null;
+  /** Put matching topic summaries ahead of single memories, so the current state survives the budget cut. */
+  summariesFirst?: boolean;
+}
+
+export interface RecallResult {
+  items: Scored[];
+  text: string;
+  tokens: number;
+  /** Relevant results that didn't fit in the budget. */
+  droppedForBudget: number;
+  /** Those results themselves, best first, so a caller can list them by id. */
+  dropped: Scored[];
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * A term is "specific" if it isn't spread across much of the corpus. Matching
+ * only "사용" (from "사용자는", which is in most memories) is noise, not relevance.
+ */
+function isSpecific(df: number, docCount: number): boolean {
+  return df <= Math.max(3, docCount * 0.1);
+}
+
+/**
+ * Default reranker: IDF-weighted coverage of the query plus relative bm25,
+ * nudged by importance and recency. Query words that appear in no memory at all
+ * are ignored for coverage, since nothing could have matched them.
+ */
+export const heuristicReranker: Reranker = {
+  name: 'heuristic',
+  rerank(query, candidates, corpus) {
+    const q = queryTerms(query).filter((t) => (corpus.docFreq.get(t) ?? 0) > 0);
+    if (q.length === 0 || candidates.length === 0) return [];
+    const idf = (t: string) => Math.log(1 + corpus.docCount / (corpus.docFreq.get(t) ?? 1));
+    const totalWeight = q.reduce((sum, t) => sum + idf(t), 0);
+    const best = Math.min(...candidates.map((c) => c.rank)); // bm25 is negative; most negative is best
+    const now = Date.now();
+    const out: Scored[] = [];
+    for (const c of candidates) {
+      const docTerms = new Set(searchTerms(`${c.memory.content} ${c.memory.tags}`));
+      const matched = q.filter((t) => docTerms.has(t));
+      const coverage = matched.reduce((sum, t) => sum + idf(t), 0) / totalWeight;
+      // Pass on one specific term, or on several common terms that together cover most of the query.
+      const specific = matched.some((t) => isSpecific(corpus.docFreq.get(t) ?? 0, corpus.docCount));
+      if (!specific && !(matched.length >= 2 && coverage >= 0.5)) continue;
+      const bm25 = best < 0 ? c.rank / best : 0;
+      out.push({ memory: c.memory, score: weigh(0.5 * coverage + 0.5 * bm25, c.memory, now) });
+    }
+    return out.sort((a, b) => b.score - a.score);
+  },
+};
+
+/**
+ * Importance, recency and use nudge relevance; shared by word and semantic matches so their scores compare.
+ * Use counts only explicit recalls (not auto-injection), so a memory that once surfaced can't keep promoting itself.
+ */
+function weigh(relevance: number, m: Memory, now: number): number {
+  const ageDays = (now - Date.parse(m.valid_from)) / DAY_MS;
+  const recency = Math.exp(-Math.max(ageDays, 0) / 180);
+  const use = 1 + 0.03 * Math.min(m.access_count, 5);
+  return relevance * (0.85 + 0.05 * m.importance) * (0.8 + 0.2 * recency) * use;
+}
+
+/**
+ * Similarities from the embedding model bunch together (unrelated text still scores
+ * ~0.35-0.5 with bge-m3), so relevance is measured as the lead over the corpus
+ * median: within SEM_MARGIN of it is noise, SEM_MARGIN + SEM_SPAN above it is a full match.
+ * Tuned on real memories: true matches led by 0.10-0.13, unrelated questions' best by ~0.08.
+ */
+const SEM_MARGIN = 0.07;
+const SEM_SPAN = 0.08;
+const SEM_POOL = 10;
+
+function semanticScores(store: Store, hits: SemanticHits, includeInvalid: boolean | undefined): Scored[] {
+  const now = Date.now();
+  const out: Scored[] = [];
+  for (const { id, sim } of hits.hits) {
+    const relevance = Math.min((sim - hits.median - SEM_MARGIN) / SEM_SPAN, 1);
+    if (relevance <= 0) continue;
+    const memory = store.getMemory(id);
+    if (!memory || (!includeInvalid && memory.valid_to)) continue;
+    out.push({ memory, score: weigh(relevance, memory, now) });
+  }
+  return out;
+}
+
+/** A memory found both ways keeps its better score. */
+function merge(a: Scored[], b: Scored[]): Scored[] {
+  const best = new Map<number, Scored>();
+  for (const s of [...a, ...b]) {
+    const prev = best.get(s.memory.id);
+    if (!prev || s.score > prev.score) best.set(s.memory.id, s);
+  }
+  return [...best.values()].sort((x, y) => y.score - x.score);
+}
+
+export async function recall(store: Store, query: string, opts: RecallOptions): Promise<RecallResult> {
+  const semantic = opts.semantic === undefined ? semanticClient(1500) : opts.semantic;
+  const semanticHits = semantic?.(query, { includeInvalid: opts.includeInvalid, limit: SEM_POOL });
+  const candidates = store
+    .searchMemories(query, { includeInvalid: opts.includeInvalid, limit: CANDIDATE_POOL })
+    .map(({ rank, ...memory }) => ({ memory: memory as Memory, rank }));
+  const reranker = opts.reranker ?? heuristicReranker;
+  const corpus = store.corpusStats(queryTerms(query));
+  const lexical = await reranker.rerank(query, candidates, corpus);
+  const hits = await semanticHits;
+  const scored = merge(lexical, hits ? semanticScores(store, hits, opts.includeInvalid) : []).filter(
+    (s) => s.score >= (opts.minScore ?? 0) && !opts.excludeIds?.has(s.memory.id),
+  );
+  const ordered = opts.summariesFirst
+    ? [...scored.filter((s) => s.memory.kind === 'summary'), ...scored.filter((s) => s.memory.kind !== 'summary')]
+    : scored;
+  return pack(ordered, opts.budgetTokens);
+}
+
+/** Greedy fill in score order; skips items that don't fit and keeps trying smaller ones. */
+export function pack(scored: Scored[], budgetTokens: number): RecallResult {
+  const items: Scored[] = [];
+  const lines: string[] = [];
+  const dropped: Scored[] = [];
+  let tokens = 0;
+  for (const s of scored) {
+    const line = formatMemory(s.memory);
+    const cost = estimateTokens(line) + 1;
+    if (tokens + cost > budgetTokens) {
+      dropped.push(s);
+      continue;
+    }
+    items.push(s);
+    lines.push(line);
+    tokens += cost;
+  }
+  return { items, text: lines.join('\n'), tokens, droppedForBudget: dropped.length, dropped };
+}
+
+export function formatMemory(m: Memory): string {
+  const date = formatLocal(m.valid_from, true);
+  const tags = m.tags ? ` [${m.tags}]` : '';
+  const status = m.valid_to
+    ? ` (무효 ${formatLocal(m.valid_to, true)}${m.superseded_by ? ` → #${m.superseded_by}` : ''})`
+    : '';
+  return `#${m.id} ${m.kind} ${date}${status}: ${m.content}${tags}`;
+}
