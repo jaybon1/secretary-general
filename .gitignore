@@ -12,3 +12,6 @@ backups/
 # Embedding model download and the semantic helper's state file
 models/
 *.embedder.json
+
+# Ego Lite's own skill, if installed and moved here so only secretary sessions load it
+.claude/skills/ego-browser/

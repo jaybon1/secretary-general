@@ -107,12 +107,13 @@ function weigh(relevance: number, m: Memory, now: number): number {
 
 /**
  * Similarities from the embedding model bunch together (unrelated text still scores
- * ~0.35-0.5 with bge-m3), so relevance is measured as the lead over the corpus
+ * ~0.3-0.45 with BGE-m3-ko), so relevance is measured as the lead over the corpus
  * median: within SEM_MARGIN of it is noise, SEM_MARGIN + SEM_SPAN above it is a full match.
- * Tuned on real memories: true matches led by 0.10-0.13, unrelated questions' best by ~0.08.
+ * Tuned on about 600 real memories: true matches led by 0.20-0.45, unrelated
+ * questions' best by 0.10-0.18.
  */
-const SEM_MARGIN = 0.07;
-const SEM_SPAN = 0.08;
+const SEM_MARGIN = 0.18;
+const SEM_SPAN = 0.12;
 const SEM_POOL = 10;
 
 function semanticScores(store: Store, hits: SemanticHits, includeInvalid: boolean | undefined): Scored[] {

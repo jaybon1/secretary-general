@@ -23,7 +23,12 @@ const now = Date.now();
 const onSubscription = !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN;
 if (onSubscription) refreshIfStale();
 
+// 사용자가 "90퍼센트를 초과하더라도 진행"이라고 하면 프롬프트 훅(src/usage.ts)이 초기화 시각까지 풀어 둔다.
+let overrideUntil = 0;
+try { overrideUntil = Date.parse(JSON.parse(readFileSync(join(usageDir, 'guard-override.json'), 'utf8')).until); } catch {}
+
 const paused = onSubscription && state && !existsSync(join(homedir(), '.claude', 'usage-guard-off'))
+  && !(now < overrideUntil)
   && state.five_hour_pct >= limit
   && now - Date.parse(state.updated_at) < 30 * 60 * 1000
   && !(state.resets_at && now >= Date.parse(state.resets_at));

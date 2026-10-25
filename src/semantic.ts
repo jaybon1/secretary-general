@@ -1,7 +1,7 @@
 /**
  * Semantic search: finds memories that mean the same thing in different words.
  *
- * The embedding model (bge-m3, ~560 MB) takes seconds to load, too slow for a hook
+ * The embedding model (BGE-m3-ko, ~570 MB) takes seconds to load, too slow for a hook
  * that runs as a fresh process on every prompt. So a small helper process keeps it
  * loaded and callers ask it over localhost (~0.15 s).
  *
@@ -21,8 +21,12 @@ import { DB_PATH, PROJECT_ROOT } from './config.ts';
 import { openDb } from './db.ts';
 import { Store } from './store.ts';
 
-export const EMBED_MODEL = 'Xenova/bge-m3';
-/** Vectors are keyed by model and by what was embedded, so changing the input re-embeds everything once. */
+/** Korean fine-tune of bge-m3 (q8 ONNX build), same size and speed; downloaded into models/ on first start. */
+export const EMBED_MODEL = 'jaybon1840/BGE-m3-ko-onnx';
+/**
+ * Vectors are keyed by model and by what was embedded, so changing either re-embeds
+ * everything once: the helper drops vectors under any other key when it starts.
+ */
 export const VECTOR_KEY = `${EMBED_MODEL}:content+tags`;
 const MODEL_DIR = path.join(PROJECT_ROOT, 'models');
 /** One helper per database, so a test or second copy never talks to the wrong one. */

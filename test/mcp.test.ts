@@ -55,15 +55,15 @@ test('MCP server: remember → recall → supersede → stats over stdio', async
     const quick = text(
       await client.callTool({
         name: 'create_task',
-        arguments: { quick: true, name: 'cafe-intro', title: '카페 소개', goal: '소개 페이지', done_criteria: ['끝낸다'] },
+        arguments: { quick: true, name: 'cafe-intro', title: '카페 소개', goal: '소개 페이지', done_criteria: ['끝낸다'], proof: ['p'] },
       }),
     );
     assert.match(quick, /업무 #1 준비됨 — 공간 #1 간단한 결과물 모음/);
     assert.ok(quick.includes(path.join(workspaces, 'quick-outputs')), 'quick folder lands under SECRETARY_WORKSPACE_ROOT');
-    assert.match(quick, /결과 폴더: output\/\d{8}-cafe-intro\//);
+    assert.match(quick, /업무 폴더: output\/research\/\d{8}-cafe-intro\//);
     // A second quick job reuses the same folder.
     assert.match(
-      text(await client.callTool({ name: 'create_task', arguments: { quick: true, name: 'memo', title: '메모', goal: 'g', done_criteria: ['x'] } })),
+      text(await client.callTool({ name: 'create_task', arguments: { quick: true, name: 'memo', title: '메모', goal: 'g', done_criteria: ['x'], proof: ['p'] } })),
       /공간 #1 /,
     );
 
@@ -79,16 +79,16 @@ test('MCP server: remember → recall → supersede → stats over stdio', async
     );
     assert.match(ws, /공간 #2 생성/);
     const onTeam = text(
-      await client.callTool({ name: 'create_task', arguments: { workspace_id: 2, name: 'landing', title: '랜딩', goal: 'g', done_criteria: ['x'] } }),
+      await client.callTool({ name: 'create_task', arguments: { workspace_id: 2, name: 'landing', title: '랜딩', goal: 'g', done_criteria: ['x'], proof: ['p'] } }),
     );
     assert.match(onTeam, /업무 #3 준비됨 — 공간 #2 웹페이지 제작팀/);
     assert.match(text(await client.callTool({ name: 'list_workspaces', arguments: {} })), /공간 #2 \[팀: developer\] 웹페이지 제작팀 · 업무 1건/);
 
     for (const args of [
-      { name: 'Bad Name', quick: true, title: 'x', goal: 'x', done_criteria: ['x'] },
-      { name: 'both', quick: true, workspace_id: 2, title: 'x', goal: 'x', done_criteria: ['x'] },
-      { name: 'neither', title: 'x', goal: 'x', done_criteria: ['x'] },
-      { name: 'missing', workspace_id: 99, title: 'x', goal: 'x', done_criteria: ['x'] },
+      { name: 'Bad Name', quick: true, title: 'x', goal: 'x', done_criteria: ['x'], proof: ['p'] },
+      { name: 'both', quick: true, workspace_id: 2, title: 'x', goal: 'x', done_criteria: ['x'], proof: ['p'] },
+      { name: 'neither', title: 'x', goal: 'x', done_criteria: ['x'], proof: ['p'] },
+      { name: 'missing', workspace_id: 99, title: 'x', goal: 'x', done_criteria: ['x'], proof: ['p'] },
     ]) {
       assert.equal((await client.callTool({ name: 'create_task', arguments: args })).isError, true, args.name);
     }

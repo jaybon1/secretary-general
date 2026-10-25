@@ -44,6 +44,7 @@
     "allow": [
       "PowerShell(claude stop *)",
       "Bash(claude stop *)",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File scripts/worker-done.ps1 *)",
       "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job.ps1 *)"
     ]
   }

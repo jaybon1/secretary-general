@@ -16,6 +16,7 @@ import { ingestTranscript } from './ingest.ts';
 import { runHelper } from './semantic.ts';
 import { Store } from './store.ts';
 import { formatLocal, nowIso } from './text.ts';
+import { applyGuardOverride } from './usage.ts';
 
 interface HookInput {
   session_id?: string;
@@ -48,7 +49,10 @@ async function runHook(name: string): Promise<void> {
         emitContext('SessionStart', sessionStartContext(store, input.session_id, input.source));
         break;
       case 'prompt':
-        if (input.prompt) emitContext('UserPromptSubmit', await promptContext(store, input.prompt, input.session_id));
+        if (input.prompt) {
+          const parts = [applyGuardOverride(input.prompt), await promptContext(store, input.prompt, input.session_id)];
+          emitContext('UserPromptSubmit', parts.filter(Boolean).join('\n'));
+        }
         break;
       case 'stop':
         if (input.transcript_path && fs.existsSync(input.transcript_path)) ingestTranscript(store, input.transcript_path);
