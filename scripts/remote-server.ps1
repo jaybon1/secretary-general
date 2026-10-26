@@ -2,6 +2,8 @@
 # 다른 기기(claude.ai/code, Claude 앱)의 세션 목록에서 이 폴더의 새 비서 세션을 열 수 있게 된다.
 # 서버는 네트워크가 오래 끊기면 스스로 끝나므로, 끝나면 잠시 뒤 다시 띄운다.
 # 로그인할 때 자동 실행: scripts/install-autostart.ps1
+# 로그인 자동 실행과 다시 켜기는 모두 server-control.ps1 -Now로 이 창을 숨겨 띄운다. 창을 닫아 서버가 꺼지는 일이 없게 하려는 것.
+# 창 보이기·숨기기, 다시 켜기, 기록 보기: scripts/server-control.ps1
 
 . "$PSScriptRoot\claude-env.ps1"
 $null = Use-Utf8Console
@@ -12,12 +14,70 @@ $env:CLAUDE_CODE_ENABLE_CFC = '1'
 $claude = Get-ClaudeExe
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
+# 창이 없으니 이상 신호("Session failed", "already served" 등)를 나중에 볼 수 있게 서버 출력과 이 창의 안내를 날짜별 기록 파일로 남긴다.
+# 서버는 1초마다 상태 화면을 다시 그리므로, 제어 문자를 지우고 서버 한 번 사이에 이미 적은 줄은 건너뛴다. 창에도 같은 줄을 찍는다.
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+namespace Secretary {
+  public static class ServerLog {
+    public static string Dir;
+    // 창이 없어 켜졌는지 모르므로, 이 창에서 처음 연결될 때 한 번 알림(notify.ps1)을 띄운다. 끊겼다 다시 붙을 때는 띄우지 않는다.
+    public static string NotifyArgs;
+    static int notified;
+    static readonly Regex Connected = new Regex(@"\bConnected\b");
+    static readonly object Gate = new object();
+    static readonly Encoding Utf8 = new UTF8Encoding(false);
+    static readonly Regex Link = new Regex(@"\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)");
+    static readonly Regex Control = new Regex(@"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x00-\x08\x0b-\x1f\x7f]");
+    public static void Write(string line) {
+      string stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ");
+      lock (Gate) {
+        try { Console.WriteLine(stamp + line); } catch { }
+        try { File.AppendAllText(Path.Combine(Dir, DateTime.Now.ToString("yyyy-MM-dd") + ".log"), stamp + line + Environment.NewLine, Utf8); } catch { }
+      }
+    }
+    // 읽기가 멈추면 서버가 출력을 못 써서 같이 멈추므로, 따로 계속 읽는다.
+    public static void Pump(StreamReader reader) {
+      Thread thread = new Thread(() => {
+        HashSet<string> seen = new HashSet<string>();
+        try {
+          for (string raw; (raw = reader.ReadLine()) != null; ) {
+            string line = Control.Replace(Link.Replace(raw, "$1 "), "").Trim();
+            if (line.Length > 0 && seen.Add(line)) Write(line);
+            if (NotifyArgs != null && Connected.IsMatch(line) && Interlocked.Exchange(ref notified, 1) == 0) {
+              try {
+                System.Diagnostics.ProcessStartInfo notify = new System.Diagnostics.ProcessStartInfo("powershell.exe", NotifyArgs);
+                notify.UseShellExecute = false;
+                notify.CreateNoWindow = true;
+                System.Diagnostics.Process.Start(notify);
+              } catch { }
+            }
+          }
+        } catch { }
+      });
+      thread.IsBackground = true;
+      thread.Start();
+    }
+  }
+}
+'@
+$logDir = Get-ServerLogDir
+$null = New-Item -ItemType Directory -Force $logDir
+[Secretary.ServerLog]::Dir = $logDir
+[Secretary.ServerLog]::NotifyArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\notify.ps1`" -Title `"비서`" -Text `"서버가 연결됐어요. 앱에서 새 세션을 열 수 있어요.`""
+function Write-Log([string]$message) { [Secretary.ServerLog]::Write("[비서 서버] $message") }
+
 # 예전 서버가 남아 있으면 새 서버가 "This folder is already served"로 거절당하므로 먼저 끈다.
 # 그 서버가 띄운 세션까지 함께 끈다(/T).
 function Stop-Leftover([string]$label, [scriptblock]$match) {
   $found = @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and (& $match $_) })
   foreach ($p in $found) {
-    Write-Host "[비서 서버] 남아 있던 $label 정리 (PID $($p.ProcessId))"
+    Write-Log "남아 있던 $label 정리 (PID $($p.ProcessId))"
     taskkill /T /F /PID $p.ProcessId 2>$null | Out-Null
   }
   foreach ($p in $found) { Wait-Process -Id $p.ProcessId -Timeout 15 -ErrorAction SilentlyContinue }
@@ -63,11 +123,11 @@ function Stop-ServerGracefully([Diagnostics.Process]$server) {
 while ($true) {
   # 로그인 직후에는 네트워크가 아직 없어 서버가 미리 만드는 세션이 실패한다.
   while (-not (Test-NetConnection api.anthropic.com -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue)) {
-    Write-Host '[비서 서버] 인터넷 연결을 기다리는 중…'
+    Write-Log '인터넷 연결을 기다리는 중…'
     Start-Sleep -Seconds 10
   }
   if (-not (Test-ClaudeLogin $claude)) {
-    Write-Host '[비서 서버] Claude 로그인이 필요해요. 새 터미널에서 "claude auth login"을 실행하세요. 5분 뒤 다시 확인합니다.'
+    Write-Log 'Claude 로그인이 필요해요. 새 터미널에서 "claude auth login"을 실행하세요. 5분 뒤 다시 확인합니다.'
     Start-Sleep -Seconds 300
     continue
   }
@@ -79,9 +139,20 @@ while ($true) {
   # 의미 검색 도우미(모델 약 1GB)를 이 창에 묶어 띄운다. 창이 살아 있는 동안 계속 떠 있고, 창이 꺼지면 30초 안에 따라 꺼진다.
   # 이미 떠 있으면 도우미가 알아서 그냥 끝나므로 매번 불러도 된다(도우미가 죽었을 때 다시 살리는 역할).
   Start-Process (Get-Command node).Source -ArgumentList 'src/cli.ts', 'embed-server', '--parent', $PID -WindowStyle Hidden
-  Write-Host "[비서 서버] $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 서버 시작"
-  $server = Start-Process $claude -ArgumentList 'remote-control', '--name', '비서', '--permission-mode', 'auto' -NoNewWindow -PassThru
-  $null = $server.Handle  # 끝난 뒤 종료 코드를 읽으려면 미리 잡아 둬야 한다.
+  # 기록은 최근 14일 치만 둔다.
+  Get-ChildItem $logDir -Filter *.log | Sort-Object Name -Descending | Select-Object -Skip 14 | Remove-Item -ErrorAction SilentlyContinue
+  Write-Log '서버 시작'
+  # 서버 출력은 화면 대신 위 기록으로 받는다. 서버는 이 창의 콘솔을 같이 쓰므로 Ctrl+C 정상 종료는 그대로 된다.
+  $start = New-Object Diagnostics.ProcessStartInfo $claude, 'remote-control --name 비서 --permission-mode auto'
+  $start.UseShellExecute = $false
+  $start.WorkingDirectory = (Get-Location).Path
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+  $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+  $server = [Diagnostics.Process]::Start($start)
+  [Secretary.ServerLog]::Pump($server.StandardOutput)
+  [Secretary.ServerLog]::Pump($server.StandardError)
   $emptySince = $null
   $restarting = $false
   # 1분마다 세션 수를 센다. 두 번 연달아 0개면(1분 넘게 0개) 다시 켠다.
@@ -90,12 +161,12 @@ while ($true) {
   while (-not $server.WaitForExit($checkMinutes * 60000)) {
     if ((Get-SessionCount $server.Id) -gt 0) { $emptySince = $null; continue }
     if (-not $emptySince) { $emptySince = Get-Date; continue }
-    Write-Host "[비서 서버] $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 비서 세션이 ${checkMinutes}분 넘게 0개라 새 세션을 만들려고 서버를 다시 켭니다."
+    Write-Log "비서 세션이 ${checkMinutes}분 넘게 0개라 새 세션을 만들려고 서버를 다시 켭니다."
     Stop-ServerGracefully $server
     $restarting = $true
   }
   Restore-Console
   if ($restarting) { continue }
-  Write-Host "[비서 서버] $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') 서버 종료(코드 $($server.ExitCode)). 30초 뒤 다시 시작합니다."
+  Write-Log "서버 종료(코드 $($server.ExitCode)). 30초 뒤 다시 시작합니다."
   Start-Sleep -Seconds 30
 }

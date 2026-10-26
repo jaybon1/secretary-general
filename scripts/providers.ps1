@@ -5,8 +5,8 @@ function Get-ProviderConfig {
   Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot 'providers.json') | ConvertFrom-Json
 }
 
-# 공급자 설정을 고른다. Clear-HostClaudeEnv 뒤에 부른다. 이름을 안 주면 providers.json의 default.
-function Use-Provider([string]$Name) {
+# 구독 설정을 고른다. Clear-HostClaudeEnv 뒤에 부른다. 이름을 안 주면 providers.json의 default.
+function Use-Subscription([string]$Name) {
   $config = Get-ProviderConfig
   if (-not $Name) { $Name = $config.default }
   $p = $config.providers.$Name

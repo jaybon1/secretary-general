@@ -1,9 +1,7 @@
 ﻿# Claude 구독의 사용량을 토큰 없이 조회해 ~/.claude/usage/<공급자>.json에 저장하고 한 줄로 보여 준다.
 # claude -p "/usage"는 모델을 부르지 않는다(토큰 0). 빈 폴더에서 MCP 없이 돌려 다른 설정이 끼지 않게 한다.
 # usage-guard.mjs가 기록이 오래되면 이 스크립트를 몰래 띄워 갱신한다.
-# 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/usage.ps1 [-Provider <이름>]
-#     -Provider를 안 주면 providers.json의 구독을 조회한다.
-param([string]$Provider)
+# 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/usage.ps1
 
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\claude-env.ps1"
@@ -11,9 +9,7 @@ $ErrorActionPreference = 'Stop'
 $utf8 = Use-Utf8Console
 
 $config = Get-ProviderConfig
-$names = if ($Provider) { @($Provider) } else {
-  @($config.providers.PSObject.Properties | Where-Object { $_.Value.type -eq 'claude-subscription' } | ForEach-Object Name)
-}
+$names = @($config.providers.PSObject.Properties | Where-Object { $_.Value.type -eq 'claude-subscription' } | ForEach-Object Name)
 
 $probe = Join-Path $env:TEMP 'secretary-usage-probe'
 New-Item -ItemType Directory -Force $probe | Out-Null
@@ -47,7 +43,7 @@ foreach ($name in $names) {
     . "$scripts\claude-env.ps1"
     . "$scripts\providers.ps1"
     Clear-HostClaudeEnv
-    $null = Use-Provider $name
+    $null = Use-Subscription $name
     Set-Location $probe
     $OutputEncoding = [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
     & $claude -p '/usage' --model haiku --strict-mcp-config 2>&1 | Out-String

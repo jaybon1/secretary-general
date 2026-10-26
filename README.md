@@ -1,4 +1,4 @@
-# secretary — 장기 기억 개인 비서 (범용 배포판 v3)
+# secretary — 장기 기억 개인 비서 (범용 배포판 v4)
 
 Claude Code를 비서 본체로 쓰고, 기억은 이 폴더의 SQLite 파일 하나(`secretary.db`)에 둔다. Claude 구독 하나만 있으면 된다.
 원칙: **저장은 무제한, 읽기는 예산제.** 기억이 몇 년 치 쌓여도 한 턴에 컨텍스트로 들어가는 양은 고정된다.
@@ -13,13 +13,27 @@ Claude Code를 비서 본체로 쓰고, 기억은 이 폴더의 SQLite 파일 �
 4. **필요한 부품 받기:** 터미널에 `npm install`을 입력한다. 몇 분 걸릴 수 있다.
 5. **로그인:** 터미널에 `claude auth login`을 입력하고, 열리는 브라우저에서 Claude 계정(구독)으로 로그인한다.
 6. **비서 켜기:** 같은 폴더에서 `claude`를 입력한다(데스크톱 앱이면 이 폴더를 연다). `secretary` 서버를 쓸지 물으면 허용한다. 이제 대화하면 된다.
+7. **(선택) 컴퓨터를 켜면 비서 서버가 저절로 켜지게:** 폰이나 다른 PC에서 비서를 쓰려는 경우만 한다(아래 "다른 기기에서 쓰기"). 관리자 PowerShell이 필요하다.
+   1. 위 3번처럼 이 폴더에서 연 터미널에 `claude remote-control`을 입력하고, `Enable Remote Control? (y/n)`이 나오면 `y`를 누른다. 연결됐다는 글이 나오면 `Ctrl+C`로 끈다. 비서 서버는 창 없이 뜨기 때문에 이 질문을 처음 한 번 여기서 답해 둬야 한다.
+   2. 탐색기 주소창의 이 폴더 경로를 복사해 둔다(주소창을 누르면 `C:\Users\...` 꼴 경로가 나온다).
+   3. 시작 단추를 오른쪽 클릭하고 **터미널(관리자)**(Windows 10은 **Windows PowerShell(관리자)**)을 누른다. "이 앱이 디바이스를 변경하도록 허용하시겠어요?"가 나오면 **예**.
+   4. 열린 창에 `cd "<복사한 경로>"`를 입력한다(따옴표 안에 붙여 넣기).
+   5. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-autostart.ps1`을 입력한다. `등록됨: Secretary Remote Control`이 나오면 된 것이다. "관리자 PowerShell에서만 등록돼요"가 나오면 3번부터 다시 한다.
+   6. 지금 바로 켜려면 `Start-ScheduledTask -TaskName 'Secretary Remote Control'`을 입력한다(다음부터는 Windows에 로그인할 때 저절로 켜진다). 서버 창은 보이지 않는 것이 정상이고, 연결되면 화면 오른쪽 아래에 "비서 · 서버가 연결됐어요" 알림이 한 번 뜬다. 관리자 창은 닫는다.
+
+   왜 관리자 권한인가: 비서 서버를 가장 높은 권한으로 띄워야 그 안의 비서가 관리자 권한이 필요한 일(예약 작업 등록·삭제 등)을 할 수 있고, 채팅으로 서버를 다시 켤 때 옛 서버를 끌 수 있다(권한이 낮으면 옛 서버를 못 꺼서 새 서버가 계속 거절된다).
+8. **(선택) 사용자 계정 컨트롤(UAC)을 가장 낮게:** 비서가 관리자 권한이 필요한 일을 하면 PC 화면에 UAC 확인 창("이 앱이 디바이스를 변경하도록 허용하시겠어요?")이 뜰 수 있는데, 폰에서 쓰는 중이면 그 창을 누를 사람이 없어 그 일이 멈춘다. 가장 낮게 하면 확인 창 없이 진행된다.
+   1. 시작 메뉴에서 `UAC`를 검색해 **사용자 계정 컨트롤 설정 변경**을 연다.
+   2. 왼쪽 막대를 맨 아래 **알리지 않음**으로 내리고 **확인**, 확인 창에 **예**.
+   - 위험: 다른 프로그램도 묻지 않고 관리자 권한을 얻을 수 있게 된다. 출처를 모르는 프로그램을 설치·실행하지 않는 PC에서만 한다. 되돌리려면 같은 화면에서 막대를 위에서 두 번째(기본값)로 올린다.
 
 문제가 생기면:
+- 비서 서버가 켜졌는지 모르겠으면 비서에게 "서버 기록 보여줘"라고 하거나 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\server-control.ps1 -Action log`를 실행한다(기록: `%USERPROFILE%\.secretary\logs\server`).
 - 의미 검색이 켜지지 않는다는 말이 나오면(`onnxruntime_binding.node` 로드 실패) [Visual C++ 재배포 패키지](https://aka.ms/vs/17/release/vc_redist.x64.exe)를 설치한다. 그동안에도 단어 검색으로는 잘 동작한다.
 - 비서 폴더는 그대로 두고, 비서가 일을 맡기면 작업 공간 폴더가 이 폴더 **옆**(한 단계 위 폴더 안)에 생긴다.
 
 선택 기능 (안 써도 된다):
-- **다른 기기에서 쓰기 (Remote Control):** 아래 "다른 기기에서 쓰기" 참고. 컴퓨터를 켤 때 자동으로 켜지게 하려면 `scripts/install-autostart.ps1`.
+- **다른 기기에서 쓰기 (Remote Control):** 아래 "다른 기기에서 쓰기" 참고. 컴퓨터를 켤 때 자동으로 켜지게 하려면 위 설치 7번(관리자 PowerShell에서 `scripts/install-autostart.ps1`).
 - **사용량 일시 정지:** `node scripts/install-usage-guard.mjs` (구독 5시간 사용량이 90%를 넘으면 하던 단계만 마무리하고 멈춘다. 다시 실행해도 안전).
 - **브라우저 작업:** 웹은 기본으로 Claude Code의 검색·페이지 읽기 도구로 본다. 로그인된 사이트나 클릭·입력이 필요한 일까지 맡기려면 Ego Lite를 설치하거나(설치돼 있으면 비서와 업무 세션이 알아서 쓰고, 연 페이지를 `scripts/ego-grab.mjs`로 근거 파일로 남긴다), 크롬에 Claude in Chrome 확장을 설치하고 비서에게 쓸 크롬 프로필 이름을 알려 준다(기억해 두고 `open-chrome.ps1`로 연다).
 - **기억 DB 매일 백업 (Windows):** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backup-db.ps1 -Install`. 처음 쓸 때 비서도 한 번 권한다. 등록되는 것: 작업 스케줄러의 예약 작업 **'Secretary DB Backup'**, 매일 **03시**(`-At 05:30`처럼 바꿀 수 있고, 그 시각에 PC가 꺼져 있었으면 다음에 켤 때) 이 폴더의 **`backups/`**에 `secretary-<날짜-시각>.db`를 만들고 **14일**이 지난 백업은 지운다(`-KeepDays`로 바꿈). 이 PC 밖으로는 보내지 않고 토큰도 들지 않는다. 끄기: `scripts/backup-db.ps1 -Uninstall`(만든 백업 파일은 남는다).
@@ -47,7 +61,8 @@ Claude Code를 비서 본체로 쓰고, 기억은 이 폴더의 SQLite 파일 �
 비서는 이 폴더가 있는 컴퓨터에서만 실행하고, 다른 PC나 폰에서는 Remote Control로 접속한다.
 
 - **열려 있는 세션 이어 쓰기:** 데스크톱 앱 설정 > Claude Code > "Connect new sessions to Remote Control"을 켜면 새 세션이 claude.ai/code와 Claude 앱에 나타난다.
-- **원격에서 새 비서 세션 열기:** `scripts/remote-server.ps1`이 이 폴더에서 `claude remote-control`(서버 모드)을 띄우고, 끝나면 다시 띄운다. `scripts/install-autostart.ps1`은 Windows에 로그인할 때 이 스크립트가 자동 실행되도록 작업 스케줄러에 등록한다. 처음 한 번은 이 컴퓨터에서 `claude auth login`으로 로그인하고, 서버 창에 뜨는 `Enable Remote Control? (y/n)`에 `y`로 답해야 한다.
+- **원격에서 새 비서 세션 열기:** `scripts/remote-server.ps1`이 이 폴더에서 `claude remote-control`(서버 모드)을 띄우고, 끝나면 다시 띄운다. `scripts/install-autostart.ps1`은 Windows에 로그인할 때 이 스크립트가 가장 높은 권한으로 자동 실행되도록 작업 스케줄러에 등록한다(관리자 PowerShell에서, 위 설치 7번). 서버 창은 숨겨 뜨고(창을 닫아 서버가 꺼지는 일이 없게), 처음 연결될 때 Windows 알림이 한 번 뜬다. 서버 출력은 `%USERPROFILE%\.secretary\logs\server`에 날짜별로 14일 치 남는다. 처음 한 번은 이 컴퓨터에서 `claude auth login`으로 로그인하고, 이 폴더에서 `claude remote-control`을 직접 한 번 실행해 `Enable Remote Control? (y/n)`에 `y`로 답해야 한다(서버 창에서는 이 질문이 보이지 않는다).
+- **채팅으로 서버 다루기:** 비서에게 "서버 다시 켜줘"(원하면 "창이 보이게"), "서버 창 보여줘/숨겨줘", "서버 기록 보여줘"라고 하면 `scripts/server-control.ps1`로 한다. 다시 켜면 그 서버 안의 비서 대화가 끊기고, 클라우드가 옛 서버 등록을 3분쯤 잡고 있어 4분쯤 뒤에 연결된다. 채팅으로 서버를 끄는 기능은 없다.
 - **원격 지시로 업무 맡기기:** 원격으로 받은 지시에는 앱이 `start_session`을 허용하지 않으므로, 비서는 `scripts/start-worker.ps1`로 업무 세션을 백그라운드(`claude --bg`)에서 시작하고 `SendMessage`의 `notify_when_idle`로 진행을 받는다. 업무 세션은 Remote Control에 붙이지 않아 다른 기기의 세션 목록에 나타나지 않는다.
 
 ## 구조
@@ -77,7 +92,9 @@ Claude Code ─────┼─ UserPromptSubmit 훅 ─→ 관련 기억 자�
 | 파일 | 하는 일 |
 |---|---|
 | `remote-server.ps1` | 비서 폴더에서 Remote Control 서버를 띄우고, 끝나면 다시 띄움. 서버가 연 세션은 이 PC의 크롬(Claude in Chrome)을 쓴다(`CLAUDE_CODE_ENABLE_CFC=1`). 시작 전에 `bridge-pointer.json`을 지워 보관된 옛 세션을 다시 붙잡지 않게 한다 |
-| `install-autostart.ps1` | 로그인할 때 `remote-server.ps1`이 자동 실행되도록 작업 스케줄러에 등록 |
+| `install-autostart.ps1` | 로그인할 때 `remote-server.ps1`이 숨긴 창·가장 높은 권한으로 자동 실행되도록 작업 스케줄러에 등록(관리자 PowerShell에서 실행) |
+| `server-control.ps1` | 비서 서버 다시 켜기(`-Action restart`, 일회용 예약 작업이 몇 초 뒤 실행, `-Visible`이면 창이 보이게), 창 보이기·숨기기(`show`/`hide`), 기록 끝부분 보기(`log`) |
+| `notify.ps1` | 화면 오른쪽 아래 Windows 알림 띄우기(서버 창이 처음 연결될 때 `remote-server.ps1`이 부른다) |
 | `start-worker.ps1` | 업무 세션을 백그라운드(`claude --bg`)로 공간 폴더 제자리에서 시작. 브라우저가 필요한 업무는 `-Chrome`, 테스트 잠금 업무는 `-LockTests`. 같은 공간의 쉬는 세션이 55분 안·문맥 8만 토큰 미만이면 새 업무를 그 세션에 보내 이어 쓴다(`-New`면 새로 시작) |
 | `worker-done.ps1` | 업무가 끝난 업무 세션을 바로 끄지 않고 쉬는 세션으로 적어 둔다. 55분 안에 재사용되지 않으면 뒤에서 끈다(`-Stop`이면 바로 끔) |
 | `worker-guard.mjs` | 업무 세션 훅: 공간 폴더 밖 쓰기, git push, 게시·업로드, 폴더 통째 삭제(테스트 잠금이면 테스트 파일 수정도)를 막는다 |
@@ -118,19 +135,19 @@ node src/cli.ts backup      # backups/ 에 스냅샷 (VACUUM INTO)
 | `SECRETARY_EMBED` | (켜짐) | `off`면 의미 검색을 끄고 단어 검색만 쓴다 |
 | `SECRETARY_EMBED_IDLE_MIN` | 60 | 비서 서버 없이 켜진 의미 검색 도우미가 요청 없이 기다리다 꺼지는 시간(분) |
 
-## v2에서 v3로 갈아타기
+## v3에서 v4로 갈아타기
 
-기억(`secretary.db`)은 그대로 이어 쓴다. DB 형식은 v2와 같다(상황판·남은 질문은 DB 안의 설정 칸에 새로 생길 뿐이다). 검색 모델도 v2와 같아서 다시 받지 않는다.
+기억(`secretary.db`)은 그대로 이어 쓴다. DB 형식과 검색 모델이 v3와 같아서 다시 받거나 다시 색인하지 않는다. 바뀐 것은 비서 서버다: 창 없이 뜨고, 처음 연결될 때 알림이 뜨고, 출력이 기록 파일로 남고, 채팅으로 다시 켜기·창 보이기/숨기기·기록 보기를 한다. 자동 시작은 가장 높은 권한으로 등록되므로 관리자 PowerShell이 필요하다.
 
-1. v2 비서 세션과 비서 서버 창(`remote-server.ps1`)을 모두 끈다.
-2. v2 폴더의 `secretary.db`(있으면 `backups/`도)를 안전한 곳에 한 부 복사해 둔다.
-3. v3 zip을 새 폴더에 풀고, v2 폴더에서 `secretary.db`·`backups/`·`models/`를 그 폴더로 옮긴다(`models/`를 옮기면 검색 모델 약 570MB를 다시 받지 않는다). v2 폴더 자리에 그대로 쓰고 싶으면, v2 폴더에서 `secretary.db`·`backups/`·`node_modules/`·`models/`만 남기고 나머지를 v3 파일로 바꿔도 된다.
-4. v3 폴더에서 `npm install`.
-5. v3 폴더에서 `claude`로 비서를 켠다. 처음 켤 때는 지금까지의 대화 전체로 상황판을 처음 만드느라 첫 답이 늦을 수 있다(대화가 많으면 여러 번 나눠 읽어 몇 분, 첫 질문은 최대 5분 기다린 뒤 못 끝내면 직전 세션 정보만 붙여 보낸다. 상황판은 뒤에서 계속 만들어져 다음 새 세션부터 붙는다). 두 번째부터는 그 뒤 대화만 읽어 짧다.
-6. 자동 시작(`install-autostart.ps1`)이나 매일 백업(`backup-db.ps1 -Install`)을 v2 폴더로 등록해 두었다면 v3 폴더에서 다시 실행한다(등록이 새 폴더를 가리키게 바뀐다).
-7. 비서가 v2 때 만든 작업 공간은 그대로 쓴다. 그 공간에는 스킬·`MEMORY.md`가 없으니, 그 공간에 일을 맡겨 끝나면 비서가 첫 회고 때 옮길지 물어본다.
+1. v3 비서 세션과 비서 서버 창(`remote-server.ps1`, 최소화돼 있던 PowerShell 창)을 모두 끈다.
+2. v3 폴더의 `secretary.db`(있으면 `backups/`도)를 안전한 곳에 한 부 복사해 둔다.
+3. v4 zip을 새 폴더에 풀고, v3 폴더에서 `secretary.db`·`backups/`·`models/`를 그 폴더로 옮긴다(`models/`를 옮기면 검색 모델 약 570MB를 다시 받지 않는다). v3 폴더 자리에 그대로 쓰고 싶으면, v3 폴더에서 `secretary.db`·`backups/`·`node_modules/`·`models/`만 남기고 나머지를 v4 파일로 바꿔도 된다.
+4. v4 폴더에서 `npm install`.
+5. v4 폴더에서 `claude`로 비서를 켠다. 상황판은 v3에서 이어진다.
+6. 자동 시작을 쓰고 있었다면 위 "설치" 7번의 3~6단계대로 관리자 PowerShell에서 `install-autostart.ps1`을 다시 실행한다(새 폴더·숨긴 창·가장 높은 권한으로 바뀐다. v3 때 등록한 같은 이름의 작업은 덮어쓴다). 7번의 1단계(`Enable Remote Control?`에 `y`)는 v3 때 이미 했으면 건너뛴다. 원하면 8번(UAC)도 한다.
+7. 매일 백업(`backup-db.ps1 -Install`)을 v3 폴더로 등록해 두었고 폴더가 바뀌었다면 v4 폴더에서 다시 실행한다.
 
-v1에서 바로 오는 경우도 같지만, 5번에서 검색 모델이 바뀌어(bge-m3 → BGE-m3-ko) 새 모델을 받고 기억 전체를 한 번 다시 색인한다(기억 수에 따라 몇 분). 옛 모델 폴더 `models/Xenova`는 지워도 된다.
+v2 이하에서 오는 경우도 같지만, 5번에서 처음 켤 때 지금까지의 대화 전체로 상황판을 처음 만드느라 첫 답이 늦을 수 있다(대화가 많으면 몇 분, 첫 질문은 최대 5분 기다린 뒤 못 끝내면 직전 세션 정보만 붙여 보낸다). 비서가 그때 만든 작업 공간에는 스킬·`MEMORY.md`가 없으니, 그 공간에 일을 맡겨 끝나면 비서가 첫 회고 때 옮길지 물어본다. v1에서 오면 검색 모델도 바뀌어(bge-m3 → BGE-m3-ko) 새 모델을 받고 기억 전체를 한 번 다시 색인한다(기억 수에 따라 몇 분). 옛 모델 폴더 `models/Xenova`는 지워도 된다.
 
 ## 개인 데이터
 

@@ -16,7 +16,6 @@ param(
   [Parameter(Mandatory)] [string]$Folder,
   [Parameter(Mandatory)] [string]$Name,
   [Parameter(Mandatory)] [string]$Prompt,
-  [string]$Provider,
   [string]$Effort,
   [switch]$Chrome,
   [switch]$LockTests,
@@ -30,7 +29,7 @@ $null = Use-Utf8Console
 Clear-HostClaudeEnv
 $claude = Get-ClaudeExe
 if (-not (Test-Path $Folder -PathType Container)) { throw "공간 폴더가 없어요: $Folder" }
-$info = Use-Provider $Provider
+$info = Use-Subscription
 if (-not (Test-ClaudeLogin $claude)) { throw 'Claude Code 터미널 버전에 로그인돼 있지 않아요. 이 PC에서 "claude auth login"을 먼저 실행해야 해요.' }
 
 # Windows PowerShell 5.1은 큰따옴표가 든 인자를 네이티브 프로그램에 깨뜨려 넘기므로 작은따옴표로 바꾼다.

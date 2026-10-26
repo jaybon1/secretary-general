@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { usageDir, usageFile, currentProvider } from './usage-file.mjs';
+import { usageDir, usageFile } from './usage-file.mjs';
 
 const limit = Number(process.env.USAGE_PAUSE_PCT ?? 90);
 const REFRESH_AFTER = 5 * 60 * 1000;
@@ -55,7 +55,7 @@ function refreshIfStale() {
     writeFileSync(mark, String(now));
     // 훅이 끝나면 Claude Code가 훅의 자식 프로세스까지 정리하므로, WMI로 부모와 상관없는 프로세스를 만든다.
     const script = join(dirname(fileURLToPath(import.meta.url)), 'usage.ps1');
-    const cmd = `powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${script}" -Provider ${currentProvider()}`;
+    const cmd = `powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${script}"`;
     spawn('powershell.exe', ['-NoProfile', '-Command',
       `$null = Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{ CommandLine = '${cmd.replaceAll("'", "''")}' }`],
       { stdio: 'ignore', windowsHide: true });

@@ -14,7 +14,6 @@
 # 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job.ps1 -Model <opus|sonnet|haiku> [-Effort <low|medium|high|xhigh|max>] [-Folder <폴더>] [-McpConfig <파일>] [-Resume <세션 id> | -New] [-RawJson <파일>] (-Prompt <지시> | -PromptFile <파일>)
 
 param(
-  [string]$Provider,
   [string]$Model,
   [string]$Effort,
   [string]$Folder = "$PSScriptRoot\..\..\run-job-home",
@@ -33,7 +32,7 @@ $utf8 = Use-Utf8Console
 . "$PSScriptRoot\providers.ps1"
 Clear-HostClaudeEnv
 $claude = Get-ClaudeExe
-$info = Use-Provider $Provider
+$info = Use-Subscription
 if ($PromptFile) { $Prompt = Get-Content -Raw -Encoding UTF8 $PromptFile }
 if (-not $Prompt) { throw '-Prompt나 -PromptFile이 필요해요.' }
 # 기본 모델로 조용히 돌지 않게, 비서가 일에 맞는 모델을 늘 직접 정한다.

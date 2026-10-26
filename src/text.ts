@@ -1,5 +1,5 @@
 /**
- * Text helpers for search and token budgeting.
+ * Text utilities for search and token budgeting.
  *
  * FTS5's default tokenizer splits on whitespace, which fails for Korean:
  * "서울에서" and "서울로" share no token. We index CJK runs as character

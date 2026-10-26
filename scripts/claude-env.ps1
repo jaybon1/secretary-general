@@ -27,6 +27,9 @@ function Clear-HostClaudeEnv {
   $env:Path = @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User')) -join ';'
 }
 
+# 비서 서버(remote-server.ps1) 기록 폴더. 날짜별 파일로 14일 치 둔다.
+function Get-ServerLogDir { Join-Path $env:USERPROFILE '.secretary\logs\server' }
+
 function Test-ClaudeLogin([string]$claude) {
   try { return [bool]((& $claude auth status 2>$null | Out-String | ConvertFrom-Json).loggedIn) } catch { return $false }
 }
