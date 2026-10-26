@@ -54,8 +54,9 @@ function refreshIfStale() {
     mkdirSync(usageDir, { recursive: true });
     writeFileSync(mark, String(now));
     // 훅이 끝나면 Claude Code가 훅의 자식 프로세스까지 정리하므로, WMI로 부모와 상관없는 프로세스를 만든다.
+    // -WindowStyle Hidden만으로는 창이 잠깐 떴다 사라지므로 conhost --headless로 창 없이 띄운다.
     const script = join(dirname(fileURLToPath(import.meta.url)), 'usage.ps1');
-    const cmd = `powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${script}"`;
+    const cmd = `conhost.exe --headless powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${script}"`;
     spawn('powershell.exe', ['-NoProfile', '-Command',
       `$null = Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{ CommandLine = '${cmd.replaceAll("'", "''")}' }`],
       { stdio: 'ignore', windowsHide: true });

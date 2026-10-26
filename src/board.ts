@@ -2,7 +2,7 @@
  * The situation board: one running summary of where things stand across secretary sessions
  * (topic, work in flight, what each side is waiting on, parked items, decisions, next steps).
  * A new session (startup or /clear) starts a background rewrite — the previous board plus every
- * conversation logged since — by Haiku (effort low) on the same Claude subscription, through run-job. The session's first
+ * conversation logged since — by Haiku (effort medium) on the same Claude subscription, through run-job. The session's first
  * prompt waits for it and injects the board, so the new session wakes up knowing the situation.
  */
 import { execFile, spawn } from 'node:child_process';
@@ -152,7 +152,7 @@ export function parseBoard(output: string): string | null {
 
 function runJob(promptFile: string): Promise<string> {
   const script = path.join(PROJECT_ROOT, 'scripts', 'run-job.ps1');
-  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Model', 'haiku', '-Effort', 'low', '-New', '-PromptFile', promptFile];
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Model', 'haiku', '-Effort', 'medium', '-New', '-PromptFile', promptFile];
   return new Promise((resolve, reject) => {
     execFile('powershell.exe', args, { timeout: RUN_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }, (err, stdout, stderr) =>
       err ? reject(new Error(`${err.message}\n${stderr}`.slice(0, 500))) : resolve(stdout),
@@ -251,8 +251,13 @@ export function catchUpTranscripts(store: Store, currentPath?: string): number {
     for (const f of fs.readdirSync(dir)) {
       const file = path.join(dir, f);
       if (!f.endsWith('.jsonl') || (currentPath && path.resolve(file) === path.resolve(currentPath))) continue;
-      const age = now - fs.statSync(file).mtimeMs;
-      if (age >= CATCH_UP_MIN_IDLE_MS && age <= CATCH_UP_MAX_AGE_MS) added += ingestTranscript(store, file).added;
+      // One unreadable file (deleted or locked mid-scan) must not cost the session its profile injection.
+      try {
+        const age = now - fs.statSync(file).mtimeMs;
+        if (age >= CATCH_UP_MIN_IDLE_MS && age <= CATCH_UP_MAX_AGE_MS) added += ingestTranscript(store, file).added;
+      } catch (err) {
+        process.stderr.write(`[secretary] catch-up skipped ${f}: ${(err as Error).message}\n`);
+      }
     }
   }
   return added;

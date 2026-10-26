@@ -4,6 +4,7 @@ description: 아직 정리되지 않은 대화 로그를 읽어 기억(memories)
 context: fork
 agent: general-purpose
 model: haiku
+effort: medium
 background: false
 allowed-tools: mcp__secretary__get_unconsolidated_log mcp__secretary__mark_consolidated mcp__secretary__recall mcp__secretary__remember mcp__secretary__forget mcp__secretary__get_profile mcp__secretary__update_profile mcp__secretary__list_memories mcp__secretary__list_topics
 ---
@@ -19,6 +20,7 @@ allowed-tools: mcp__secretary__get_unconsolidated_log mcp__secretary__mark_conso
 - `[턴 요약]`(assistant): 비서가 그 턴에 한 일의 요약. 무슨 일이 있었는지(사건·진행 상황) 파악용이다.
 - 그 밖의 assistant 글: 비서의 설명. 사용자에 대한 사실의 근거로 쓰지 않는다.
 - 시각은 한국시간(KST) 24시 기준이다.
+- 메시지는 자르지 않고 다 온다. 2만 자가 넘는 메시지만 "(1/3 부분)"처럼 한 번에 한 부분씩 오니, 응답 끝의 안내대로 다음 부분을 이어 받는다.
 
 ## 절차
 
@@ -26,6 +28,7 @@ allowed-tools: mcp__secretary__get_unconsolidated_log mcp__secretary__mark_conso
 2. 묶음에서 오래 남길 가치가 있는 것을 뽑는다: 사실, 선호, 결정, 할 일, 인물, 의미 있는 사건.
    - 일회성 잡담, 작업 진행 중의 중간 출력, 코드 세부 구현, 비서의 추측은 버린다.
    - 굳으면 나중에 발목 잡는 것도 버린다: 환경 탓 실패(설치 안 됨, 경로·키 설정 전), "X 도구는 안 된다" 같은 단정, 세션 안에서 풀린 일시 오류, 해결 못 한 시도를 방법처럼 적은 것. 설정 탓이면 고친 방법만 남긴다.
+   - 곧 바뀔 상태(서버가 켜져 있음, 받는 중, 지금 몇 단계)도 버리고 결정과 결과만 남긴다.
    - 같은 교훈은 한 기억으로 둔다. 틀린 기억은 덧붙이지 말고 `supersedes`로 바로잡는다.
    - 한 기억 = 한 사실. 맥락 없이 읽어도 이해되는 완결된 한국어 문장으로 쓴다. 핵심(무엇에 관한 무슨 일인지)을 날짜·주어 바로 뒤 앞쪽에 쓴다.
    - 비밀번호·카드번호·API 키 같은 민감정보는 절대 저장하지 않는다.
@@ -37,7 +40,7 @@ allowed-tools: mcp__secretary__get_unconsolidated_log mcp__secretary__mark_conso
    - `remember`에는 늘 `source_log_id`로 근거가 된 로그 id(`[log #N]`의 N, 사용자 말이 있으면 그 줄)를 넣는다.
    - 함께 **비서 개선 후보**를 모은다(기억으로 저장하지 않는다): 사용자가 비서를 바로잡은 일, 같은 실수의 반복, 사용자가 불편이나 번거로움을 말한 일, 비서가 규칙을 몰라 헤맨 일, 비서가 확인 없이 사실처럼 말했다가 뒤에 틀린 것으로 드러난 말(비서의 짐작, 업무 보고를 그대로 전한 것). 이미 그 자리에서 규칙으로 고친 것은 뺀다.
    - **남은 질문**도 모은다(기억으로 저장하지 않는다): 비서가 A, B… 기호로 물었는데 뒤 로그에서 사용자가 끝내 답하지 않은 질문.
-4. 묶음 끝의 `through_log_id`로 `mark_consolidated`를 호출하고 1번으로 돌아간다.
+4. 묶음 끝의 `through_log_id`로 `mark_consolidated`를 호출하고 1번으로 돌아간다. 응답 끝의 "남은 미정리 N건"이 0이 아니면 반드시 다음 묶음을 가져온다(한 묶음만 하고 끝내지 않는다).
 4-1. (묶음이 다 끝나면) `list_topics`를 보고 "새로 만듦"·"다시 씀"인 주제마다 요약을 쓴다.
    - `list_memories`(topic=주제, limit 200)로 그 주제의 기억을 모두 읽는다.
    - 5~8줄, 약 300토큰: 현재 상태 / 핵심 결정 / 남은 일 / (보류면) 다시 살릴 조건. 기억에 없는 내용은 쓰지 않는다. 기억끼리 어긋나면 나중 기억을 따르고, 핵심 프로필의 '진행 중인 큰 일'과 어긋나면 프로필을 따른다.

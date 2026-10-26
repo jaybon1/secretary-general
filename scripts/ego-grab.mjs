@@ -3,7 +3,7 @@
 //
 // 예: 작업 폴더에 아래 같은 파일을 만들고 ego-browser nodejs -e "await import('file:///<그 파일>')"로 실행한다.
 //   import { grab } from "file:///<비서 폴더>/scripts/ego-grab.mjs";
-//   await grab([{ name: "remotion-license", url: "https://..." }], { out: "C:/.../work/pages", space: "<업무이름>" });
+//   await grab([{ name: "remotion-license", url: "https://..." }], { out: "<업무 폴더>/pages", space: "<업무이름>" });
 // 파일 머리에 URL·최종 URL·제목이 붙는다. max는 저장할 글자 수(기본 20000).
 
 export async function grab(items, { out, space = "ego-grab" }) {

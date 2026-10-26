@@ -11,7 +11,7 @@ import { BUDGET, PROJECT_ROOT, WORKSPACE_ROOT } from './config.ts';
 import { openDb } from './db.ts';
 import { formatMemory, recall } from './recall.ts';
 import { semanticClient } from './semantic.ts';
-import { MEMORY_KINDS, SUMMARY_MIN_MEMORIES, SUMMARY_SKIP_TOPICS, Store, TASK_STATUSES, type TaskWithWorkspace, type Workspace } from './store.ts';
+import { MEMORY_KINDS, SUMMARY_MIN_MEMORIES, SUMMARY_SKIP_TOPICS, Store, TASK_STATUSES, type LogEntry, type TaskWithWorkspace, type Workspace } from './store.ts';
 import { estimateTokens, formatLocal } from './text.ts';
 import { QUICK_SPEC, REPORT_FILE, SLUG, TASK_FILE, createTaskFolder, createWorkspaceFolder, locateWorkspaceFolder, readReport } from './workspace.ts';
 
@@ -23,6 +23,12 @@ const ok = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 const fail = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…(+${s.length - max}자)` : s);
+const logHead = (r: LogEntry, extra = '') => `[log #${r.id} ${formatLocal(r.created_at)} ${r.role}${extra}]`;
+const formatLog = (rows: LogEntry[], max: number) => rows.map((r) => `${logHead(r)}\n${clip(r.content, max)}`).join('\n\n');
+/** /consolidate reads every message whole; one longer than this is handed out alone, a part per call. */
+const LOG_PART_CHARS = 20_000;
+/** Which part of a long message the next get_unconsolidated_log call should hand out. */
+let logPart: { id: number; next: number } | null = null;
 
 server.registerTool(
   'remember',
@@ -183,7 +189,7 @@ server.registerTool(
       const n = limit ?? 4;
       const around = store.logAround(log_id, Math.floor(n / 2), Math.ceil(n / 2));
       if (around.length === 0) return fail(`대화 #${log_id}이 없어요.`);
-      return ok(around.map((r) => `[log #${r.id} ${formatLocal(r.created_at)} ${r.role}]\n${clip(r.content, 1500)}`).join('\n\n'));
+      return ok(formatLog(around, 1500));
     }
     if (memory_id !== undefined) {
       const m = store.getMemory(memory_id);
@@ -191,21 +197,17 @@ server.registerTool(
       if (!m.source_log_id) return ok(`기억 #${memory_id}에는 연결된 원문이 없어요(연결 기능 이전 기억). query로 검색하세요.`);
       const n = limit ?? 6;
       const around = store.logAround(m.source_log_id, Math.floor(n / 2), Math.ceil(n / 2));
-      return ok(around.map((r) => `[log #${r.id} ${formatLocal(r.created_at)} ${r.role}]\n${clip(r.content, 800)}`).join('\n\n'));
+      return ok(formatLog(around, 800));
     }
     if (!query && session_id) {
       const tail = store.sessionTail(session_id, limit ?? 8);
       if (tail.length === 0) return ok(`세션 ${session_id}의 대화가 없어요.`);
-      return ok(tail.map((r) => `[log #${r.id} ${formatLocal(r.created_at)} ${r.role}]\n${clip(r.content, 800)}`).join('\n\n'));
+      return ok(formatLog(tail, 800));
     }
     if (!query) return fail('query, memory_id, log_id, session_id 중 하나가 필요해요.');
     const rows = store.searchLog(query, { limit: limit ?? 8, sessionId: session_id });
     if (rows.length === 0) return ok('일치하는 대화 없음');
-    return ok(
-      rows
-        .map((r) => `[log #${r.id} ${formatLocal(r.created_at)} ${r.role} session=${r.session_id.slice(0, 8)}]\n${clip(r.content, 800)}`)
-        .join('\n\n'),
-    );
+    return ok(rows.map((r) => `${logHead(r, ` session=${r.session_id.slice(0, 8)}`)}\n${clip(r.content, 800)}`).join('\n\n'));
   },
 );
 
@@ -226,16 +228,36 @@ server.registerTool(
     const out: string[] = [];
     let used = 0;
     let through = store.consolidatedThrough();
+    let partNote = '';
+    let done = 0;
     for (const r of rows) {
-      const block = `[log #${r.id} ${formatLocal(r.created_at)} ${r.role}]\n${clip(r.content, r.role === 'user' ? 2000 : 700)}`;
+      const head = logHead(r);
+      if (r.content.length > LOG_PART_CHARS) {
+        // A long message goes out alone, one part per call; the watermark moves past it only after the last part.
+        if (out.length > 0) break;
+        const parts = Math.ceil(r.content.length / LOG_PART_CHARS);
+        const k = logPart?.id === r.id ? logPart.next : 0;
+        out.push(`${head} (${k + 1}/${parts} 부분)\n${r.content.slice(k * LOG_PART_CHARS, (k + 1) * LOG_PART_CHARS)}`);
+        if (k + 1 < parts) {
+          logPart = { id: r.id, next: k + 1 };
+          partNote = `\n로그 #${r.id}의 다음 부분이 남았다. 이 부분을 정리한 뒤 다시 get_unconsolidated_log를 부른다.`;
+        } else {
+          logPart = null;
+          through = r.id;
+          done++;
+        }
+        break;
+      }
+      const block = `${head}\n${r.content}`;
       const cost = estimateTokens(block);
       if (out.length > 0 && used + cost > budget) break;
       out.push(block);
       used += cost;
       through = r.id;
+      done++;
     }
-    const remaining = store.stats().unconsolidated - out.length;
-    return ok(`${out.join('\n\n')}\n\nthrough_log_id=${through} · 남은 미정리 ${remaining}건`);
+    const remaining = store.stats().unconsolidated - done;
+    return ok(`${out.join('\n\n')}\n\nthrough_log_id=${through} · 남은 미정리 ${remaining}건${partNote}`);
   },
 );
 
@@ -288,7 +310,7 @@ server.registerTool(
     description:
       '새 작업 공간(폴더)을 만든다: 운영 규칙(AGENTS.md, CLAUDE.md는 이를 불러오기만 함)과, 팀이면 역할별 에이전트 정의(.claude/agents/). ' +
       '맞는 기존 공간이 없고, 사용자가 새 공간 계획을 승인했을 때만 호출한다. 간단한 일은 공간을 만들지 말고 create_task의 quick을 쓴다. ' +
-      '폴더는 기본적으로 비서 폴더의 상위 폴더에 <name>-<YYYYMMDD>로 생긴다.',
+      '폴더는 기본적으로 비서 폴더 옆 workspaces 폴더에 <name>-<YYYYMMDD>로 생긴다.',
     inputSchema: {
       kind: z.enum(['solo', 'team']).describe('solo 담당 1명 · team 역할별 팀'),
       name: slug.describe('폴더 이름에 쓰일 공간 이름 (예: web-team)'),
@@ -430,7 +452,8 @@ server.registerTool(
   async ({ id }) => {
     const t = store.getTask(id);
     if (!t) return fail(`업무 #${id} 없음`);
-    const report = readReport(t.folder, t.output_dir);
+    // Recorded before the workspace folder moved; create_task updates the record, this only reads.
+    const report = readReport(locateWorkspaceFolder(t.folder) ?? t.folder, t.output_dir);
     return ok(
       [
         formatTask(t),

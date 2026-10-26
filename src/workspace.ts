@@ -111,6 +111,7 @@ export function createWorkspaceFolder(spec: WorkspaceSpec, now = nowIso()): { fo
   }
 
   const parent = path.resolve(spec.parentDir ?? WORKSPACE_ROOT);
+  if (!spec.parentDir) fs.mkdirSync(parent, { recursive: true });
   if (!fs.existsSync(parent)) throw new Error(`상위 폴더가 없습니다: ${parent}`);
   if (isInside(parent, PROJECT_ROOT)) throw new Error('작업 공간은 비서 폴더 안에 만들 수 없습니다.');
 
@@ -329,6 +330,7 @@ export function renderCharter(spec: WorkspaceSpec): string {
     '- PowerShell로 파일을 쓸 때는 `-Encoding utf8`을 붙인다(`Set-Content`·`Out-File` 기본 인코딩은 한글을 깨뜨린다).',
     '- 웹은 검색·페이지 읽기 도구(WebSearch·WebFetch)로 되면 그걸 쓴다. 로그인된 사이트, 클릭·입력, 그 도구로 막히는 페이지에는 Ego Lite가 설치돼 있으면(`ego-browser` 명령이 있으면) Ego Lite를 쓴다: 먼저 `ego-browser skill`을 실행해 출력대로 따른다. 캡차·보안 확인은 풀지 말고 `task.handOff()`로 넘긴 뒤 [질문]으로 알린다.',
     '- 같은 형식을 여러 개 만드는 일은 하나하나 직접 써 내지 말고, 찍어 내는 코드를 만들어 돌린다. 판단이 필요한 부분만 직접 한다.',
+    '- 많은 자료를 하나씩 열어 읽거나 같은 조작을 여러 번 되풀이하게 되면(예: 메일 수백 통을 브라우저로 하나씩 열기), 한꺼번에 받아 처리하는 프로그램을 만든다. 다음에 또 할 일이면 그 프로그램을 이 공간에 남기고 쓰는 법을 공간 스킬에 적는다. 그렇게 할지 애매하면 `[질문]`으로 묻는다.',
     `- 조사에서 Ego Lite로 연 페이지는 근거로 남긴다: \`${path.join(PROJECT_ROOT, 'scripts', 'ego-grab.mjs').replace(/\\/g, '/')}\`의 \`grab\`이 페이지 본문을 txt로 저장한다(사용법은 파일 머리말).`,
     `- 사용자에게 말하는 방식은 \`${TASK_FILE}\`의 "알아둘 맥락"을 따른다.`,
     '',

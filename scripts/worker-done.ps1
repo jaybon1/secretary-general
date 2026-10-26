@@ -72,7 +72,8 @@ $entry | Add-Member -NotePropertyName context -NotePropertyValue $context -Force
 Save-WorkerState $state
 
 # 이 스크립트를 부른 쪽(비서의 명령)이 끝나면 자식 프로세스도 정리되므로, WMI로 부모와 상관없는 프로세스를 만든다.
-$cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Id $Id -StopAfter $doneAt -IdleMinutes $IdleMinutes"
+# conhost --headless로 띄워야 창이 잠깐 떴다 사라지지 않는다.
+$cmd = "conhost.exe --headless powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Id $Id -StopAfter $doneAt -IdleMinutes $IdleMinutes"
 $null = Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
 $kst = [TimeZoneInfo]::FindSystemTimeZoneById('Korea Standard Time')
 $stopAt = [TimeZoneInfo]::ConvertTimeFromUtc($now.AddMinutes($IdleMinutes), $kst).ToString('HH:mm')

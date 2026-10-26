@@ -7,10 +7,10 @@ export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.
 export const DB_PATH = process.env.SECRETARY_DB ?? path.join(PROJECT_ROOT, 'secretary.db');
 
 /**
- * Where delegated work gets its own folders: next to the secretary itself, so a
- * copy of this project placed anywhere keeps its workspaces beside it.
+ * Where delegated work gets its own folders: a `workspaces` folder next to the
+ * secretary itself, so a copy of this project placed anywhere keeps its workspaces beside it.
  */
-export const WORKSPACE_ROOT = process.env.SECRETARY_WORKSPACE_ROOT ?? path.dirname(PROJECT_ROOT);
+export const WORKSPACE_ROOT = process.env.SECRETARY_WORKSPACE_ROOT ?? path.join(path.dirname(PROJECT_ROOT), 'workspaces');
 
 const intEnv = (name: string, fallback: number) => {
   const v = Number.parseInt(process.env[name] ?? '', 10);

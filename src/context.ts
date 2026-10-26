@@ -3,6 +3,7 @@ import { startBoardUpdate } from './board.ts';
 import { BUDGET } from './config.ts';
 import { continuityContext } from './continuity.ts';
 import { recall } from './recall.ts';
+import { embedderNotice } from './semantic.ts';
 import type { Store } from './store.ts';
 import { estimateTokens, formatLocal } from './text.ts';
 
@@ -48,7 +49,7 @@ export function sessionStartContext(store: Store, sessionId?: string, source?: s
   if (!source || source === 'startup' || source === 'clear') {
     if (sessionId) startBoardUpdate(store, sessionId);
     else {
-      const continuity = continuityContext(store, sessionId);
+      const continuity = continuityContext(store);
       if (continuity) parts.push(continuity);
     }
   }
@@ -64,7 +65,9 @@ export async function promptContext(store: Store, prompt: string, sessionId?: st
     summariesFirst: true,
     excludeIds: sessionId ? store.injectedIds(sessionId) : undefined,
   });
-  if (result.items.length === 0) return '';
+  // Told once per session per outage, ahead of the memories so the reply can open with it.
+  const notice = sessionId ? embedderNotice(sessionId) : '';
+  if (result.items.length === 0) return notice;
   const more = result.droppedForBudget > 0 ? ` 예산 초과로 ${result.droppedForBudget}개 생략됨(아래 목록, 필요한 것만 recall의 ids로 펼침).` : '';
   const listed = result.dropped.slice(0, DROPPED_LIST_MAX).map((s) => s.memory);
   const droppedLine = listed.length ? `생략: ${listed.map(droppedLabel).join(' · ')}` : '';
@@ -81,5 +84,5 @@ export async function promptContext(store: Store, prompt: string, sessionId?: st
     ids: result.items.map((i) => i.memory.id),
     ...(listed.length ? { droppedIds: listed.map((m) => m.id), droppedTokens: estimateTokens(droppedLine) } : {}),
   });
-  return text;
+  return notice ? `${notice}\n${text}` : text;
 }

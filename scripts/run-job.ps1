@@ -1,7 +1,7 @@
 ﻿# 비서가 직접 하더라도 비용이 큰 작업을 별도 claude -p 프로세스로 한 번 돌리고 결과 글만 돌려받는다(Claude 구독).
 # 빈 세션에서 돌아 비서 대화의 긴 문맥을 매번 다시 읽지 않는다. 긴 지시는 -PromptFile로.
-# 작업 폴더(-Folder)를 안 주면 비서 폴더 옆 run-job-home에서 돈다(없으면 만든다). 넘길 파일은 그 work/<날짜-일이름>/에 두고,
-# 다 쓰면 비서가 지운다. 비서 폴더에는 업무 파일을 만들지 않는다.
+# 작업 폴더(-Folder)를 안 주면 비서 폴더 옆 run-job-home에서 돈다(없으면 만든다). 일마다 그 output/research/<날짜-일이름>/를 쓰고,
+# 보고서는 남기고 받아 온 큰 재료만 다 쓰면 비서가 지운다. 비서 폴더에는 업무 파일을 만들지 않는다.
 #
 # 사용자 설정의 MCP(계정 커넥터 포함)는 붙이지 않는다(도구 설명이 매 턴 문맥을 키우므로).
 # 그 일에 MCP가 필요하면 -McpConfig <MCP 설정 JSON 파일>로 그것만 붙인다.
@@ -42,7 +42,7 @@ if (-not (Test-ClaudeLogin $claude)) {
 }
 if ($Resume -and $New) { throw '-Resume과 -New는 함께 줄 수 없어요.' }
 if ($RawJson) { $RawJson = [IO.Path]::GetFullPath($RawJson) }
-if (-not $PSBoundParameters.ContainsKey('Folder')) { New-Item -ItemType Directory -Force (Join-Path $Folder 'work') | Out-Null }
+if (-not $PSBoundParameters.ContainsKey('Folder')) { New-Item -ItemType Directory -Force (Join-Path $Folder 'output\research') | Out-Null }
 if (-not (Test-Path $Folder -PathType Container)) { throw "작업 폴더가 없어요: $Folder" }
 # 작업 폴더로 옮겨 가기 전에 절대 경로로 바꿔 둔다.
 if ($McpConfig) {
