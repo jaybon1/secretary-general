@@ -1,5 +1,7 @@
 /** Builds the text the hooks inject into Claude Code's context. */
+import { startBoardUpdate } from './board.ts';
 import { BUDGET } from './config.ts';
+import { continuityContext } from './continuity.ts';
 import { recall } from './recall.ts';
 import type { Store } from './store.ts';
 import { estimateTokens, formatLocal } from './text.ts';
@@ -41,6 +43,15 @@ export function sessionStartContext(store: Store, sessionId?: string, source?: s
       s.unconsolidated >= CONSOLIDATE_NUDGE ? ' — 적당한 때에 /consolidate 실행을 제안하세요' : ''
     }</secretary-status>`,
   ];
+  // A brand-new conversation (not a resume or compaction) wakes up with the situation board, which the
+  // first prompt injects once the background rewrite is done; without a session id, the plain pointers.
+  if (!source || source === 'startup' || source === 'clear') {
+    if (sessionId) startBoardUpdate(store, sessionId);
+    else {
+      const continuity = continuityContext(store, sessionId);
+      if (continuity) parts.push(continuity);
+    }
+  }
   const text = parts.join('\n');
   store.logUsage('session_start', estimateTokens(text), { profileVersion: profile?.version ?? 0 });
   return text;

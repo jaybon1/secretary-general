@@ -41,8 +41,12 @@ server.registerTool(
     },
   },
   async ({ kind, content, importance, tags, supersedes, valid_from, source_log_id }) => {
-    const r = store.remember({ kind, content, importance, tags, supersedes, validFrom: valid_from, sourceLogId: source_log_id });
-    return ok(`기억 #${r.id} 저장${r.superseded.length ? ` · 무효 처리: ${r.superseded.map((i) => `#${i}`).join(', ')}` : ''}`);
+    try {
+      const r = store.remember({ kind, content, importance, tags, supersedes, validFrom: valid_from, sourceLogId: source_log_id });
+      return ok(`기억 #${r.id} 저장${r.superseded.length ? ` · 무효 처리: ${r.superseded.map((i) => `#${i}`).join(', ')}` : ''}`);
+    } catch (err) {
+      return fail((err as Error).message);
+    }
   },
 );
 
@@ -169,11 +173,18 @@ server.registerTool(
     inputSchema: {
       query: z.string().min(1).optional(),
       memory_id: z.number().int().optional().describe('이 기억이 나온 대화 앞뒤를 펼침 (query 대신)'),
+      log_id: z.number().int().optional().describe('이 대화 번호(상황판의 #1234) 앞뒤를 펼침 (query 대신)'),
       limit: z.number().int().min(1).max(30).optional(),
-      session_id: z.string().optional(),
+      session_id: z.string().optional().describe('이 세션(8자리 앞부분도 됨)만. query 없이 주면 그 세션의 마지막 대화를 보여 줌'),
     },
   },
-  async ({ query, memory_id, limit, session_id }) => {
+  async ({ query, memory_id, log_id, limit, session_id }) => {
+    if (log_id !== undefined) {
+      const n = limit ?? 4;
+      const around = store.logAround(log_id, Math.floor(n / 2), Math.ceil(n / 2));
+      if (around.length === 0) return fail(`대화 #${log_id}이 없어요.`);
+      return ok(around.map((r) => `[log #${r.id} ${formatLocal(r.created_at)} ${r.role}]\n${clip(r.content, 1500)}`).join('\n\n'));
+    }
     if (memory_id !== undefined) {
       const m = store.getMemory(memory_id);
       if (!m) return fail(`기억 #${memory_id}이 없어요.`);
@@ -182,7 +193,12 @@ server.registerTool(
       const around = store.logAround(m.source_log_id, Math.floor(n / 2), Math.ceil(n / 2));
       return ok(around.map((r) => `[log #${r.id} ${formatLocal(r.created_at)} ${r.role}]\n${clip(r.content, 800)}`).join('\n\n'));
     }
-    if (!query) return fail('query나 memory_id 중 하나가 필요해요.');
+    if (!query && session_id) {
+      const tail = store.sessionTail(session_id, limit ?? 8);
+      if (tail.length === 0) return ok(`세션 ${session_id}의 대화가 없어요.`);
+      return ok(tail.map((r) => `[log #${r.id} ${formatLocal(r.created_at)} ${r.role}]\n${clip(r.content, 800)}`).join('\n\n'));
+    }
+    if (!query) return fail('query, memory_id, log_id, session_id 중 하나가 필요해요.');
     const rows = store.searchLog(query, { limit: limit ?? 8, sessionId: session_id });
     if (rows.length === 0) return ok('일치하는 대화 없음');
     return ok(

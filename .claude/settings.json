@@ -19,7 +19,7 @@
             "type": "command",
             "shell": "bash",
             "command": "node \"$CLAUDE_PROJECT_DIR/src/cli.ts\" hook prompt",
-            "timeout": 10
+            "timeout": 330
           }
         ]
       }

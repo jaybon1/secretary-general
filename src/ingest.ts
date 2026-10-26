@@ -34,7 +34,7 @@ interface TranscriptLine {
 }
 
 /** Harness-generated user turns (slash-command plumbing, reminders), not things the user said. */
-const SYNTHETIC_PREFIXES = ['<command-', '<local-command-', '<system-reminder>', '<bash-', '<task-notification>'];
+const SYNTHETIC_PREFIXES = ['[Request interrupted', '<command-', '<local-command-', '<system-reminder>', '<bash-', '<task-notification>'];
 
 /**
  * One transcript line → zero or more archive entries. A line normally holds a

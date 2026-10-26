@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { BUDGET } from './config.ts';
 import { transaction } from './db.ts';
+import { assertNoThreat } from './threats.ts';
 import { estimateTokens, ftsQuery, indexText, nowIso, queryTerms, redactSecrets } from './text.ts';
 
 export const MEMORY_KINDS = ['fact', 'preference', 'decision', 'event', 'task', 'person', 'note', 'summary'] as const;
@@ -113,6 +114,7 @@ export class Store {
   remember(input: NewMemory): { id: number; superseded: number[] } {
     const content = redactSecrets(input.content.trim());
     if (!content) throw new Error('content is empty');
+    assertNoThreat(content, '기억');
     const tags = normalizeTags(input.tags);
     const now = nowIso();
     // Store every timestamp as UTC ISO so ordering and display stay consistent.
@@ -286,6 +288,7 @@ export class Store {
 
   updateProfile(content: string, reason: string): Profile {
     const text = content.trim();
+    assertNoThreat(text, '프로필');
     const tokens = estimateTokens(text);
     if (tokens > BUDGET.profileMax) {
       throw new Error(
@@ -367,6 +370,35 @@ export class Store {
       .prepare('SELECT * FROM raw_log WHERE session_id = ? AND id >= ? ORDER BY id LIMIT ?')
       .all(center.session_id, logId, after + 1) as unknown as LogEntry[];
     return [...earlier.reverse(), ...rest];
+  }
+
+  /** The most recently active session other than `excludeId`, with its last entry time. */
+  lastOtherSession(excludeId?: string): { session_id: string; last_at: string } | undefined {
+    return this.db
+      .prepare('SELECT session_id, created_at AS last_at FROM raw_log WHERE session_id != ? ORDER BY id DESC LIMIT 1')
+      .get(excludeId ?? '') as { session_id: string; last_at: string } | undefined;
+  }
+
+  /** The last `n` entries of a session (id or 8-char prefix), oldest first. */
+  sessionTail(sessionId: string, n: number, role?: 'user' | 'assistant'): LogEntry[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM raw_log WHERE session_id LIKE ? ${role ? 'AND role = ?' : ''} ORDER BY id DESC LIMIT ?`)
+      .all(...(role ? [`${sessionId}%`, role, n] : [`${sessionId}%`, n])) as unknown as LogEntry[];
+    return rows.reverse();
+  }
+
+  /** Every log entry after `logId`, across sessions, oldest first. */
+  logAfter(logId: number): LogEntry[] {
+    return this.db.prepare('SELECT * FROM raw_log WHERE id > ? ORDER BY id').all(logId) as unknown as LogEntry[];
+  }
+
+  /** Active memories saved in a session (linked by the Stop hook or /consolidate). */
+  sessionMemoryIds(sessionId: string): number[] {
+    return (
+      this.db
+        .prepare('SELECT id FROM memories WHERE source_session = ? AND valid_to IS NULL ORDER BY id')
+        .all(sessionId) as Array<{ id: number }>
+    ).map((r) => r.id);
   }
 
   /** Log entries after the consolidation watermark, oldest first. */
@@ -499,6 +531,17 @@ export class Store {
     this.db
       .prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
       .run(key, value);
+  }
+
+  deleteMeta(key: string): void {
+    this.db.prepare('DELETE FROM meta WHERE key = ?').run(key);
+  }
+
+  metaWithPrefix(prefix: string): Array<{ key: string; value: string }> {
+    return this.db.prepare("SELECT key, value FROM meta WHERE key LIKE ? ESCAPE '\\'").all(`${prefix.replace(/[\\%_]/g, '\\$&')}%`) as Array<{
+      key: string;
+      value: string;
+    }>;
   }
 
   logUsage(event: string, tokens: number, detail?: unknown): void {

@@ -2,6 +2,8 @@
  * Command-line entry point.
  *
  *   node src/cli.ts hook session-start|prompt|stop   (called by Claude Code hooks; JSON on stdin)
+ *   node src/cli.ts board-update | board   (rewrite the situation board / print it)
+ *   node src/cli.ts handoff-wake <old session id>   (new session after a handoff: log the old one, rewrite and print the board)
  *   node src/cli.ts stats
  *   node src/cli.ts backup
  *   node src/cli.ts ingest <transcript.jsonl>
@@ -9,8 +11,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { boardContext, catchUpTranscripts, handoffWake, readBoard, runBoardUpdate } from './board.ts';
 import { PROJECT_ROOT } from './config.ts';
 import { promptContext, sessionStartContext } from './context.ts';
+import { updateOpenQuestions } from './continuity.ts';
 import { openDb } from './db.ts';
 import { ingestTranscript } from './ingest.ts';
 import { runHelper } from './semantic.ts';
@@ -46,17 +50,22 @@ async function runHook(name: string): Promise<void> {
       case 'session-start':
         // Catch up on anything a previous session's Stop hook missed (crash, kill).
         if (input.transcript_path && fs.existsSync(input.transcript_path)) ingestTranscript(store, input.transcript_path);
+        catchUpTranscripts(store, input.transcript_path);
         emitContext('SessionStart', sessionStartContext(store, input.session_id, input.source));
         break;
       case 'prompt':
         if (input.prompt) {
-          const parts = [applyGuardOverride(input.prompt), await promptContext(store, input.prompt, input.session_id)];
+          const board = input.session_id ? await boardContext(store, input.session_id, undefined, input.prompt) : '';
+          const parts = [applyGuardOverride(input.prompt), board, await promptContext(store, input.prompt, input.session_id)];
           emitContext('UserPromptSubmit', parts.filter(Boolean).join('\n'));
         }
         break;
       case 'stop':
         if (input.transcript_path && fs.existsSync(input.transcript_path)) ingestTranscript(store, input.transcript_path);
-        if (input.session_id) store.linkTurnMemories(input.session_id);
+        if (input.session_id) {
+          store.linkTurnMemories(input.session_id);
+          updateOpenQuestions(store, input.session_id);
+        }
         break;
       default:
         throw new Error(`unknown hook: ${name}`);
@@ -103,6 +112,19 @@ async function main(): Promise<void> {
         if (!arg) throw new Error('usage: ingest <transcript.jsonl>');
         console.log(ingestTranscript(store, arg));
         break;
+      case 'board-update': {
+        // Started detached by the SessionStart hook; also runnable by hand to test the rewrite.
+        const job = await runBoardUpdate(store);
+        console.log(JSON.stringify(job));
+        break;
+      }
+      case 'handoff-wake':
+        if (!arg) throw new Error('usage: handoff-wake <old session id>');
+        console.log(await handoffWake(store, arg));
+        break;
+      case 'board':
+        console.log(readBoard(store)?.text ?? '(상황판 없음)');
+        break;
       case 'archive-workspace': {
         // The caller moves the folder first; this records where it went and hides it from list_workspaces.
         const [id, folder] = [Number(arg), process.argv[4]];
@@ -112,7 +134,7 @@ async function main(): Promise<void> {
         break;
       }
       default:
-        console.error('usage: node src/cli.ts <hook session-start|prompt|stop | stats | backup | ingest <file> | archive-workspace <id> <folder>>');
+        console.error('usage: node src/cli.ts <hook session-start|prompt|stop | stats | backup | ingest <file> | board-update | board | handoff-wake <id> | archive-workspace <id> <folder>>');
         process.exitCode = 1;
     }
   } finally {

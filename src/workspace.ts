@@ -22,6 +22,16 @@ export const RECORDS_DIR = 'records';
 export const RESEARCH_DIR = 'research';
 /** The workspace's running log across tasks; quick has none since its tasks are unrelated. */
 export const HISTORY_FILE = 'notes/history.md';
+/**
+ * What the workspace learns, kept apart from the task log: one skill per kind of work
+ * (procedures, pitfalls, corrections) and a small file of facts that always hold.
+ * Workers fix skills on a user correction; anything they find on their own waits in
+ * pending/ until the secretary gets it approved. Quick has none of these.
+ */
+export const SKILLS_DIR = 'skills';
+export const MEMORY_FILE = 'MEMORY.md';
+export const PENDING_DIR = 'notes/pending';
+export const MEMORY_LIMIT = 2000;
 /** Claude Code reads CLAUDE.md, other CLIs read AGENTS.md; keep the rules in AGENTS.md only. */
 export const CLAUDE_IMPORT = '@AGENTS.md\n';
 
@@ -112,7 +122,12 @@ export function createWorkspaceFolder(spec: WorkspaceSpec, now = nowIso()): { fo
   write('AGENTS.md', renderCharter(spec));
   write('CLAUDE.md', CLAUDE_IMPORT);
   for (const a of agents) write(path.join('.claude', 'agents', `${a.name}.md`), renderAgent(a));
-  if (spec.kind !== 'quick') write(HISTORY_FILE, renderHistory(spec));
+  if (spec.kind !== 'quick') {
+    write(HISTORY_FILE, renderHistory(spec));
+    write(MEMORY_FILE, renderMemory(spec));
+    write(path.join(SKILLS_DIR, 'README.md'), SKILLS_README);
+    write(path.join(PENDING_DIR, '.gitkeep'), '');
+  }
   write('.gitignore', GITIGNORE);
   fs.mkdirSync(path.join(folder, OUTPUT_DIR));
   initGit(folder);
@@ -232,6 +247,7 @@ export function renderVerify(verify: string[] | undefined, quick: boolean): stri
     '',
     ...commands,
     '- 검증이나 테스트가 실패하면 테스트가 아니라 코드를 고친다. 테스트가 틀렸다고 보이면 고치지 말고 `[질문]`으로 묻는다.',
+    '- 지적이나 실패를 고쳤으면 고친 뒤 다시 돌려 확인하고 그 출력을 붙인다. 다시 돌리지 않은 수정은 보고서에 "고친 뒤 확인 안 함"으로 적는다.',
     ...checker,
     '',
   ];
@@ -263,14 +279,17 @@ export function renderCharter(spec: WorkspaceSpec): string {
   const code = spec.code ? renderCodeRules(spec.scale) : [];
   const hasHistory = spec.kind !== 'quick';
   const readHistory = hasHistory
-    ? [`- 시작하기 전에 \`${HISTORY_FILE}\`의 "현재 상태"를 읽는다. 지난 업무의 자세한 기록이 필요할 때만 아래 항목을 읽는다.`]
+    ? [
+        `- 시작하기 전에 \`${MEMORY_FILE}\`와 \`${HISTORY_FILE}\`의 "현재 상태"를 읽고, 아래 "스킬과 기억"의 목록에 맞는 스킬이 있으면 먼저 읽고 따른다. 지난 업무의 자세한 기록이 필요할 때만 history의 아래 항목을 읽는다.`,
+      ]
     : [];
+  const learning = hasHistory ? renderLearning() : [];
   const writeHistory = hasHistory
     ? [
         `보고서를 쓴 뒤 \`${HISTORY_FILE}\`에 이 업무 항목을 맨 아래에 추가한다(업무 폴더 밖이지만 이 파일은 고쳐도 된다).`,
         '',
         '- 제목: `## <날짜> · <업무 제목> (`<업무 폴더 경로>`)`',
-        '- 시도한 것, 핵심 숫자, 결론을 몇 줄로. 확인하지 않은 것은 "추정"으로 표시한다.',
+        '- 시도한 것, 핵심 숫자, 결론을 몇 줄로. 확인하지 않은 것은 "추정"으로 표시한다. 다음에도 쓸 절차·함정은 여기가 아니라 스킬이나 제안에 쓴다.',
         '- 결정은 되돌리기 어렵고, 나중에 보면 이유가 놀랍고, 실제 대안을 비교해 고른 것만 `[결정]`으로 남긴다(고른 것, 버린 대안, 이유를 한 줄씩). 셋 중 하나라도 아니면 적지 않는다.',
         '- 이번 업무가 지난 항목의 결과를 뒤집었으면 그 항목 맨 앞에 `[정정 <날짜>] <무엇이 왜 틀렸는지>` 한 줄을 단다. 지난 항목의 나머지와 지난 보고서는 고치지 않는다.',
         '- 맨 위 "현재 상태"(지금까지 최선, 남은 문제, 보류 중이면 다시 살릴 조건)를 이번 결과에 맞게 고친다. 몇 줄로 유지한다.',
@@ -296,6 +315,7 @@ export function renderCharter(spec: WorkspaceSpec): string {
     '- 제품 업무는 그 제품 폴더를 제자리에서 고친다(버전마다 사본을 만들지 않는다, 이전 버전은 git 기록으로 남는다). 보고서·시험 결과·배포본(zip 등)은 업무 폴더에 둔다. 다른 제품 폴더와 다른 업무 폴더는 참고만 하고 고치지 않는다.',
     '- 여러 업무가 함께 쓸 자료(공용 템플릿, 스타일 등)를 이 공간에 새로 두거나 고쳐야 하면 먼저 묻는다.',
     '',
+    ...learning,
     '## 일하는 방식',
     '',
     '- 이 공간 폴더 밖은 읽기만 한다.',
@@ -333,12 +353,48 @@ export function renderCharter(spec: WorkspaceSpec): string {
     '- 검증: 실행한 명령과 출력(위 "검증"), 확인 담당의 지적과 처리 결과',
     '- 작업 중 받은 답과 그에 따른 결정',
     '- 남은 일, 사용자가 결정할 것, 건너뛰거나 확인하지 않은 것과 그 위험',
-    '- 다음엔: 이 공간에서 비슷한 업무를 다시 할 때 다르게 할 점. 이 AGENTS.md나 역할 정의(`.claude/agents/`)를 고치자는 제안이면 어느 파일의 무엇을 어떻게 고칠지 적는다. 없으면 "없음".',
+    hasHistory
+      ? `- 다음엔: 이 공간에서 비슷한 업무를 다시 할 때 다르게 할 점. 남겨 둘 배움과 이 AGENTS.md·역할 정의(\`.claude/agents/\`)를 고치자는 제안은 \`${PENDING_DIR}/\`에 쓰고 여기에는 파일 이름만 적는다. 없으면 "없음".`
+      : '- 다음엔: 이 공간에서 비슷한 업무를 다시 할 때 다르게 할 점. 이 AGENTS.md나 역할 정의(`.claude/agents/`)를 고치자는 제안이면 어느 파일의 무엇을 어떻게 고칠지 적는다. 없으면 "없음".',
+    ...(hasHistory ? [`- 고친 스킬, 남긴 제안: 고친 스킬 파일과 바꾼 규칙 한 줄씩, 남긴 \`${PENDING_DIR}/\` 파일 이름. 없으면 "없음".`] : []),
     '',
     ...writeHistory,
     '마지막으로 이 공간 폴더에서 `git add -A`와 `git commit -m "<업무 폴더 이름>: <업무 제목>"`으로 한 번 커밋한다(이 PC 안의 기록용, push하지 않는다). 기록을 되돌리는 명령(reset, checkout, revert, restore)은 쓰지 않는다. 되돌려야 하면 보고서에 적는다.',
     '',
-    '이 AGENTS.md(CLAUDE.md는 이 파일을 불러오기만 한다)와 역할 정의는 직접 고치지 않는다. 비서가 제안을 사용자에게 확인받고 반영한다.',
+    hasHistory
+      ? `이 AGENTS.md(CLAUDE.md는 이 파일을 불러오기만 한다), 역할 정의, \`${MEMORY_FILE}\`는 직접 고치지 않는다. 스킬은 위 "스킬과 기억"대로 사용자의 교정을 반영할 때만 고친다. 그 밖의 바꿀 점은 제안으로 남기고, 비서가 사용자에게 확인받아 반영한다.`
+      : '이 AGENTS.md(CLAUDE.md는 이 파일을 불러오기만 한다)와 역할 정의는 직접 고치지 않는다. 비서가 제안을 사용자에게 확인받고 반영한다.',
+    '',
+  ].join('\n');
+}
+
+/** Hermes Agent's split (MIT, Nous Research): procedures and corrections go to skills, only lasting facts to memory. */
+export function renderLearning(): string[] {
+  return [
+    '## 스킬과 기억',
+    '',
+    `이 공간에서 배운 것은 업무 종류별 스킬(\`${SKILLS_DIR}/<이름>/SKILL.md\`, 깊은 내용은 그 폴더의 \`references/\`)과 늘 맞는 사실(\`${MEMORY_FILE}\`)에 둔다. 업무 기록은 \`${HISTORY_FILE}\`에 따로 둔다.`,
+    '',
+    '- 사용자가 직접 고쳐 준 것(말투·형식·순서 등)은 그 자리에서 해당 스킬의 해당 단계를 "규칙 + 이유 한 줄"로 고친다. 같은 교훈은 하나로 합치고, 날짜·사건 서술은 쓰지 않는다. 맞는 스킬이 없으면 아래 제안으로 남긴다.',
+    `- 스스로 찾은 배움(새 절차, 함정, \`${MEMORY_FILE}\` 후보)은 바로 반영하지 않고 \`${PENDING_DIR}/<YYYYMMDD>-<짧은이름>.md\`에 제안으로 남긴다(반영할 파일, 바꿀 내용, 이유 한 줄). 비서가 업무 끝에 승인받아 반영한다.`,
+    '- 남기지 않는 것: 환경 탓 실패, "X 도구는 안 된다" 같은 단정, 못 푼 시도, 일회성 서술.',
+    `- \`${MEMORY_FILE}\`는 ${MEMORY_LIMIT.toLocaleString('en-US')}자 안에서 "~이다" 꼴 사실문만 담는다. 절차와 "~해라" 꼴은 스킬로 보낸다.`,
+    '- 스킬·MEMORY·제안에는 개인정보나 "누가 이렇게 하라고 했다"를 쓰지 않고 규칙과 이유로만 쓴다.',
+    '',
+    '스킬 목록(새 스킬이 생기면 비서가 이름과 한 줄 설명을 더한다):',
+    '',
+    '- 아직 없음',
+    '',
+  ];
+}
+
+export const SKILLS_README = '업무 종류별 스킬을 `<이름>/SKILL.md`로 둔다. 목록과 쓰는 법은 AGENTS.md "스킬과 기억".\n';
+
+export function renderMemory(spec: WorkspaceSpec): string {
+  return [
+    `# ${spec.title} 사실 메모`,
+    '',
+    `이 공간에 늘 맞는 사실만 "~이다" 꼴로 한 줄씩 쓴다(전체 ${MEMORY_LIMIT.toLocaleString('en-US')}자 이내). 절차는 스킬에 둔다.`,
     '',
   ].join('\n');
 }

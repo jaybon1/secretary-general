@@ -46,7 +46,7 @@ test('a team workspace gets a dated folder, a charter, role files and an output 
   const parent = tempDir();
   const ws = createWorkspaceFolder(team({ parentDir: parent }), NOW);
   assert.equal(ws.folder, path.join(parent, 'web-team-20261021'));
-  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.claude/agents/designer.md', '.claude/agents/developer.md', 'notes/history.md', '.gitignore']);
+  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.claude/agents/designer.md', '.claude/agents/developer.md', 'notes/history.md', 'MEMORY.md', 'skills/README.md', 'notes/pending/.gitkeep', '.gitignore']);
   assert.ok(fs.existsSync(path.join(ws.folder, '.git')), 'each workspace is a local git repo');
   assert.match(fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8'), /git commit -m/, 'workers commit once per task');
   assert.ok(fs.statSync(path.join(ws.folder, 'output')).isDirectory());
@@ -71,7 +71,24 @@ test('the quick folder has a fixed name and no team', () => {
   const ws = createWorkspaceFolder({ ...QUICK_SPEC, parentDir: tempDir() }, NOW);
   assert.equal(path.basename(ws.folder), 'quick-outputs');
   assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.gitignore'], 'quick tasks are unrelated, so no shared history');
-  assert.doesNotMatch(fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8'), /history\.md/);
+  const charter = fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8');
+  assert.doesNotMatch(charter, /history\.md|스킬과 기억|notes\/pending|고친 스킬/, 'no learning files in the shared quick folder');
+  assert.match(charter, /역할 정의는 직접 고치지 않는다/);
+});
+
+test('a non-quick workspace keeps what it learns in skills, MEMORY.md and pending proposals', () => {
+  const ws = createWorkspaceFolder({ kind: 'solo', name: 'insta', title: '인스타 계정', purpose: '게시물 제작', parentDir: tempDir() }, NOW);
+  assert.ok(fs.statSync(path.join(ws.folder, 'notes', 'pending')).isDirectory());
+  assert.match(fs.readFileSync(path.join(ws.folder, 'skills', 'README.md'), 'utf8'), /<이름>\/SKILL\.md/);
+  const memory = fs.readFileSync(path.join(ws.folder, 'MEMORY.md'), 'utf8');
+  assert.match(memory, /^# 인스타 계정 사실 메모[\s\S]*"~이다"[\s\S]*2,000자/);
+
+  const charter = fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8');
+  assert.match(charter, /MEMORY\.md`와 `notes\/history\.md`의 "현재 상태"를 읽고[\s\S]*맞는 스킬이 있으면 먼저 읽고 따른다/);
+  assert.match(charter, /## 스킬과 기억[\s\S]*skills\/<이름>\/SKILL\.md[\s\S]*"규칙 \+ 이유 한 줄"[\s\S]*notes\/pending\/<YYYYMMDD>-<짧은이름>\.md[\s\S]*남기지 않는 것: 환경 탓 실패[\s\S]*스킬 목록[\s\S]*- 아직 없음[\s\S]*## 일하는 방식/);
+  assert.match(charter, /## 끝낼 때[\s\S]*- 고친 스킬, 남긴 제안:/);
+  assert.match(charter, /역할 정의, `MEMORY\.md`는 직접 고치지 않는다\. 스킬은[^\n]*교정을 반영할 때만 고친다/);
+  assert.doesNotMatch(charter, /지난 업무에서 배운 점/);
 });
 
 test('each task gets its own dated folder under research/ or records/<product>/, never overwriting', () => {
