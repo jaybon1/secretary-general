@@ -9,7 +9,8 @@ import path from 'node:path';
 
 const USAGE_DIR = path.join(os.homedir(), '.claude', 'usage');
 export const OVERRIDE_FILE = path.join(USAGE_DIR, 'guard-override.json');
-const OVERRIDE_PHRASE = /90\s*(퍼센트|%)\s*(를|을)?\s*초과하더라도\s*진행/;
+/** "90%를 초과하더라도 진행", "90퍼 넘어도 계속" and the like: 90, then 초과/넘…도, then 진행/계속. */
+const OVERRIDE_PHRASE = /90\s*(퍼센트|퍼|프로|%)?\s*(를|을|가|이)?\s*(초과|넘)[가-힣]*도\s*(진행|계속)/;
 
 export function isOverridePhrase(prompt: string): boolean {
   return OVERRIDE_PHRASE.test(prompt);

@@ -10,8 +10,8 @@ function Use-Subscription([string]$Name) {
   $config = Get-ProviderConfig
   if (-not $Name) { $Name = $config.default }
   $p = $config.providers.$Name
-  if (-not $p) { throw "공급자 설정이 없어요: $Name (scripts/providers.json)" }
-  if ($p.type -ne 'claude-subscription') { throw "공급자 설정 '$Name'의 type은 claude-subscription이어야 해요(지금: $($p.type)). scripts/providers.json을 확인해요." }
+  if (-not $p) { throw "구독 설정이 없어요: $Name (scripts/providers.json)" }
+  if ($p.type -ne 'claude-subscription') { throw "구독 설정 '$Name'의 type은 claude-subscription이어야 해요(지금: $($p.type)). scripts/providers.json을 확인해요." }
   # 사용량 기록(~/.claude/usage/<공급자>.json)을 어느 것으로 볼지 상태줄·정지 훅에 알려 준다.
   $env:SECRETARY_PROVIDER = $Name
   # effort(생각 깊이, low|medium|high|xhigh|max)는 공급자에 기본값을 두고, 스크립트의 -Effort가 있으면 그쪽을 쓴다.

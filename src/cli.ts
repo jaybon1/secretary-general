@@ -7,7 +7,7 @@
  *   node src/cli.ts stats
  *   node src/cli.ts backup
  *   node src/cli.ts ingest <transcript.jsonl>
- *   node src/cli.ts embed-server [--parent <pid>]   (semantic-search helper; lives as long as <pid>, else idles out)
+ *   node src/cli.ts embed-server [--parent <pid>] [--refetch]   (semantic-search helper; lives as long as <pid>, else idles out; --refetch downloads the model first)
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   if (cmd === 'embed-server') {
     // Semantic-search helper: started by the secretary server (--parent), or on demand by the first recall.
     const parent = arg === '--parent' ? Number(process.argv[4]) || undefined : undefined;
-    await runHelper(parent);
+    await runHelper(parent, process.argv.includes('--refetch'));
     return;
   }
 
