@@ -1,6 +1,6 @@
 ﻿# 비서가 직접 하더라도 비용이 큰 작업을 별도 claude -p 프로세스로 한 번 돌리고 결과 글만 돌려받는다(Claude 구독).
 # 빈 세션에서 돌아 비서 대화의 긴 문맥을 매번 다시 읽지 않는다. 긴 지시는 -PromptFile로.
-# 작업 폴더(-Folder)를 안 주면 비서 폴더 옆 run-job-home에서 돈다(없으면 만든다). 일마다 그 output/research/<날짜-일이름>/를 쓰고,
+# 작업 폴더(-Folder)를 안 주면 비서 폴더 옆 workspaces\run-job-home에서 돈다(없으면 만든다). 일마다 그 output/research/<날짜-일이름>/를 쓰고,
 # 보고서는 남기고 받아 온 큰 재료만 다 쓰면 비서가 지운다. 비서 폴더에는 업무 파일을 만들지 않는다.
 #
 # 사용자 설정의 MCP(계정 커넥터 포함)는 붙이지 않는다(도구 설명이 매 턴 문맥을 키우므로).
@@ -16,7 +16,7 @@
 param(
   [string]$Model,
   [string]$Effort,
-  [string]$Folder = "$PSScriptRoot\..\..\run-job-home",
+  [string]$Folder = "$PSScriptRoot\..\..\workspaces\run-job-home",
   [string]$McpConfig,
   [string]$Resume,
   [switch]$New,

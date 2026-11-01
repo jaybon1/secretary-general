@@ -1,7 +1,9 @@
 /** Builds the text the hooks inject into Claude Code's context. */
+import fs from 'node:fs';
 import { startBoardUpdate } from './board.ts';
 import { BUDGET } from './config.ts';
 import { continuityContext } from './continuity.ts';
+import { compress, lastAnswer, prevAnswerSearch } from './prev-answer.ts';
 import { recall } from './recall.ts';
 import { embedderNotice } from './semantic.ts';
 import type { Store } from './store.ts';
@@ -45,7 +47,7 @@ export function sessionStartContext(store: Store, sessionId?: string, source?: s
     }</secretary-status>`,
   ];
   // A brand-new conversation (not a resume or compaction) wakes up with the situation board, which the
-  // first prompt injects once the background rewrite is done; without a session id, the plain pointers.
+  // first prompt brings up to date and injects; without a session id, the plain pointers.
   if (!source || source === 'startup' || source === 'clear') {
     if (sessionId) startBoardUpdate(store, sessionId);
     else {
@@ -58,12 +60,26 @@ export function sessionStartContext(store: Store, sessionId?: string, source?: s
   return text;
 }
 
-export async function promptContext(store: Store, prompt: string, sessionId?: string): Promise<string> {
+/** The previous answer, compressed for search; '' at a session's first prompt or if the transcript can't be read. */
+function prevAnswerContext(transcriptPath: string | undefined, prompt: string): string {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return '';
+  try {
+    const answer = lastAnswer(transcriptPath, prompt);
+    return answer ? compress(answer) : '';
+  } catch {
+    // An odd transcript must not cost the injection: the question alone then.
+    return '';
+  }
+}
+
+export async function promptContext(store: Store, prompt: string, sessionId?: string, transcriptPath?: string): Promise<string> {
+  const client = prevAnswerSearch(prevAnswerContext(transcriptPath, prompt));
   const result = await recall(store, prompt, {
     budgetTokens: BUDGET.autoRecall,
     minScore: AUTO_MIN_SCORE,
     summariesFirst: true,
     excludeIds: sessionId ? store.injectedIds(sessionId) : undefined,
+    semantic: client,
   });
   // Told once per session per outage, ahead of the memories so the reply can open with it.
   const notice = sessionId ? embedderNotice(sessionId) : '';

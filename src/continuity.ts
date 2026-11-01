@@ -62,6 +62,11 @@ export function parseRemaining(text: string): string[] | null {
   return [...m[1].matchAll(/(?<![A-Za-z])([A-Z]{1,2})(?![A-Za-z])/g)].map((x) => x[1]);
 }
 
+/** Labels the user picked an option for ("c1", "A2 B1"); a bare "e - …" is discussion, not an answer. */
+export function parseAnswers(text: string): string[] {
+  return [...text.matchAll(/(?<![A-Za-z])([A-Za-z]{1,2})(\d{1,2})(?![\dA-Za-z])/g)].map((x) => x[1].toUpperCase());
+}
+
 function readState(store: Store): OpenState {
   const raw = store.getMeta(META_KEY);
   return raw ? (JSON.parse(raw) as OpenState) : { lastLogId: 0, open: [], defs: {} };
@@ -77,7 +82,11 @@ export function updateOpenQuestions(store: Store, sessionId: string): void {
   const newLabels = Object.keys(defs);
   let open = state.open;
   if (remaining) open = [...new Set([...remaining, ...newLabels])];
-  else if (newLabels.length) open = [...new Set([...state.open, ...newLabels])];
+  else {
+    // The secretary forgot the remaining line: close what the user answered by label since the last reply.
+    const answered = new Set(store.sessionBetween(sessionId, state.lastLogId, last.id, 'user').flatMap((u) => parseAnswers(u.content)));
+    open = [...new Set([...state.open.filter((l) => !answered.has(l)), ...newLabels])];
+  }
   for (const [label, text] of Object.entries(defs)) state.defs[label] = { text, session: sessionId, at: last.created_at, logId: last.id };
   const cutoff = Date.now() - EXPIRE_MS;
   open = open.filter((l) => !state.defs[l] || Date.parse(state.defs[l].at) >= cutoff);
@@ -123,11 +132,29 @@ function clipTail(s: string, n: number): string {
   return flat.length > n ? flat.slice(-n) : flat;
 }
 
+/** How many running tasks a new session is told about (there are rarely more than a few). */
+const RUNNING_TASKS_MAX = 20;
+
+/**
+ * Tasks still marked running: a new session (or /clear) does not know the old session's watchers,
+ * which die with it, so it is told which background sessions to watch again. [] when none run.
+ */
+export function runningTaskLines(store: Store): string[] {
+  const tasks = store.listTasks({ status: 'running', limit: RUNNING_TASKS_MAX });
+  if (tasks.length === 0) return [];
+  return [
+    '돌고 있는 업무(기억 DB status running, 이 세션은 그 감시를 모른다. <id>는 bg: 뒤 글자):',
+    ...tasks.map((t) => `- 업무 ${t.id} "${t.title}" · ${t.session_ref ?? 'session_ref 없음'}`),
+    '첫 답에서 scripts/watch-worker.ps1 -Id <id>를 백그라운드 명령(시간제한 7200000ms)으로 다시 띄운다.',
+  ];
+}
+
 /** New session (or /clear): where the last conversation left off, as pointers to expand; relabels open questions. */
 export function continuityContext(store: Store, currentSessionId?: string): string {
   const prev = store.lastOtherSession(currentSessionId);
   const state = readState(store);
-  if (!prev && state.open.length === 0) return '';
+  const running = runningTaskLines(store);
+  if (!prev && state.open.length === 0 && running.length === 0) return '';
   const lines = ['<secretary-continuity>'];
   if (prev) {
     const sid = prev.session_id.slice(0, 8);
@@ -143,6 +170,7 @@ export function continuityContext(store: Store, currentSessionId?: string): stri
     );
   }
   lines.push(...carryOverQuestions(store));
+  lines.push(...running);
   lines.push('</secretary-continuity>');
   return lines.join('\n');
 }

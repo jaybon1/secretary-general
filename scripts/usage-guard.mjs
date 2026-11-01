@@ -1,4 +1,4 @@
-// PreToolUse 훅: 5시간 사용량이 기준(USAGE_PAUSE_PCT, 기본 90%) 이상이면 마무리용 도구(읽기·쓰기·기억 저장)만 허용하고
+// PreToolUse 훅: 5시간 또는 주간 사용량이 기준(USAGE_PAUSE_PCT, 기본 90%) 이상이면 마무리용 도구(읽기·쓰기·기억 저장)만 허용하고
 // 나머지는 막아, 하던 단계를 정리하고 멈추게 한다. 초기화 시각이 지나거나 기록이 30분 넘게 오래되면 막지 않는다.
 // 사용량은 기록 파일(usage-file.mjs)에서 읽는다. 기록이 5분 넘게 오래되면 usage.ps1(/usage, 토큰 0)을
 // 뒤에서 띄워 갱신하고, 이번 판정은 있는 기록으로 한다. 원격·백그라운드 세션은 상태줄이 돌지 않아 이 갱신에 기댄다.
@@ -27,17 +27,19 @@ if (onSubscription) refreshIfStale();
 let overrideUntil = 0;
 try { overrideUntil = Date.parse(JSON.parse(readFileSync(join(usageDir, 'guard-override.json'), 'utf8')).until); } catch {}
 
-const paused = onSubscription && state && !existsSync(join(homedir(), '.claude', 'usage-guard-off'))
-  && !(now < overrideUntil)
-  && state.five_hour_pct >= limit
-  && now - Date.parse(state.updated_at) < 30 * 60 * 1000
-  && !(state.resets_at && now >= Date.parse(state.resets_at));
+// 주간 한도도 같은 기준으로 본다. 풀어 두기(override)는 어느 쪽으로 걸렸든 5시간 창 초기화까지만 간다.
+const over = (pct, resetsAt) => pct >= limit && !(resetsAt && now >= Date.parse(resetsAt));
+const hit = !onSubscription || !state || existsSync(join(homedir(), '.claude', 'usage-guard-off'))
+  || now < overrideUntil || now - Date.parse(state.updated_at) >= 30 * 60 * 1000 ? null
+  : over(state.week_pct ?? 0, state.week_resets_at) ? { label: '주간', pct: state.week_pct, resetsAt: state.week_resets_at }
+  : over(state.five_hour_pct, state.resets_at) ? { label: '5시간', pct: state.five_hour_pct, resetsAt: state.resets_at }
+  : null;
 
-if (paused && !WRAP_UP_TOOLS.test(input.tool_name ?? '')) {
-  const reset = state.resets_at
-    ? new Date(state.resets_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+if (hit && !WRAP_UP_TOOLS.test(input.tool_name ?? '')) {
+  const reset = hit.resetsAt
+    ? new Date(hit.resetsAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
     : '알 수 없음';
-  const reason = `[사용량 일시 정지] 5시간 사용량 ${Math.round(state.five_hour_pct)}% (기준 ${limit}%). `
+  const reason = `[사용량 일시 정지] ${hit.label} 사용량 ${Math.round(hit.pct)}% (기준 ${limit}%). `
     + `새 작업을 시작하지 말고, 하던 단계만 마무리해 진행 상황(끝난 것·남은 것·다음 첫 단계)을 PROGRESS.md 등에 적은 뒤 턴을 끝내라. `
     + `초기화 시각(KST): ${reset}. 그 뒤에 이어서 한다. 읽기·쓰기·수정 도구는 쓸 수 있다.`;
   process.stdout.write(JSON.stringify({

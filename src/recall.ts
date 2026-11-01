@@ -111,10 +111,12 @@ function weigh(relevance: number, m: Memory, now: number): number {
  * median: within SEM_MARGIN of it is noise, SEM_MARGIN + SEM_SPAN above it is a full match.
  * Tuned on about 600 real memories: true matches led by 0.20-0.45, unrelated
  * questions' best by 0.10-0.18.
+ * Retuned on about 130 real questions: searching with the question plus the compressed
+ * previous answer (prev-answer.ts) scored best at a margin of 0.20.
  */
-const SEM_MARGIN = 0.18;
+const SEM_MARGIN = 0.2;
 const SEM_SPAN = 0.12;
-const SEM_POOL = 10;
+export const SEM_POOL = 10;
 
 function semanticScores(store: Store, hits: SemanticHits, includeInvalid: boolean | undefined): Scored[] {
   const now = Date.now();

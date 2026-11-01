@@ -1,10 +1,10 @@
-# Zips <Source> into <Zip> with entries under "secretary/", leaving out node_modules, databases, backups, model downloads, semantic helper state/logs, keys, *.local.* and .git.
+# Zips <Source> into <Zip> with entries under "secretary/", leaving out node_modules, databases, backups, model downloads, semantic helper state/logs, the install check result, keys, *.local.* and .git.
 # Then lists the zip and fails if any excluded thing slipped in. ASCII only on purpose (no BOM).
 param([Parameter(Mandatory)] [string]$Source, [Parameter(Mandatory)] [string]$Zip)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $root = (Resolve-Path $Source).Path.TrimEnd('\')
-$excluded = '(^|/)(node_modules|backups|models|\.git|keys)(/|$)|\.db(-wal|-shm|-journal)?$|\.embedder(\.json|-down\.json|-failures\.log)$|\.local\.|\.env$'
+$excluded = '(^|/)(node_modules|backups|models|\.git|keys)(/|$)|\.db(-wal|-shm|-journal)?$|\.embedder(\.json|-down\.json|-failures\.log|-memory\.json)$|\.db\.setup\.json$|\.local\.|\.env$'
 if (Test-Path $Zip) { Remove-Item $Zip }
 $archive = [IO.Compression.ZipFile]::Open($Zip, 'Create')
 try {

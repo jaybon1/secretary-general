@@ -45,14 +45,14 @@ import { Store } from './store.ts';
 export const EMBED_MODEL = 'jaybon1840/BGE-m3-ko-onnx';
 const MODEL_REPO = process.env.SECRETARY_EMBED_MODEL_REPO ?? EMBED_MODEL;
 /** What loadModel reads, relative to the model folder. */
-const MODEL_FILES = ['config.json', 'special_tokens_map.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model_quantized.onnx'];
+export const MODEL_FILES = ['config.json', 'special_tokens_map.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model_quantized.onnx'];
 /**
  * Vectors are keyed by model and by what was embedded, so changing either re-embeds
  * everything once: the helper drops vectors under any other key when it starts.
  */
 export const VECTOR_KEY = `${EMBED_MODEL}:content+tags`;
 const MODEL_DIR = process.env.SECRETARY_EMBED_MODEL_DIR ?? path.join(PROJECT_ROOT, 'models');
-const MODEL_PATH = path.join(MODEL_DIR, ...EMBED_MODEL.split('/'));
+export const MODEL_PATH = path.join(MODEL_DIR, ...EMBED_MODEL.split('/'));
 /** One helper per database, so a test or second copy never talks to the wrong one. */
 const STATE_FILE = `${DB_PATH}.embedder.json`;
 const DOWN_FILE = `${DB_PATH}.embedder-down.json`;
@@ -310,6 +310,16 @@ export function lowMemoryNotice(needMb: number, freeMb: number): string {
   return `메모리가 부족해 의미 검색 도우미가 꺼졌어요(도우미에 약 ${need}GB 필요, 지금 남은 메모리 약 ${free}GB). 그동안 단어 검색만 씁니다. 다시 켤까요?`;
 }
 
+// What the secretary does with the notice. It rides along with the notice so the rule
+// costs nothing in AGENTS.md while the helper is healthy.
+export const RESTART_GUIDE = '비서 할 일: 이 문구를 답 맨 위 한 줄로 알리고, `node scripts/watch-embedder.mjs`를 백그라운드 명령으로 띄워 두었다가 끝나면 그 출력 한 줄로 보고한다.';
+export const ASK_GUIDE = '비서 할 일: 이 문구를 답 맨 위 한 줄로 알리고, 감시는 띄우지 않고 다시 켤지 묻는다. 켜라고 하면 `node scripts/watch-embedder.mjs --retry`를 백그라운드로 띄운다.';
+const CAUSE_GUIDE = ' 원인을 물으면 `secretary.db.embedder-failures.log`를 읽어 정리해 답한다(모델 파일 문제면 도우미가 모델을 한 번 다시 받고(약 1분) 그래도 실패하면 멈춘다. 메모리가 부족하면 바로 멈춘다).';
+
+export function noticeTag(text: string, guide: string): string {
+  return `<secretary-embedder>${text} — ${guide}${CAUSE_GUIDE}</secretary-embedder>`;
+}
+
 /**
  * One line for the prompt hook during a real outage, once per session; '' otherwise
  * (no outage, or a helper that only idled out). Call it after the search.
@@ -327,8 +337,8 @@ export function embedderNotice(sessionId: string, now = Date.now()): string {
     }
     if (down.told.includes(sessionId)) return '';
     writeDown({ ...down, told: [...down.told, sessionId] });
-    const text = down.lowMemory ? lowMemoryNotice(down.lowMemory.needMb, freeMemMb()) : down.stoppedAt ? STOPPED_NOTICE : NOTICE;
-    return `<secretary-embedder>${text}</secretary-embedder>`;
+    if (down.lowMemory) return noticeTag(lowMemoryNotice(down.lowMemory.needMb, freeMemMb()), ASK_GUIDE);
+    return down.stoppedAt ? noticeTag(STOPPED_NOTICE, ASK_GUIDE) : noticeTag(NOTICE, RESTART_GUIDE);
   } catch {
     // A hand-edited or half-written down file: say nothing rather than break the hook.
     return '';
@@ -502,6 +512,10 @@ function recordPeak(): void {
 export async function runHelper(parent?: number, refetch = false): Promise<void> {
   if (!claim(parent)) return;
   process.on('exit', release);
+  // Embedding takes the CPU for a moment on every prompt; below normal keeps the PC responsive meanwhile.
+  try {
+    os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);
+  } catch {}
   const store = new Store(openDb());
   store.dropVectorsExcept(VECTOR_KEY);
   try {

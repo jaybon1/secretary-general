@@ -17,3 +17,7 @@ models/
 
 # Ego Lite's own skill, if installed and moved here so only secretary sessions load it
 .claude/skills/ego-browser/
+
+# Install check result (src/setup.ts) and the helper's measured memory
+*.db.setup.json
+*.embedder-memory.json

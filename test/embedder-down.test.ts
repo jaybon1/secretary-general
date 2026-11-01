@@ -23,6 +23,9 @@ const {
   NOTICE,
   STOPPED_NOTICE,
   embedderNotice,
+  noticeTag,
+  ASK_GUIDE,
+  RESTART_GUIDE,
   ensureHelper,
   failureCause,
   helperNeedMb,
@@ -105,7 +108,7 @@ test('a missing or broken model is downloaded again once; failing after that sto
   for (let i = 0; i < 3; i++) assert.equal(ensureHelper(Date.now(), c.start).status, 'stopped');
   assert.deepEqual(c.refetches, [true]);
   // A session told about the outage is told again, with the stop.
-  assert.equal(embedderNotice('A'), `<secretary-embedder>${STOPPED_NOTICE}</secretary-embedder>`);
+  assert.equal(embedderNotice('A'), noticeTag(STOPPED_NOTICE, ASK_GUIDE));
   assert.match(STOPPED_NOTICE, /다시 받았는데도 실패, 사용자 확인 필요/);
   assert.equal(embedderNotice('A'), '');
 });
@@ -155,7 +158,7 @@ test('a lack of memory stops the restarts and asks, with what the helper needs a
   const c = counter();
   // Session A was told of an earlier failure in the same outage.
   noteFailure('boom');
-  assert.equal(embedderNotice('A'), `<secretary-embedder>${NOTICE}</secretary-embedder>`);
+  assert.equal(embedderNotice('A'), noticeTag(NOTICE, RESTART_GUIDE));
   noteFailure(new Error('std::bad_alloc'), Date.now(), 300);
   for (let i = 0; i < 3; i++) assert.equal(ensureHelper(Date.now(), c.start).status, 'low-memory');
   assert.equal(c.starts, 0);
@@ -163,7 +166,7 @@ test('a lack of memory stops the restarts and asks, with what the helper needs a
   // Free memory is read when the notice goes out, not when it failed.
   process.env.SECRETARY_FREE_MB = '700';
   const ask = embedderNotice('B');
-  assert.equal(ask, `<secretary-embedder>${lowMemoryNotice(HELPER_NEED_MB, 700)}</secretary-embedder>`);
+  assert.equal(ask, noticeTag(lowMemoryNotice(HELPER_NEED_MB, 700), ASK_GUIDE));
   assert.equal(lowMemoryNotice(1500, 700), '메모리가 부족해 의미 검색 도우미가 꺼졌어요(도우미에 약 1.5GB 필요, 지금 남은 메모리 약 0.7GB). 그동안 단어 검색만 씁니다. 다시 켤까요?');
   // A session told before the stop is asked too, once.
   assert.equal(embedderNotice('A'), ask);
@@ -273,7 +276,7 @@ test('each session is told once per real outage, and again in the next one', () 
   fresh();
   noteFailure('boom');
   const first = embedderNotice('A');
-  assert.equal(first, `<secretary-embedder>${NOTICE}</secretary-embedder>`);
+  assert.equal(first, noticeTag(NOTICE, RESTART_GUIDE));
   assert.equal(NOTICE, '의미 검색 도우미가 꺼져 있어 다시 띄우는 중이에요. 살아날 때까지 기다려 주세요(그래도 진행하면 단어 검색만 씁니다)');
   assert.equal(embedderNotice('A'), '');
   noteFailure('boom again'); // still the same outage

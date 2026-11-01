@@ -387,6 +387,13 @@ export class Store {
     return rows.reverse();
   }
 
+  /** A session's entries with id in (afterId, beforeId), oldest first. */
+  sessionBetween(sessionId: string, afterId: number, beforeId: number, role?: 'user' | 'assistant'): LogEntry[] {
+    return this.db
+      .prepare(`SELECT * FROM raw_log WHERE session_id LIKE ? AND id > ? AND id < ? ${role ? 'AND role = ?' : ''} ORDER BY id`)
+      .all(...(role ? [`${sessionId}%`, afterId, beforeId, role] : [`${sessionId}%`, afterId, beforeId])) as unknown as LogEntry[];
+  }
+
   /** Every log entry after `logId`, across sessions, oldest first. */
   logAfter(logId: number): LogEntry[] {
     return this.db.prepare('SELECT * FROM raw_log WHERE id > ? ORDER BY id').all(logId) as unknown as LogEntry[];

@@ -10,13 +10,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PROJECT_ROOT } from './config.ts';
-import { carryOverQuestions, continuityContext, openQuestionLines } from './continuity.ts';
+import { carryOverQuestions, continuityContext, openQuestionLines, runningTaskLines } from './continuity.ts';
 import { ingestTranscript } from './ingest.ts';
 import type { LogEntry, Store } from './store.ts';
 import { formatLocal, nowIso } from './text.ts';
 
 const BOARD_KEY = 'situation_board';
 const JOB_KEY = 'board_job';
+/** Claude Code version of the last rewrite that succeeded; a failure after an update hints at a -p default change (e.g. --bare). */
+const OK_VERSION_KEY = 'board_ok_claude_version';
 const PENDING_PREFIX = 'board_pending:';
 /** A job older than this per chunk is treated as dead (killed, crashed) and may be replaced. */
 const JOB_STALE_MS = 4 * 60 * 1000;
@@ -45,6 +47,8 @@ interface Job {
   ok?: boolean;
   error?: string;
   ms?: number;
+  /** Claude Code version the rewrite ran on. */
+  version?: string;
 }
 
 export function readBoard(store: Store): Board | undefined {
@@ -59,11 +63,19 @@ function jobRunning(job: Job | undefined): boolean {
   return !!job && !job.done && Date.now() - Date.parse(job.startedAt) < JOB_STALE_MS * Math.max(1, job.chunks ?? 1);
 }
 
-/** SessionStart: mark this session as waiting for the board and start a rewrite unless one is running. */
+/**
+ * SessionStart: mark this session as waiting for the board. The rewrite itself starts on the first
+ * prompt: a remote server opens its next session ahead of time, and /clear can be followed by talk
+ * on the other server, so a board written now would miss everything said before that prompt.
+ */
 export function startBoardUpdate(store: Store, sessionId: string): void {
   // Sessions that never got a first prompt leave their flag behind; drop those older than a day.
   for (const { key, value } of store.metaWithPrefix(PENDING_PREFIX)) if (Date.now() - Date.parse(value) > 24 * 3600 * 1000) store.deleteMeta(key);
   store.setMeta(PENDING_PREFIX + sessionId, nowIso());
+}
+
+/** Starts a detached rewrite unless one is running. */
+export function spawnBoardJob(store: Store): void {
   if (jobRunning(readJob(store))) return;
   store.setMeta(JOB_KEY, JSON.stringify({ startedAt: nowIso() } satisfies Job));
   const child = spawn(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'cli.ts'), 'board-update'], {
@@ -117,9 +129,12 @@ export function boardPrompt(board: Board | undefined, rows: BoardRow[], openQues
     '상황판은 새 비서 세션이 맨 처음 읽고 "지금 무슨 일이 어디까지 됐는지" 바로 아는 데 쓴다. 비서는 사용자의 개인 비서다.',
     '',
     '규칙:',
-    '- [직전 상황판]을 바탕으로 [새 대화]를 반영해 새 판을 쓴다. 새 대화에서 끝난 일은 지우거나 "정한 것"으로 짧게 옮기고, 아직 안 끝난 일은 남긴다.',
+    '- [직전 상황판]을 바탕으로 [새 대화]를 반영해 새 판을 쓴다. 아직 안 끝난 일은 남긴다.',
+    '- "진행 중"·"부탁하고 기다리는 것"의 줄은 지우지 않는다. [새 대화]에서 사용자이 답했거나 끝났다고 보이면 그 줄 끝에 "(끝난 듯, #3247)"처럼 근거 번호를 붙여 남긴다. 비서가 확인해서 뺀다.',
+    '- [직전 상황판]에서 이미 "(끝난 듯, …)"이 붙은 줄은, [새 대화]에서 비서가 아직 안 끝났다고 한 것이 아니면 지운다(오래 남을 결정이면 "정한 것"으로 짧게 옮긴다).',
     '- 대화에 나온 것만 쓴다. 짐작은 쓰지 않는다. 각 줄 끝에 근거 대화 번호를 (#1234)처럼 단다.',
     '- 특히 놓치지 말 것: 비서가 사용자에게 부탁한 행동(실행, 확인, 결정), 사용자가 비서에게 시킨 일, 나중에 이야기하자고 미룬 것(질문 기호가 있으면 기호와 내용 함께).',
+    '- [답 없는 질문 목록]의 질문 중 [새 대화]에서 사용자이 이미 답한 것으로 보이는 것은 "## 풀린 듯한 질문"에 "- C (#2975): 근거 한 줄"처럼 목록의 기호 그대로 적는다. 확실하지 않으면 적지 않는다. 목록에서 지우는 일은 비서가 확인해서 한다.',
     '- 시각은 한국시간 24시 표기. 1,500자 안팎. 항목이 없으면 "없음".',
     '- 비밀번호·키 같은 민감정보는 쓰지 않는다.',
     '',
@@ -131,6 +146,7 @@ export function boardPrompt(board: Board | undefined, rows: BoardRow[], openQues
     '## 보류',
     '## 정한 것',
     '## 다음 행동',
+    '## 풀린 듯한 질문',
     '',
     '[직전 상황판]',
     board ? board.text : '(없음 — 처음 만든다)',
@@ -154,10 +170,19 @@ function runJob(promptFile: string): Promise<string> {
   const script = path.join(PROJECT_ROOT, 'scripts', 'run-job.ps1');
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Model', 'haiku', '-Effort', 'medium', '-New', '-PromptFile', promptFile];
   return new Promise((resolve, reject) => {
+    // On failure keep what claude said (stderr, or the result printed on stdout), not the long command line.
     execFile('powershell.exe', args, { timeout: RUN_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }, (err, stdout, stderr) =>
-      err ? reject(new Error(`${err.message}\n${stderr}`.slice(0, 500))) : resolve(stdout),
+      err ? reject(new Error((stderr.trim() || stdout.trim() || err.message).slice(0, 500))) : resolve(stdout),
     );
   });
+}
+
+function claudeVersion(): Promise<string | undefined> {
+  return new Promise((resolve) =>
+    execFile('claude', ['--version'], { timeout: 30_000, windowsHide: true, encoding: 'utf8' }, (err, stdout) =>
+      resolve(err ? undefined : stdout.trim().split(/\s/)[0] || undefined),
+    ),
+  );
 }
 
 /**
@@ -170,18 +195,22 @@ export async function runBoardUpdate(store: Store, notes: string[] = []): Promis
   const chunks = boardChunks(store, board);
   const job: Job = { pid: process.pid, startedAt: new Date(started).toISOString(), chunks: chunks.length };
   store.setMeta(JOB_KEY, JSON.stringify(job));
+  let version: string | undefined;
   const finish = (ok: boolean, error?: string): Job => {
-    const done = { ...job, done: true, ok, error, ms: Date.now() - started };
+    const done = { ...job, done: true, ok, error, ms: Date.now() - started, version };
     store.setMeta(JOB_KEY, JSON.stringify(done));
+    if (ok && version) store.setMeta(OK_VERSION_KEY, version);
     return done;
   };
   if (chunks.length === 0) return finish(true);
+  version = await claudeVersion();
   const file = path.join(os.tmpdir(), `secretary-board-${process.pid}.txt`);
   try {
     for (const [i, rows] of chunks.entries()) {
       fs.writeFileSync(file, boardPrompt(board, rows, openQuestionLines(store), notes), 'utf8');
-      const text = parseBoard(await runJob(file));
-      if (!text) return finish(false, `상황판 형식이 아닌 답 (${i + 1}/${chunks.length}번째 덩어리)`);
+      const out = await runJob(file);
+      const text = parseBoard(out);
+      if (!text) return finish(false, `상황판 형식이 아닌 답 (${i + 1}/${chunks.length}번째 덩어리): ${out.trim().slice(0, 300)}`);
       board = { text, lastLogId: coveredLogId(rows), updatedAt: nowIso() };
       store.setMeta(BOARD_KEY, JSON.stringify(board));
     }
@@ -194,27 +223,63 @@ export async function runBoardUpdate(store: Store, notes: string[] = []): Promis
 }
 
 /**
- * UserPromptSubmit: on the first prompt of a session that started a rewrite, wait for it and
- * inject the board (or the plain continuity pointers if it failed). '' for every later prompt,
- * and for a handoff prompt: that session runs handoffWake itself once the old session is archived.
+ * UserPromptSubmit: on the first prompt of a new session, bring the board up to everything logged
+ * so far, wait for it and inject it (or the plain continuity pointers if it failed). '' for every
+ * later prompt, and for a handoff prompt: that session runs handoffWake itself once the old session
+ * is archived.
  */
-export async function boardContext(store: Store, sessionId: string, waitMs = BOARD_WAIT_MS, prompt = ''): Promise<string> {
+export async function boardContext(
+  store: Store,
+  sessionId: string,
+  waitMs = BOARD_WAIT_MS,
+  prompt = '',
+  {
+    transcriptPath,
+    catchUp = catchUpTranscripts,
+    spawnJob = spawnBoardJob,
+  }: { transcriptPath?: string; catchUp?: typeof catchUpTranscripts; spawnJob?: (store: Store) => void } = {},
+): Promise<string> {
   const pendingKey = PENDING_PREFIX + sessionId;
   if (!store.getMeta(pendingKey)) return '';
   store.deleteMeta(pendingKey);
   if (prompt.trimStart().startsWith(HANDOFF_MARK)) return '';
   const started = Date.now();
+  catchUp(store, transcriptPath);
+  // A rewrite already running may have read the log before the latest turns; let it finish first.
   await waitForJob(store, waitMs);
+  if (boardChunks(store, readBoard(store)).length > 0) {
+    spawnJob(store);
+    await waitForJob(store, waitMs - (Date.now() - started));
+  }
   const job = readJob(store);
   const board = readBoard(store);
-  const fresh = !!job?.done && job.ok;
+  const fresh = !!board && boardChunks(store, board).length === 0;
   store.logUsage('board_wait', 0, { session: sessionId, ok: fresh, waitedMs: Date.now() - started, chunks: job?.chunks ?? null, jobMs: job?.ms ?? null, error: job?.error ?? null });
   if (!board || !fresh) {
     const fallback = continuityContext(store, sessionId);
     const note = board ? `\n(아래는 ${formatLocal(board.updatedAt)}의 옛 상황판 — 그 뒤 일은 빠져 있다)\n${board.text}` : '';
-    return fallback || note ? `${fallback}${note}\n상황판 갱신이 ${job?.done ? '실패' : '늦어'} 위 정보만 있다. 첫 답 맨 위에 \`> 이어서: …\`로 파악한 상황을 한 줄 적는다.` : '';
+    const failure = job?.done && !job.ok ? failureNote(job, store.getMeta(OK_VERSION_KEY)) : '';
+    if (!fallback && !note) return failure;
+    return `${fallback}${note}\n상황판 갱신이 ${job?.done ? '실패' : '늦어'} 위 정보만 있다. 첫 답 맨 위에 \`> 이어서: …\`로 파악한 상황을 한 줄 적는다.${failure ? `\n${failure}` : ''}`;
   }
   return boardBlock(store, board);
+}
+
+/**
+ * Why the rewrite (a `claude -p` run via run-job) failed. Right after a Claude Code update this is
+ * how the secretary notices that -p broke, e.g. --bare becoming the default (no subscription login).
+ */
+export function failureNote(job: Job, okVersion: string | undefined): string {
+  const lines = ['<secretary-board-failure>', `상황판 갱신(run-job \`claude -p\`) 실패 이유: ${job.error ?? '알 수 없음'}`];
+  if (job.version && okVersion && job.version !== okVersion) {
+    lines.push(
+      `Claude Code가 ${okVersion}에서 ${job.version}으로 바뀐 뒤 처음 실패했다. \`claude -p\` 기본 동작이 바뀌었을 수 있다(예: --bare 기본화로 구독 로그인을 읽지 않음). run-job과 상황판 갱신이 막혔을 수 있으니 첫 답에 이 사실과 오류를 알리고, run-job을 \`claude --bg\` 방식으로 옮길지 계획을 세워 묻는다.`,
+    );
+  } else {
+    lines.push('첫 답에 실패 이유를 한 줄로 알린다.');
+  }
+  lines.push('</secretary-board-failure>');
+  return lines.join('\n');
 }
 
 async function waitForJob(store: Store, waitMs: number): Promise<void> {
@@ -228,6 +293,8 @@ function boardBlock(store: Store, board: Board): string {
     `상황판 (${formatLocal(board.updatedAt)} 갱신, 대화 #${board.lastLogId}까지 반영). 근거 번호는 search_log(log_id)로 펼친다.`,
     board.text,
     ...carryOverQuestions(store),
+    ...runningTaskLines(store),
+    '"풀린 듯한 질문"에 적힌 기호는 위 남은 질문의 옛 기호다(옛 기호가 없으면 같은 기호). search_log(log_id)로 확인해 정말 풀렸으면 첫 답의 남은 질문 줄에서 뺀다. "(끝난 듯, #번호)"가 붙은 남은 일도 그 번호를 펼쳐 정말 끝났으면 전하지 않고, 아니면 아직 안 끝났다고 답에 적는다.',
     '이 세션의 첫 답 맨 위에 `> 이어서: …`로 상황판에서 읽은 지금 상황을 한 줄 적는다(사용자가 틀린 곳을 바로 고칠 수 있게).',
     '</secretary-board>',
   ].join('\n');

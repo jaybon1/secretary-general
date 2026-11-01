@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { continuityContext, labelAt, labelIndex, parseQuestions, parseRemaining, updateOpenQuestions } from '../src/continuity.ts';
+import { continuityContext, labelAt, labelIndex, openQuestionLines, parseAnswers, parseQuestions, parseRemaining, runningTaskLines, updateOpenQuestions } from '../src/continuity.ts';
 import { tempStore } from './helpers.ts';
 
 let n = 0;
@@ -62,9 +62,52 @@ test('open questions carry into the next session with their text', () => {
   assert.doesNotMatch(continuityContext(s, 'x'), /남은 질문\(/);
 });
 
+test('label answers close open questions only when the remaining line is missing', () => {
+  assert.deepEqual(parseAnswers('c1 설치했어\nA2 B1 / e - 근데 / mp3, h264, v12'), ['C', 'A', 'B', 'MP', 'V']);
+  const s = tempStore();
+  const open = () => openQuestionLines(s).join('\n');
+  say(s, 'ans-1', 'assistant', 'C. 설치는 어떻게 할까요? 1) 직접 2) 규칙\n\nE. 어떻게 할까요? 1) 하나 2) 둘\n\n남은 질문: C, E');
+  updateOpenQuestions(s, 'ans-1');
+  // "e - …" is discussion and "mp3"/"b2" name no open question: nothing closes.
+  say(s, 'ans-1', 'user', 'e - 근데 이건 어때? mp3 b2');
+  say(s, 'ans-1', 'assistant', '설명이에요.');
+  updateOpenQuestions(s, 'ans-1');
+  assert.match(open(), /C\. 설치는[\s\S]*E\. 어떻게/);
+  // The secretary's remaining line wins over a label used as an example.
+  say(s, 'ans-1', 'user', '내가 e3 이렇게 말할 때도 있잖아');
+  say(s, 'ans-1', 'assistant', '맞아요.\n\n남은 질문: C, E');
+  updateOpenQuestions(s, 'ans-1');
+  assert.match(open(), /C\. 설치는[\s\S]*E\. 어떻게/);
+  // No remaining line: the user's "c1" closes C and leaves E.
+  say(s, 'ans-1', 'user', 'c1 설치했어');
+  say(s, 'ans-1', 'assistant', '확인했어요.');
+  updateOpenQuestions(s, 'ans-1');
+  assert.doesNotMatch(open(), /설치는/);
+  assert.match(open(), /어떻게 할까요\? 1\) 하나/);
+});
+
 test('session tail accepts an 8-char prefix', () => {
   const s = tempStore();
   say(s, 'abcdef12-rest', 'user', '첫 말');
   say(s, 'abcdef12-rest', 'assistant', '답');
   assert.deepEqual(s.sessionTail('abcdef12', 5).map((r) => r.content), ['첫 말', '답']);
+});
+
+test('running tasks are listed for a new session with a cue to watch them again', () => {
+  const s = tempStore();
+  assert.deepEqual(runningTaskLines(s), []);
+  assert.equal(continuityContext(s, 'new'), '');
+  const ws = s.createWorkspace({ kind: 'solo', name: 'video', title: '영상', purpose: '영상 제작', folder: 'C:/ws/video', agents: [] });
+  const done = s.createTask({ workspaceId: ws.id, name: 'old', title: '끝난 업무', goal: 'g', outputDir: 'o1' });
+  s.updateTask(done.id, { status: 'done', sessionRef: 'bg:11111111' });
+  const run = s.createTask({ workspaceId: ws.id, name: 'step6', title: '6단계 조립', goal: 'g', outputDir: 'o' });
+  s.updateTask(run.id, { status: 'running', sessionRef: 'bg:ad8ca57f' });
+  const lines = runningTaskLines(s);
+  assert.equal(lines.length, 3);
+  assert.equal(lines[1], `- 업무 ${run.id} "6단계 조립" · bg:ad8ca57f`);
+  assert.match(lines[2], /^첫 답에서 scripts\/watch-worker\.ps1 -Id <id>를 백그라운드 명령\(시간제한 7200000ms\)으로 다시 띄운다\.$/);
+  // Even with no previous session or open questions, the continuity block carries them.
+  const ctx = continuityContext(s, 'new');
+  assert.match(ctx, /<secretary-continuity>[\s\S]*"6단계 조립" · bg:ad8ca57f[\s\S]*<\/secretary-continuity>/);
+  assert.doesNotMatch(ctx, /끝난 업무/);
 });
