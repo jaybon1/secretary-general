@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { recall } from '../src/recall.ts';
-import { VECTOR_KEY, searchWith, type SemanticSearch } from '../src/semantic.ts';
+import { recall } from '../src/memory/recall.ts';
+import { VECTOR_KEY, searchWith, type SemanticSearch } from '../src/semantic/client.ts';
 import { tempStore } from './helpers.ts';
 
 test('a semantic hit is recalled without any shared words; one near the median is not', async () => {

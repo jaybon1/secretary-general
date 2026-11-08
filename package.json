@@ -8,17 +8,19 @@
     "node": ">=24"
   },
   "scripts": {
-    "mcp": "node src/mcp-server.ts",
+    "mcp": "node src/mcp/server.ts",
     "cli": "node src/cli.ts",
-    "test": "node --test \"test/**/*.test.ts\"",
+    "test": "node test/run-tests.mjs",
     "typecheck": "tsc -p ."
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "markdown-it": "^15.0.3",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2"
   }

@@ -24,6 +24,32 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"$CLAUDE_PROJECT_DIR/src/guards/pre-tool-hook.ts\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read|Write|WebFetch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"$CLAUDE_PROJECT_DIR/src/guards/repeat-hook.ts\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -44,8 +70,10 @@
     "allow": [
       "PowerShell(claude stop *)",
       "Bash(claude stop *)",
-      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File scripts/worker-done.ps1 *)",
-      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job.ps1 *)"
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File scripts/worker/worker-done.ps1 *)",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job/run-job.ps1 *)",
+      "PowerShell(node src/cli.ts purge-log preview *)",
+      "Bash(node src/cli.ts purge-log preview *)"
     ]
   }
 }

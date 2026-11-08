@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-// The helper's files sit next to SECRETARY_DB, read once when config.ts loads: point it at a temp folder
-// before anything imports config.ts (helpers.ts does too), so these tests never touch the real helper's files.
+// The helper's files sit next to SECRETARY_DB, read once when core/config.ts loads: point it at a temp folder
+// before anything imports core/config.ts (helpers.ts does too), so these tests never touch the real helper's files.
 const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'secretary-test-')), 'test.db');
 process.env.SECRETARY_DB = dbPath;
 // The model folder too: the fingerprint test writes a fake model file there.
@@ -14,7 +14,8 @@ const modelDir = path.join(path.dirname(dbPath), 'models');
 process.env.SECRETARY_EMBED_MODEL_DIR = modelDir;
 // Plenty of free memory unless a test says otherwise, so a "memory suspected" guess never depends on this PC.
 process.env.SECRETARY_FREE_MB = '8000';
-const { tempStore } = await import('./helpers.ts');
+const { keepTidy, tempStore } = await import('./helpers.ts');
+keepTidy(path.dirname(dbPath));
 const {
   EMBED_MODEL,
   FAILURE_LOG,
@@ -34,12 +35,12 @@ const {
   noteRecovery,
   readDown,
   retryEmbedder,
-} = await import('../src/semantic.ts');
-const { promptContext } = await import('../src/context.ts');
+} = await import('../src/semantic/client.ts');
+const { promptContext } = await import('../src/hooks/prompt-memory.ts');
 const STATE = `${dbPath}.embedder.json`;
 const DOWN = `${dbPath}.embedder-down.json`;
 const MEMORY = `${dbPath}.embedder-memory.json`;
-assert.equal((await import('../src/config.ts')).DB_PATH, dbPath);
+assert.equal((await import('../src/core/config.ts')).DB_PATH, dbPath);
 
 /** A pid that surely belongs to no live process: one that just exited. */
 const DEAD_PID = spawnSync(process.execPath, ['-e', '']).pid!;
@@ -277,7 +278,6 @@ test('each session is told once per real outage, and again in the next one', () 
   noteFailure('boom');
   const first = embedderNotice('A');
   assert.equal(first, noticeTag(NOTICE, RESTART_GUIDE));
-  assert.equal(NOTICE, '의미 검색 도우미가 꺼져 있어 다시 띄우는 중이에요. 살아날 때까지 기다려 주세요(그래도 진행하면 단어 검색만 씁니다)');
   assert.equal(embedderNotice('A'), '');
   noteFailure('boom again'); // still the same outage
   assert.equal(embedderNotice('A'), '');

@@ -3,9 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { PROJECT_ROOT } from '../src/config.ts';
-import { openDb } from '../src/db.ts';
-import { Store } from '../src/store.ts';
+import { PROJECT_ROOT } from '../src/core/config.ts';
 import {
   QUICK_SPEC,
   createTaskFolder,
@@ -15,8 +13,8 @@ import {
   renderCharter,
   type TaskSpec,
   type WorkspaceSpec,
-} from '../src/workspace.ts';
-import { tempDir, tempStore } from './helpers.ts';
+} from '../src/workspace/folders.ts';
+import { tempDir, tempStore, testStore } from './helpers.ts';
 
 const NOW = '2026-10-20T15:30:00Z'; // 2026-10-21 00:30 KST
 
@@ -46,11 +44,12 @@ test('a team workspace gets a dated folder, a charter, role files and an output 
   const parent = tempDir();
   const ws = createWorkspaceFolder(team({ parentDir: parent }), NOW);
   assert.equal(ws.folder, path.join(parent, 'web-team-20261021'));
-  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.claude/agents/designer.md', '.claude/agents/developer.md', 'notes/history.md', 'MEMORY.md', 'skills/README.md', 'notes/pending/.gitkeep', '.gitignore']);
+  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.claude/agents/designer.md', '.claude/agents/developer.md', 'notes/history.md', 'notes/history/.gitkeep', 'MEMORY.md', 'notes/pending/.gitkeep', '.gitignore', 'secretary.json']);
   assert.ok(fs.existsSync(path.join(ws.folder, '.git')), 'each workspace is a local git repo');
   assert.match(fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8'), /git commit -m/, 'workers commit once per task');
   assert.ok(fs.statSync(path.join(ws.folder, 'output')).isDirectory());
-  assert.match(fs.readFileSync(path.join(ws.folder, 'notes', 'history.md'), 'utf8'), /## 현재 상태/);
+  const history = fs.readFileSync(path.join(ws.folder, 'notes', 'history.md'), 'utf8');
+  assert.match(history, /지금 상태만 둔다\(2,000자 안\)[\s\S]*grep -h "\^## " notes\/history\/\*\.md \| tail -20[\s\S]*## 현재 상태/, 'history.md holds the state; entries go to monthly files');
 
   assert.equal(fs.readFileSync(path.join(ws.folder, 'CLAUDE.md'), 'utf8'), '@AGENTS.md\n', 'Claude Code imports the rules other CLIs read');
   const charter = fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8');
@@ -59,7 +58,14 @@ test('a team workspace gets a dated folder, a charter, role files and an output 
   assert.match(charter, /output\/products\/<제품>\/[\s\S]*output\/records\/<제품>\/<YYYYMMDD>-<업무이름>\/[\s\S]*output\/research\//);
   assert.match(charter, /AskUserQuestion\)을 쓰지 않는다/, 'questions must reach the secretary, not a popup');
   assert.match(charter, /`\[질문\]`/);
-  assert.match(charter, /notes\/history\.md`에 이 업무 항목을/, 'workers log each task in the shared history');
+  assert.match(charter, /`notes\/history\/<YYYY-MM>\.md`[^\n]*이 업무 항목을 덧붙인다[\s\S]*`notes\/history\.md`의 "현재 상태"[^\n]*2,000자 안/, 'workers append each task to the monthly file and keep the state short');
+  assert.doesNotMatch(charter, /history\.md`에 이 업무 항목을/, 'no more appending to the state file');
+  assert.match(charter, /## 일하는 방식[\s\S]*workspaces[\\/]_sandbox[\\/]<공간폴더이름>-<업무번호>[\s\S]*지웠는지 적는다\. 이유: 위쪽 폴더에 규칙 파일·git이 없어/, 'test folders live outside every workspace');
+  assert.match(charter, /## 일하는 방식[\s\S]*되돌릴 수 없는 단계[^\n]*`\[질문\]`으로 넘긴다\. 실행은 비서가 사용자 승인을 받아 한다/, 'irreversible steps are handed to the secretary');
+  assert.match(charter, /## 일하는 방식[\s\S]*나중까지 남는 것[^\n]*"장기적 관점의 제안"을 나란히 적는다[^\n]*"장기적 관점으로 봐도 같음"[^\n]*"개선 후보"로만 적는다/, 'lasting changes get a long-term option beside the current one');
+  assert.match(charter, /## 일하는 방식[\s\S]*업무를 끝내기 전에 뒤에서 도는 명령을 끝내거나 멈춘다\(TaskStop\)\. 남으면 비서가 완료를 늦게 알게 된다\./, 'workers stop leftover background commands before finishing');
+  assert.match(charter, /## 끝낼 때[\s\S]*- 장기적 관점의 제안:[^\n]*\n- 개선 후보: 맡은 범위 밖/, 'the report has the long-term and out-of-scope lines');
+  assert.match(charter, /## 일하는 방식[\s\S]*비서 기억 읽기 도구\(`recall`·`search_log`\)가 있으면[^\n]*`search_log`로 대화 원문을 펼친다\. 쓰기 도구는 없으니 남길 사실은 보고서에 적는다/, 'memory is read with recall/search_log when the tools are there');
 
   assert.equal(
     fs.readFileSync(path.join(ws.folder, '.claude', 'agents', 'designer.md'), 'utf8'),
@@ -70,22 +76,28 @@ test('a team workspace gets a dated folder, a charter, role files and an output 
 test('the quick folder has a fixed name and no team', () => {
   const ws = createWorkspaceFolder({ ...QUICK_SPEC, parentDir: tempDir() }, NOW);
   assert.equal(path.basename(ws.folder), 'quick-outputs');
-  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.gitignore'], 'quick tasks are unrelated, so no shared history');
+  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.gitignore', 'secretary.json'], 'quick tasks are unrelated, so no shared history');
   const charter = fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8');
-  assert.doesNotMatch(charter, /history\.md|스킬과 기억|notes\/pending|고친 스킬/, 'no learning files in the shared quick folder');
+  assert.doesNotMatch(charter, /history\.md|notes\/history|스킬과 기억|notes\/pending|고친 스킬/, 'no learning files in the shared quick folder');
+  assert.match(charter, /_sandbox/, 'quick tasks keep test folders out too');
   assert.match(charter, /역할 정의는 직접 고치지 않는다/);
+  assert.match(charter, /"장기적 관점의 제안"을 나란히 적는다[\s\S]*- 개선 후보:/, 'quick tasks report long-term options too');
+  assert.match(charter, /비서 기억 읽기 도구\(`recall`·`search_log`\)가 있으면/, 'quick tasks can read memory too');
 });
 
 test('a non-quick workspace keeps what it learns in skills, MEMORY.md and pending proposals', () => {
   const ws = createWorkspaceFolder({ kind: 'solo', name: 'insta', title: '인스타 계정', purpose: '게시물 제작', parentDir: tempDir() }, NOW);
   assert.ok(fs.statSync(path.join(ws.folder, 'notes', 'pending')).isDirectory());
-  assert.match(fs.readFileSync(path.join(ws.folder, 'skills', 'README.md'), 'utf8'), /<이름>\/SKILL\.md/);
+  // Skills go in .agents/skills (its .claude/skills link is made when the secretary writes secretary.json), listed by the CLI, not in AGENTS.md.
+  assert.ok(fs.lstatSync(path.join(ws.folder, '.claude', 'skills')).isSymbolicLink());
+  assert.match(fs.readFileSync(path.join(ws.folder, '.gitignore'), 'utf8'), /^\/\.claude\/skills$/m);
   const memory = fs.readFileSync(path.join(ws.folder, 'MEMORY.md'), 'utf8');
   assert.match(memory, /^# 인스타 계정 사실 메모[\s\S]*"~이다"[\s\S]*2,000자/);
 
   const charter = fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8');
-  assert.match(charter, /MEMORY\.md`와 `notes\/history\.md`의 "현재 상태"를 읽고[\s\S]*맞는 스킬이 있으면 먼저 읽고 따른다/);
-  assert.match(charter, /## 스킬과 기억[\s\S]*skills\/<이름>\/SKILL\.md[\s\S]*"규칙 \+ 이유 한 줄"[\s\S]*notes\/pending\/<YYYYMMDD>-<짧은이름>\.md[\s\S]*남기지 않는 것: 환경 탓 실패[\s\S]*스킬 목록[\s\S]*- 아직 없음[\s\S]*## 일하는 방식/);
+  assert.match(charter, /MEMORY\.md`와 `notes\/history\.md`\(지금 상태\)를 읽고[\s\S]*맞는 스킬\(`\.agents\/skills\/`, 공통 스킬은 `common-<이름>`\)이 있으면 먼저 읽고 따른다[^\n]*통째로 열지 말고 찾아 읽는다/);
+  assert.match(charter, /## 스킬과 기억[\s\S]*\.agents\/skills\/<이름>\/SKILL\.md[\s\S]*"규칙 \+ 이유 한 줄"[\s\S]*notes\/pending\/<YYYYMMDD>-<짧은이름>\.md[\s\S]*공통 스킬\(`common-<이름>` 스킬, 원본은 `workspaces\\_skills`[\s\S]*읽기만 한다[\s\S]*남기지 않는 것: 환경 탓 실패[\s\S]*## 일하는 방식/);
+  assert.ok(!charter.includes('스킬 목록(') && !charter.includes('- 아직 없음'), 'no skill list in the charter: the CLI lists skills by their description');
   assert.match(charter, /## 끝낼 때[\s\S]*- 고친 스킬, 남긴 제안:/);
   assert.match(charter, /역할 정의, `MEMORY\.md`는 직접 고치지 않는다\. 스킬은[^\n]*교정을 반영할 때만 고친다/);
   assert.doesNotMatch(charter, /지난 업무에서 배운 점/);
@@ -185,6 +197,8 @@ test('migration 4 turns each pre-existing task folder into a workspace', () => {
       last_accessed_at TEXT, access_count INTEGER);
     CREATE TABLE tasks (id INTEGER PRIMARY KEY, name TEXT, title TEXT, folder TEXT UNIQUE, goal TEXT, agents TEXT,
       status TEXT, session_ref TEXT, result TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE raw_log (id INTEGER PRIMARY KEY, session_id TEXT, message_uuid TEXT UNIQUE, role TEXT, content TEXT, created_at TEXT);
     INSERT INTO tasks VALUES (7, 'demo', '데모', '/w/demo-20261016', '데모 업무', 'a,b', 'done', 's1', 'ok', 't', 't');
   `);
   raw.close();
@@ -193,7 +207,7 @@ test('migration 4 turns each pre-existing task folder into a workspace', () => {
   const pre = new DatabaseSync(file);
   pre.exec('PRAGMA user_version = 3');
   pre.close();
-  const s = new Store(openDb(file));
+  const s = testStore(file);
   const w = s.listWorkspaces()[0];
   assert.equal(w?.kind, 'team');
   assert.equal(w?.folder, '/w/demo-20261016');
@@ -226,7 +240,10 @@ test('code scale adds rules on top of the small set', () => {
   const medium = renderCharter({ ...spec, scale: 'medium' });
   assert.match(medium, /## 코드를 쓸 때[\s\S]*### 중규모 공간[\s\S]*git switch -c task\/[\s\S]*## 검증/);
   assert.doesNotMatch(medium, /GLOSSARY/);
-  assert.match(renderCharter({ ...spec, scale: 'large' }), /### 대규모 공간[\s\S]*verify[\s\S]*GLOSSARY\.md[\s\S]*worktree/);
+  const large = renderCharter({ ...spec, scale: 'large' });
+  assert.match(large, /### 대규모 공간[\s\S]*verify[\s\S]*GLOSSARY\.md[\s\S]*worktree/);
+  assert.match(large, /결정 기록도 업무 항목과 함께 `notes\/history\/<YYYY-MM>\.md`에 덧붙인다/);
+  assert.doesNotMatch(large, /결정 기록으로만/);
   assert.throws(() => createWorkspaceFolder({ ...spec, code: false, scale: 'medium', parentDir: tempDir() }), /코드 공간/);
 });
 

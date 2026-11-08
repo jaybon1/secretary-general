@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>대시보드 설정</title>
+<style>
+:root { --bg:#f4f5f7; --card:#fff; --text:#1c2128; --mute:#69727d; --line:#dfe3e8; --ok:#1a7f4b; --warn:#b26a00; --bad:#c62828; --bar:#3b6fd4; }
+@media (prefers-color-scheme: dark) { :root { --bg:#12151a; --card:#1b2028; --text:#e6e9ee; --mute:#98a1ad; --line:#2c333d; --ok:#4cc38a; --warn:#e0a03a; --bad:#ef6b6b; --bar:#6c97ee; } }
+* { box-sizing:border-box; }
+body { margin:0; padding:12px 16px 40px; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,"Malgun Gothic",sans-serif; }
+main { max-width:700px; margin:0 auto; }
+header { display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; }
+h1 { font-size:20px; margin:0 0 8px; }
+h2 { font-size:16px; margin:20px 0 4px; }
+a { color:var(--bar); }
+.mute { color:var(--mute); font-size:13px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; display:flex; gap:10px; align-items:flex-start; }
+.card input { width:22px; height:22px; margin-top:2px; flex:none; }
+.tag { display:inline-block; font-size:12px; padding:0 6px; border-radius:8px; border:1px solid var(--line); color:var(--mute); margin-left:4px; }
+.tag.ok { color:var(--ok); border-color:var(--ok); } .tag.warn { color:var(--warn); border-color:var(--warn); }
+button { font-size:16px; padding:8px 18px; border-radius:10px; border:1px solid var(--bar); background:var(--bar); color:#fff; }
+#msg { margin-left:8px; }
+#msg.bad { color:var(--bad); } #msg.ok { color:var(--ok); }
+</style>
+</head>
+<body>
+<main>
+<header><h1>대시보드 설정</h1><a href="/">대시보드로</a></header>
+<h2>사용량을 볼 공급자</h2>
+<div class="mute">체크한 공급자만 한도 칸에 보이고, 조회할 수 있는 것은 5분마다 조회해요(토큰 0). 이 PC에만 저장돼요.</div>
+<div id="note" class="mute"></div>
+<form id="f"><div id="list"></div><button type="submit">저장</button><span id="msg"></span></form>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+function el(tag, cls, text, kids) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  (kids || []).forEach((k) => e.append(k));
+  return e;
+}
+function render(v) {
+  $('note').textContent = v.saved ? '' : '아직 저장한 적 없음: 조회할 수 있고 이 PC에 설정된 공급자가 기본으로 체크돼 있어요.' + (v.problem ? ' (' + v.problem + ')' : '');
+  $('list').replaceChildren(...v.providers.map((p) => {
+    const box = Object.assign(document.createElement('input'), { type: 'checkbox', name: 'p', value: p.name, checked: p.checked, id: 'p-' + p.name });
+    const state = !p.readable ? el('span', 'tag', '조회 안 됨') : p.configured ? el('span', 'tag ok', '이 PC에 설정됨') : el('span', 'tag warn', '키·설정 없음');
+    const label = el('label', null, null, [el('b', null, p.label), el('span', 'tag', p.name), state, el('div', 'mute', '조회: ' + p.methodText)]);
+    label.htmlFor = box.id;
+    return el('div', 'card', null, [box, label]);
+  }));
+}
+async function load() {
+  const r = await fetch('/api/usage-settings', { cache: 'no-store' });
+  render(await r.json());
+}
+$('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const providers = [...document.querySelectorAll('input[name=p]:checked')].map((x) => x.value);
+  $('msg').className = '';
+  $('msg').textContent = '저장 중…';
+  try {
+    const r = await fetch('/api/usage-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providers }) });
+    const v = await r.json();
+    if (!r.ok) throw new Error(v.error || r.status);
+    render(v);
+    $('msg').className = 'ok';
+    $('msg').textContent = '저장했어요';
+  } catch (x) {
+    $('msg').className = 'bad';
+    $('msg').textContent = '저장 못 함: ' + x.message;
+  }
+});
+load().catch(() => { $('note').textContent = '설정을 불러오지 못했어요'; });
+</script>
+</body>
+</html>

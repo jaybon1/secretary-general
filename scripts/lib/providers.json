@@ -1,0 +1,11 @@
+{
+  "default": "subscription",
+  "providers": {
+    "subscription": {
+      "type": "claude-subscription",
+      "usage": "claude-usage",
+      "effort": "high",
+      "note": "이 PC에 로그인된 Claude 구독(claude auth login). 비서·업무 세션·run-job이 모두 이 구독으로 돈다. 다른 공급자(두 번째 구독, API 키, Bedrock, 게이트웨이)는 기능 account-handoff·providers를 켤 때 여기에 넣는다(.agents/skills/features)."
+    }
+  }
+}

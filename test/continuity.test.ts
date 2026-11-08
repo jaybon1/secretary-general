@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { continuityContext, labelAt, labelIndex, openQuestionLines, parseAnswers, parseQuestions, parseRemaining, runningTaskLines, updateOpenQuestions } from '../src/continuity.ts';
-import { tempStore } from './helpers.ts';
-
-let n = 0;
-function say(s: ReturnType<typeof tempStore>, session: string, role: 'user' | 'assistant', content: string): void {
-  n++;
-  s.appendLog([{ session_id: session, message_uuid: `u${n}`, role, content, created_at: new Date(Date.now() + n).toISOString() }]);
-}
+import { continuityContext } from '../src/board/board-notice.ts';
+import { labelAt, labelIndex, openQuestionLines, parseAnswers, parseQuestions, parseRemaining, updateOpenQuestions } from '../src/board/open-questions.ts';
+import { runningTaskLines } from '../src/workspace/watch-check.ts';
+import { say, tempStore } from './helpers.ts';
 
 test('labels count A..Z then AA', () => {
   assert.equal(labelAt(labelIndex('Z') + 1), 'AA');
@@ -22,7 +18,7 @@ test('parses labeled questions with options and the remaining line', () => {
     '1) 3번 (추천)',
     '2) 5번',
     '',
-    '- **Y. 백업 켜짐 설정 확인:** 실제 설정을 확인할까요? 1) 확인 2) 안 함',
+    '- **Y. 알림 켜짐 설정 확인:** 실제 설정을 확인할까요? 1) 확인 2) 안 함',
     'B. 이건 질문이 아닌 목록 항목',
     '',
     '남은 질문: AE, Y · 보류: Z',
@@ -102,10 +98,19 @@ test('running tasks are listed for a new session with a cue to watch them again'
   s.updateTask(done.id, { status: 'done', sessionRef: 'bg:11111111' });
   const run = s.createTask({ workspaceId: ws.id, name: 'step6', title: '6단계 조립', goal: 'g', outputDir: 'o' });
   s.updateTask(run.id, { status: 'running', sessionRef: 'bg:ad8ca57f' });
-  const lines = runningTaskLines(s);
+  const lines = runningTaskLines(s, () => false);
   assert.equal(lines.length, 3);
   assert.equal(lines[1], `- 업무 ${run.id} "6단계 조립" · bg:ad8ca57f`);
-  assert.match(lines[2], /^첫 답에서 scripts\/watch-worker\.ps1 -Id <id>를 백그라운드 명령\(시간제한 7200000ms\)으로 다시 띄운다\.$/);
+  assert.match(lines[2], /scripts\/worker\/watch-worker\.ps1 -Id <id>를 백그라운드 명령\(시간제한 3600000ms\)으로 다시 띄운다/);
+  // After /clear the old watcher may still be alive: mark it and do not ask for a second one.
+  const watched = runningTaskLines(s, (bg) => bg === 'ad8ca57f');
+  assert.equal(watched[1], `- 업무 ${run.id} "6단계 조립" · bg:ad8ca57f · 감시 살아 있음`);
+  assert.equal(watched[2], '모두 감시가 살아 있으니 다시 띄우지 않는다(겹친다).');
+  const run2 = s.createTask({ workspaceId: ws.id, name: 'step7', title: '7단계', goal: 'g', outputDir: 'o2' });
+  s.updateTask(run2.id, { status: 'running', sessionRef: 'bg:bbbbbbbb' });
+  const mixed = runningTaskLines(s, (bg) => bg === 'ad8ca57f');
+  assert.equal(mixed.filter((l) => l.endsWith('감시 살아 있음')).length, 1);
+  assert.match(mixed.at(-1)!, /^"감시 살아 있음"이 없는 업무만 첫 답에서/);
   // Even with no previous session or open questions, the continuity block carries them.
   const ctx = continuityContext(s, 'new');
   assert.match(ctx, /<secretary-continuity>[\s\S]*"6단계 조립" · bg:ad8ca57f[\s\S]*<\/secretary-continuity>/);

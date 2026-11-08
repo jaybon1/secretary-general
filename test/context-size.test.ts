@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { contextNudge, lastContextTokens } from '../src/context-size.ts';
+import { contextNudge, lastContextTokens } from '../src/hooks/context-size-nudge.ts';
 import { tempDir, tempStore } from './helpers.ts';
 
 test('the context size is what the last model call read', () => {
@@ -20,3 +20,4 @@ test('the /clear nudge comes once at 150k and again every 50k', () => {
   assert.match(contextNudge(store, 's', 202_000), /약 20만 토큰/);
   assert.match(contextNudge(store, 'other', 152_000), /약 15만 토큰/);
 });
+

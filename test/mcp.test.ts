@@ -3,10 +3,12 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { PROJECT_ROOT } from '../src/config.ts';
-import { openDb } from '../src/db.ts';
-import { Store } from '../src/store.ts';
-import { tempDir } from './helpers.ts';
+import fs from 'node:fs';
+import { PROJECT_ROOT } from '../src/core/config.ts';
+import type { Store } from '../src/store/store.ts';
+import { guardsOn } from '../src/guards/settings.ts';
+import { MISTAKE_TOOLS } from '../src/mcp/mistake-tools.ts';
+import { tempDir, testStore } from './helpers.ts';
 
 const text = (r: unknown) => ((r as { content: Array<{ text: string }> }).content[0]?.text ?? '');
 
@@ -16,7 +18,7 @@ test('MCP server: remember → recall → supersede → stats over stdio', async
   await client.connect(
     new StdioClientTransport({
       command: process.execPath,
-      args: [path.join(PROJECT_ROOT, 'src', 'mcp-server.ts')],
+      args: [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts')],
       env: {
         ...(process.env as Record<string, string>),
         SECRETARY_DB: path.join(tempDir(), 'mcp.db'),
@@ -26,11 +28,12 @@ test('MCP server: remember → recall → supersede → stats over stdio', async
   );
   try {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
+    // The mistake record's tools come with feature 'guards' (off in a copy that turned it off).
     assert.deepEqual(tools, [
-      'create_task', 'create_workspace', 'forget', 'get_profile', 'get_task', 'get_unconsolidated_log', 'list_memories',
-      'list_tasks', 'list_topics', 'list_workspaces', 'mark_consolidated', 'recall', 'remember', 'search_log', 'stats', 'update_profile',
-      'update_task',
-    ]);
+      'create_task', 'create_workspace', 'forget', 'get_profile', 'get_task', 'get_unconsolidated_log', 'list_big_work',
+      'list_memories', 'list_tasks', 'list_topics', 'list_workspaces', 'mark_consolidated', 'recall', 'remember', 'search_log', 'set_big_work',
+      'stats', 'update_profile', 'update_task', ...(guardsOn() ? MISTAKE_TOOLS : []),
+    ].sort());
 
     const r1 = text(await client.callTool({ name: 'remember', arguments: { kind: 'preference', content: '회의는 오전 10시 이후를 선호한다.' } }));
     assert.match(r1, /#1 저장/);
@@ -98,14 +101,87 @@ test('MCP server: remember → recall → supersede → stats over stdio', async
     await client.callTool({ name: 'update_task', arguments: { id: 3, status: 'running', session_ref: 'local_x' } });
     assert.match(text(await client.callTool({ name: 'list_tasks', arguments: { status: 'running' } })), /업무 #3 \[running\] 랜딩 — 웹페이지 제작팀\(팀\)/);
     assert.match(text(await client.callTool({ name: 'get_task', arguments: { id: 3 } })), /REPORT\.md 아직 없음/);
+    assert.doesNotMatch(text(await client.callTool({ name: 'update_task', arguments: { id: 3, status: 'running' } })), /큰 일 판/);
+    assert.match(text(await client.callTool({ name: 'update_task', arguments: { id: 3, status: 'done', result: '끝' } })), /\[done\][\s\S]*\n큰 일 판을 고칠지 확인: .*set_big_work/);
+
+    assert.match(text(await client.callTool({ name: 'set_big_work', arguments: { name: '랜딩', state: '진행 중', note: '초안' } })), /큰 일 판 고침: 랜딩 → 진행 중\n- \[#1\] 랜딩 — 진행 중 \(초안\)/);
+    assert.match(text(await client.callTool({ name: 'set_big_work', arguments: { name: '랜딩', state: '진행 중', note: '초안', seen_id: 1 } })), /바뀐 것 없음/);
+    // The optimistic lock (big-work.test.ts) reaches the caller: a stale seen_id is an error saying what changed.
+    await client.callTool({ name: 'set_big_work', arguments: { name: '랜딩', state: '사용자 차례', seen_id: 1 } });
+    const stale = await client.callTool({ name: 'set_big_work', arguments: { name: '랜딩', state: '보류', seen_id: 1 } });
+    assert.equal(stale.isError, true);
+    assert.match(text(stale), /그 사이 이 줄이 바뀌었어요: 랜딩 \(본 줄 #1, 지금 #2 사용자 차례\)/);
+    assert.match(text(await client.callTool({ name: 'list_big_work', arguments: {} })), /^- \[#2\] 랜딩 — 사용자 차례 · /);
+    assert.match(text(await client.callTool({ name: 'list_big_work', arguments: { name: '랜딩' } })), /진행 중 \(초안\)\n.*사용자 차례/);
+    assert.equal((await client.callTool({ name: 'set_big_work', arguments: { name: '없음', state: '끝남' } })).isError, true);
   } finally {
     await client.close();
   }
 });
 
+test('MCP server --readonly: only recall and search_log, and recalls write nothing', async () => {
+  const db = path.join(tempDir(), 'ro.db');
+  const s = testStore(db);
+  const { id } = s.remember({ kind: 'fact', content: '알림 앱 기본값은 켜짐이다.' });
+  const usageRows = () => s.stats().injectedTokensLast7d;
+  const before = usageRows();
+  const client = new Client({ name: 'test', version: '0' });
+  await client.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts'), '--readonly'],
+      env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_EMBED: 'off' },
+    }),
+  );
+  try {
+    const tools = (await client.listTools()).tools.map((t) => t.name).sort();
+    assert.deepEqual(tools, ['recall', 'search_log']);
+    assert.match(text(await client.callTool({ name: 'recall', arguments: { query: '알림 앱 기본값' } })), /켜짐/);
+    assert.match(text(await client.callTool({ name: 'recall', arguments: { ids: [id] } })), /켜짐/);
+    const r = await client.callTool({ name: 'remember', arguments: { kind: 'fact', content: 'x' } });
+    assert.equal(r.isError, true);
+    assert.equal(s.getMemory(id)?.access_count, 0, 'readonly recall does not touch memories');
+    assert.equal(usageRows(), before, 'readonly recall does not log usage');
+  } finally {
+    await client.close();
+  }
+});
+
+test('MCP server --readonly opens the DB read-only: an old one is not migrated, a missing one is not made', async () => {
+  const dir = tempDir();
+  const old = path.join(dir, 'old.db');
+  const s = testStore(old, 10);
+  s.remember({ kind: 'fact', content: '옛 DB의 기억이다.' });
+  s.db.close();
+  const version = () => {
+    const raw = testStore(old, 0).db;
+    const v = (raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    raw.close();
+    return v;
+  };
+  for (const [db, query] of [[old, '옛 DB'], [path.join(dir, 'none.db'), '아무거나']] as const) {
+    const client = new Client({ name: 'test', version: '0' });
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts'), '--readonly'],
+        env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_EMBED: 'off' },
+      }),
+    );
+    try {
+      assert.deepEqual((await client.listTools()).tools.map((t) => t.name).sort(), ['recall', 'search_log']);
+      await client.callTool({ name: 'recall', arguments: { query } });
+    } finally {
+      await client.close();
+    }
+  }
+  assert.equal(version(), 10, 'still on its old schema');
+  assert.ok(!fs.existsSync(path.join(dir, 'none.db')), 'no DB made');
+});
+
 test('MCP server: get_unconsolidated_log hands out whole messages, a long one part by part', async () => {
   const db = path.join(tempDir(), 'log.db');
-  const s = new Store(openDb(db));
+  const s = testStore(db);
   const long = 'ㄱ'.repeat(20_000) + 'ㄴ'.repeat(20_000) + '끝';
   s.appendLog(
     ['짧은 말', '가'.repeat(1500), long, '다음 말'].map((content, n) => ({
@@ -116,7 +192,7 @@ test('MCP server: get_unconsolidated_log hands out whole messages, a long one pa
   await client.connect(
     new StdioClientTransport({
       command: process.execPath,
-      args: [path.join(PROJECT_ROOT, 'src', 'mcp-server.ts')],
+      args: [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts')],
       env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_EMBED: 'off' },
     }),
   );

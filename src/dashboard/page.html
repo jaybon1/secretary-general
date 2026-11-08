@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>비서 대시보드</title>
+<style>
+:root { --bg:#f4f5f7; --card:#fff; --text:#1c2128; --mute:#69727d; --line:#dfe3e8; --ok:#1a7f4b; --warn:#b26a00; --bad:#c62828; --bar:#3b6fd4; --track:#e6e9ee; }
+@media (prefers-color-scheme: dark) { :root { --bg:#12151a; --card:#1b2028; --text:#e6e9ee; --mute:#98a1ad; --line:#2c333d; --ok:#4cc38a; --warn:#e0a03a; --bad:#ef6b6b; --bar:#6c97ee; --track:#2a313b; } }
+* { box-sizing:border-box; }
+body { margin:0; padding:12px 16px 40px; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,"Malgun Gothic",sans-serif; }
+main { max-width:1100px; margin:0 auto; }
+header { display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+h1 { font-size:20px; margin:0; }
+h2 { font-size:16px; margin:20px 0 8px; }
+#meta { color:var(--mute); font-size:13px; }
+#meta.bad { color:var(--bad); font-weight:600; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
+.grid { display:grid; gap:8px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); }
+.row { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.mute { color:var(--mute); font-size:13px; }
+.empty { color:var(--mute); padding:4px 0; }
+.err { color:var(--bad); }
+.bar { height:10px; background:var(--track); border-radius:5px; overflow:hidden; margin:4px 0 2px; }
+.bar > i { display:block; height:100%; background:var(--bar); }
+.bar.hot > i { background:var(--warn); } .bar.full > i { background:var(--bad); }
+.tag { display:inline-block; font-size:12px; padding:0 6px; border-radius:8px; border:1px solid var(--line); color:var(--mute); }
+.tag.warn { color:var(--warn); border-color:var(--warn); } .tag.ok { color:var(--ok); border-color:var(--ok); } .tag.bad { color:var(--bad); border-color:var(--bad); }
+.col h3 { font-size:14px; margin:0 0 6px; }
+.card { overflow-wrap:anywhere; }
+.item { padding:6px 0; border-top:1px solid var(--line); }
+.item:first-of-type { border-top:0; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+td, th { text-align:left; padding:4px 6px 4px 0; border-top:1px solid var(--line); vertical-align:top; }
+th { color:var(--mute); font-weight:500; }
+.scroll { overflow-x:auto; }
+.links { display:flex; flex-wrap:wrap; gap:8px; }
+.links a { display:inline-block; padding:8px 14px; background:var(--card); border:1px solid var(--line); border-radius:10px; color:var(--bar); text-decoration:none; font-size:16px; }
+</style>
+</head>
+<body>
+<main>
+<header><h1>비서 대시보드</h1><span id="meta">불러오는 중…</span></header>
+<h2>결과물 보기 (읽기 전용)</h2><div class="links">__SHARES__</div>
+<h2>한도 잔량 <a class="mute" href="/settings">공급자 고르기</a></h2><div id="limits" class="grid"></div>
+<h2>돌고 있는 작업</h2><div id="running"></div>
+<h2>업무 칸반</h2><div id="kanban" class="grid"></div>
+<h2>예약 작업</h2><div id="schedules" class="grid"></div>
+<h2>최근 run-job</h2><div id="recent" class="card scroll"></div>
+</main>
+<script>
+const REFRESH = __REFRESH__;
+const $ = (id) => document.getElementById(id);
+// 서버가 준 글(업무 제목 등)은 textContent로만 넣는다.
+function el(tag, cls, text, kids) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  (kids || []).forEach((k) => e.append(k));
+  return e;
+}
+const put = (id, nodes) => $(id).replaceChildren(...nodes);
+const empty = () => el('div', 'empty', '없음');
+const errBox = (r) => el('div', 'err', r.error);
+
+function meter(w) {
+  const hot = w.pct >= 100 ? 'full' : w.pct >= 80 ? 'hot' : '';
+  const bar = el('div', 'bar ' + hot, null, [Object.assign(el('i'), { style: 'width:' + Math.min(100, w.pct) + '%' })]);
+  const sub = w.passed ? '초기화 시각이 지나 옛 값' : w.resetsAt ? '초기화 ' + w.resetsAt + (w.left ? ' (' + w.left + ')' : '') : '';
+  return el('div', null, null, [el('div', 'row', null, [el('span', null, w.label), el('b', null, w.pct + '%')]), bar, el('div', 'mute', sub)]);
+}
+function renderLimits(r) {
+  if (r.error) return [errBox(r)];
+  if (!r.data.length) return [el('div', 'empty', '고른 공급자 없음')];
+  return r.data.map((x) => x.none ? el('div', 'card', null, [el('div', 'row', null, [el('b', null, x.name), el('span', 'tag', '조회 안 됨')])])
+    : x.error ? el('div', 'card err', x.name + ': ' + x.error) : el('div', 'card', null, [
+    el('div', 'row', null, [el('b', null, x.name), el('span', 'tag ' + (x.stale ? 'warn' : 'ok'), x.stale ? '오래된 값' : '최신')]),
+    ...x.meters.map(meter),
+    el('div', 'mute', '기록 ' + x.updatedAt + ' (' + x.updatedAgo + ')'),
+  ]));
+}
+function renderRunning(r) {
+  const out = [];
+  const w = r.workers, j = r.runJobsActive;
+  out.push(el('b', null, '업무 세션'));
+  if (w.error) out.push(errBox(w));
+  else {
+    if (!w.data.running.length) out.push(empty());
+    w.data.running.forEach((x) => out.push(el('div', 'card', null, [
+      el('div', 'row', null, [el('b', null, x.name), el('span', 'tag ok', '돌고 있음')]),
+      el('div', 'mute', x.account + ' · ' + x.model + '/' + x.effort + ' · ' + x.startedAt + ' 시작 (' + x.startedAgo + ')'),
+      el('div', 'mute', x.folder),
+    ])));
+    if (w.data.orphan.length) out.push(el('div', 'mute', '기록만 남음(프로세스 없음): ' + w.data.orphan.map((x) => x.name).join(', ')));
+  }
+  out.push(el('b', null, 'run-job (결과만 받는 일)'));
+  if (j.error) out.push(errBox(j));
+  else {
+    if (!j.data.running.length) out.push(empty());
+    j.data.running.forEach((x) => out.push(el('div', 'card', null, [
+      el('div', 'row', null, [el('b', null, x.label || '(지시 없음)'), el('span', 'tag ok', '돌고 있음')]),
+      el('div', 'mute', x.account + ' · ' + x.model + ' · ' + x.startedAt + ' 시작 (' + x.startedAgo + ')'),
+      el('div', 'mute', x.folder),
+    ])));
+  }
+  return out;
+}
+function renderKanban(r) {
+  if (r.error) return [errBox(r)];
+  return r.data.map((c) => el('div', 'card col', null, [
+    el('h3', null, c.label + ' ' + c.total + (c.items.length < c.total ? ' (최근 ' + c.items.length + '개)' : '')),
+    ...(c.items.length ? c.items.map((x) => el('div', 'item', null, [
+      el('div', null, '#' + x.id + ' ' + x.title),
+      el('div', 'mute', x.ws + ' · ' + x.updatedAt + ' (' + x.updatedAgo + ')'),
+      ...(x.note ? [el('div', 'mute', x.note)] : []),
+    ])) : [empty()]),
+  ]));
+}
+function renderSchedules(r) {
+  if (r.error) return [errBox(r)];
+  if (!r.data.length) return [empty()];
+  return r.data.map((x) => el('div', 'card', null, [
+    el('div', 'row', null, [el('b', null, x.name), el('span', 'tag ' + (x.ok ? 'ok' : 'bad'), x.result)]),
+    el('div', 'mute', '다음 ' + (x.next ? x.next + ' (' + (x.nextLeft || '곧') + ')' : '없음')),
+    el('div', 'mute', '마지막 ' + (x.last ? x.last + ' (' + x.lastAgo + ')' : '기록 없음')),
+  ]));
+}
+function renderRecent(r) {
+  if (r.error) return [errBox(r)];
+  if (!r.data.length) return [empty()];
+  const head = el('tr', null, null, ['시각', '계정', '모델', '폴더', '걸린 시간', '비용'].map((h) => el('th', null, h)));
+  const rows = r.data.map((x) => el('tr', null, null, [
+    x.at, x.account, x.model, x.folder, Math.round(x.sec) + '초', '$' + (x.cost || 0).toFixed(2) + (x.error ? ' 오류' : ''),
+  ].map((t) => el('td', null, t))));
+  return [el('table', null, null, [head, ...rows])];
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    // 한 영역을 그리다 실패해도 나머지는 갱신한다
+    const area = (id, fn, arg) => { try { put(id, fn(arg)); } catch (e) { put(id, [el('div', 'err', '화면을 그리지 못함')]); } };
+    area('limits', renderLimits, d.limits);
+    area('running', renderRunning, d);
+    area('kanban', renderKanban, d.kanban);
+    area('schedules', renderSchedules, d.schedules);
+    area('recent', renderRecent, d.runJobsRecent);
+    $('meta').className = '';
+    $('meta').textContent = '한국시간 ' + d.generatedAt + ' · ' + REFRESH + '초마다 자동 새로고침';
+  } catch (e) {
+    $('meta').className = 'bad';
+    $('meta').textContent = '연결이 끊겼어요 — 다시 시도 중';
+  }
+}
+load();
+setInterval(load, REFRESH * 1000);
+</script>
+</body>
+</html>

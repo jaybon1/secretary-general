@@ -8,16 +8,32 @@ node_modules/
 backups/
 
 .claude/settings.local.json
+# This install's own id (src/setup/install-id.ts): made on first use, kept across updates, never in git or a release
+.secretary-id
 
 # Embedding model download and the semantic helper's state file
 models/
 *.embedder.json
 *.embedder-down.json
 *.embedder-failures.log
-
-# Ego Lite's own skill, if installed and moved here so only secretary sessions load it
-.claude/skills/ego-browser/
-
-# Install check result (src/setup.ts) and the helper's measured memory
-*.db.setup.json
 *.embedder-memory.json
+# Last install check (src/setup/install-check.ts), read by the prompt hook
+*.db.setup.json
+# This PC's dashboard settings (src/dashboard/settings.ts: addresses, port, share folders)
+scripts/dashboard.local.json
+# This PC's choice of providers whose usage is read and shown (src/usage/usage-settings.ts, written by the dashboard's /settings page)
+scripts/usage.local.json
+# This PC's answer-check settings (src/guards/settings.ts: the other PC's path to the results folder, check levels)
+scripts/guards.local.json
+# This PC's end notice settings (src/notify/ntfy.ts: ntfy server, topic, token file)
+scripts/notify.local.json
+
+# Skills: the real skill folders are .agents/skills/<name>/ (in git). Claude Code reads .claude/skills, one link to
+# .agents/skills; .agents/skills also holds links to the common skills (common-*, workspaces/_skills, from
+# common-skills.json) and Ego Lite's own skill (a junction to the folder Ego Lite installs and updates). Links are made by
+# `node src/cli.ts skill-links` and never go in git (git would follow a junction and track a second copy).
+# .agents/skills.json is Antigravity's list of the common skills, with an absolute path (per PC), made by the same command.
+/.claude/skills
+/.agents/skills/common-*
+/.agents/skills.json
+/.agents/skills/ego-browser

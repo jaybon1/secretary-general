@@ -2,7 +2,7 @@
   "mcpServers": {
     "secretary": {
       "command": "node",
-      "args": ["src/mcp-server.ts"]
+      "args": ["src/mcp/server.ts"]
     }
   }
 }

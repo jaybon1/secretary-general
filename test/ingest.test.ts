@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { ingestTranscript, parseTranscriptLine } from '../src/ingest.ts';
-import { formatLocal } from '../src/text.ts';
+import { ingestTranscript, parseTranscriptLine } from '../src/log/ingest-transcript.ts';
+import { formatLocal } from '../src/core/kst-time.ts';
 import { tempDir, tempStore } from './helpers.ts';
 
 const line = (o: object) => JSON.stringify({ sessionId: 's1', timestamp: '2026-10-16T11:00:00Z', isSidechain: false, ...o });
