@@ -23,16 +23,29 @@ function Set-KeyEnv([string]$Name) {
   }
 }
 
-# 공급자 환경을 현재 프로세스에 넣는다. Clear-HostClaudeEnv 뒤에 부른다. 이름을 안 주면 providers.json의 default.
+# 'auto'(providers.json의 default나 -Provider auto, 기능 account-handoff "다중 구독"): 넘길 구독(계정 a 'subscription' 밖의 claude-subscription) 중
+# 지금 가장 여유 있는 것. 고르는 규칙은 질문 훅의 <secretary-usage> 줄과 같은 코드(node src/cli.ts handoff-account, src/usage/handoff-level.ts)다.
+# 그 명령이 실패하면 넘길 구독 중 providers.json에서 첫째, 없으면 계정 a.
+function Resolve-AutoProvider($config) {
+  $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+  $picked = $null
+  try { $picked = "$(& node --no-warnings (Join-Path $root 'src\cli.ts') handoff-account --root $root 2>$null)".Trim() } catch {}
+  if ($picked -and $picked -ne 'auto' -and $config.providers.$picked) { return $picked }
+  $first = $config.providers.PSObject.Properties | Where-Object { $_.Value.type -eq 'claude-subscription' -and $_.Name -ne 'subscription' } | Select-Object -First 1
+  if ($first) { $first.Name } else { 'subscription' }
+}
+
+# 공급자 환경을 현재 프로세스에 넣는다. Clear-HostClaudeEnv 뒤에 부른다. 이름을 안 주면 providers.json의 default('auto'면 Resolve-AutoProvider).
 function Use-Provider([string]$Name) {
   $config = Get-ProviderConfig
   if (-not $Name) { $Name = $config.default }
+  if ($Name -eq 'auto') { $Name = Resolve-AutoProvider $config }
   $p = $config.providers.$Name
   if (-not $p) { throw "공급자 설정이 없어요: $Name (scripts/lib/providers.json)" }
   # 사용량 기록(~/.claude/usage/subscription-<계정>.json, Get-UsageKey)을 어느 공급자 것으로 볼지 상태줄·정지 훅에 알려 준다.
   $env:SECRETARY_PROVIDER = $Name
   switch ($p.type) {
-    # 두 번째 구독 계정은 키 폴더의 <공급자이름>.env에 CLAUDE_CONFIG_DIR=<그 계정으로 /login한 설정 폴더>를 둔다. 없으면 이 PC 기본 로그인.
+    # 두 번째부터의 구독 계정(b, c, …)은 키 폴더의 <공급자이름>.env에 CLAUDE_CONFIG_DIR=<그 계정으로 /login한 설정 폴더>를 둔다. 없으면 이 PC 기본 로그인.
     'claude-subscription' { if (Test-Path (Join-Path (Get-KeysDir) "$Name.env")) { Set-KeyEnv $Name } }
     'claude-bedrock' {
       $env:CLAUDE_CODE_USE_BEDROCK = '1'

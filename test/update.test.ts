@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { tempDir } from './helpers.ts';
 // @ts-expect-error plain .mjs script without types
-import { ID_ALPHABET, ID_FILE, LIST_FILE, PROTECTED, baseFor, ensureId, classify, classifyMoved, fileHash, movesBetween, normalize, recommend, restyle } from '../scripts/update.mjs';
+import { ID_ALPHABET, ID_FILE, LIST_FILE, PROTECTED, baseFor, ensureId, classify, classifyMoved, compareVersions, fileHash, findTag, movesBetween, normalize, parseVersion, recommend, restyle, sortTags, versionLabel } from '../scripts/update.mjs';
 import { fileHash as releaseHash } from '../src/setup/release-files.ts';
 
 test('each file is sorted by who changed it since the installed version', () => {
@@ -57,6 +57,93 @@ test('moves are followed across versions: each version after the installed one, 
   assert.equal(movesBetween(moves, tags, 'v8', 'v10').get('src/a.ts'), undefined);
   assert.equal(movesBetween(moves, tags, 'v8', 'v10').get('src/x/a.ts'), 'src/y/a.ts');
   assert.equal(movesBetween({}, tags, 'v7', 'v10').size, 0);
+});
+
+// 없으면 놓치는 실수: git의 v:refname 정렬은 v0.9.0을 v1보다 앞에 두어, 옛 tag(v1~v8) 뒤에 낸 v0.9.0이 최신으로 안 잡히고 v8 사용자는 "이미 최신"이 된다.
+test('versions: old one-number tags read as 0.N.0, new ones vX.Y.Z; the newest is found by number', () => {
+  assert.deepEqual(parseVersion('v8'), [0, 8, 0]);
+  assert.deepEqual(parseVersion('v0.9.0'), [0, 9, 0]);
+  assert.deepEqual(parseVersion('0.10.2\n'), [0, 10, 2]);
+  assert.equal(parseVersion('v8-rc'), null);
+  assert.equal(parseVersion(undefined), null);
+  const tags = sortTags(['v0.9.0', 'v1', 'v8', 'v2', 'v0.10.0', 'v0.9.1', 'v7', 'note', 'v1.0.0']);
+  assert.deepEqual(tags, ['v1', 'v2', 'v7', 'v8', 'v0.9.0', 'v0.9.1', 'v0.10.0', 'v1.0.0']);
+  assert.ok(compareVersions('v0.9.0', 'v8') > 0 && compareVersions('v8', '0.8.0') === 0 && compareVersions('v0.9.0', 'v0.10.0') < 0);
+  // A VERSION file says 'v7' or 'v8' (old releases) or 'v0.9.0': the tag of that number, whichever way it is written.
+  assert.equal(findTag(tags, 'v8'), 'v8');
+  assert.equal(findTag(tags, '0.8.0'), 'v8');
+  assert.equal(findTag(tags, 'v0.9.0'), 'v0.9.0');
+  assert.equal(findTag(tags, 'v3'), undefined);
+  assert.equal(findTag(tags, 'garbage'), undefined);
+  assert.equal(versionLabel('v8'), 'v8(0.8.0)');
+  assert.equal(versionLabel('v0.9.0'), 'v0.9.0');
+  // Moves keys are tag names; old v8 and new v0.9.0 keys are followed in number order.
+  const moves = { v8: { 'src/a.ts': 'src/x/a.ts' }, 'v0.9.0': { 'src/x/a.ts': 'src/y/a.ts', 'src/b.ts': 'src/y/b.ts' } };
+  assert.equal(movesBetween(moves, ['v0.9.0', 'v7', 'v8'], 'v7', 'v0.9.0').get('src/a.ts'), 'src/y/a.ts');
+  assert.equal(movesBetween(moves, ['v0.9.0', 'v7', 'v8'], 'v8', 'v0.9.0').get('src/b.ts'), 'src/y/b.ts');
+  assert.equal(movesBetween(moves, ['v0.9.0', 'v7', 'v8'], 'v8', 'v0.9.0').get('src/a.ts'), undefined);
+  assert.equal(movesBetween({ '0.9.0': { 'src/b.ts': 'src/z/b.ts' } }, ['v8', 'v0.9.0'], 'v8', 'v0.9.0').get('src/b.ts'), 'src/z/b.ts');
+});
+
+/** A repository with the old one-number tags v7 and v8 and the first 0.x tag v0.9.0 after them; user folders as each old version shipped. */
+function semverSetup() {
+  const repo = tempDir();
+  const g = (...a: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.autocrlf=false', ...a]);
+  const put = (dir: string, files: Record<string, string>) => {
+    for (const [p, t] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true });
+      fs.writeFileSync(path.join(dir, p), t);
+    }
+  };
+  const release = (files: Record<string, string>, tag: string, gone: string[] = []) => {
+    for (const f of gone) fs.rmSync(path.join(repo, f));
+    put(repo, files);
+    g('add', '-A');
+    g('commit', '-qm', tag);
+    g('tag', tag);
+  };
+  g('init', '-q');
+  const v7 = { 'package.json': '{}\n', VERSION: 'v7\n', 'a.txt': 'a7\n', 'src/old.ts': 'old\n' };
+  release(v7, 'v7');
+  const v8 = { ...v7, VERSION: 'v8\n', 'a.txt': 'a8\n', 'scripts/export/x.ps1': 'export\n', 'scripts/update-moves.json': '{}\n' };
+  release(v8, 'v8');
+  // 0.9.0 moves src/old.ts and drops the v8 feature's script (deleted, not moved).
+  release({ VERSION: 'v0.9.0\n', 'a.txt': 'a9\n', 'src/new/old.ts': 'old\n', 'scripts/update-moves.json': JSON.stringify({ 'v0.9.0': { 'src/old.ts': 'src/new/old.ts' } }) }, 'v0.9.0', ['src/old.ts', 'scripts/export/x.ps1']);
+  const userFrom = (files: Record<string, string>) => {
+    const user = tempDir();
+    put(user, files);
+    return user;
+  };
+  const run = (...a: string[]) => execFileSync(process.execPath, [path.join(PROJECT_ROOT, 'scripts', 'update.mjs'), ...a], { encoding: 'utf8', stdio: 'pipe' });
+  return { repo, run, userFrom, v7, v8 };
+}
+
+// 없으면 놓치는 실수: VERSION이 'v7'·'v8'인 옛 사용자 폴더가 새 tag v0.9.0을 최신으로 못 보거나 기준을 못 찾아 업데이트가 멈춘다.
+test('a v7 or v8 user folder updates to v0.9.0: the base is found from VERSION, v0.9.0 is the newest, its moves are followed', () => {
+  const { repo, run, userFrom, v7, v8 } = semverSetup();
+  for (const [files, base] of [[v7, 'v7'], [v8, 'v8']] as const) {
+    const user = userFrom(files);
+    const detect = run('detect', '--user', user, '--repo', repo);
+    assert.match(detect, /^최신: v0\.9\.0$/m);
+    assert.match(detect, new RegExp(`판별: ${base}\\(0\\.${base.slice(1)}\\.0\\) \\(VERSION 파일\\)`));
+    assert.match(detect, new RegExp(`^BASE=${base}$`, 'm'));
+    const plan = run('plan', '--user', user, '--repo', repo, '--base', base);
+    assert.match(plan, new RegExp(`^기준 ${base}\\(0\\.${base.slice(1)}\\.0\\) → 최신 v0\\.9\\.0$`, 'm'));
+    assert.match(plan, /새 자리로 옮김\(사용자가 안 고친 파일, 새 버전 내용으로\): 1개\n {2}- src\/new\/old\.ts \(옛 자리 src\/old\.ts\)/);
+    if (base === 'v8') assert.match(plan, /지움\(새 버전에서 없어졌고 사용자가 안 고침\): 1개\n {2}- scripts\/export\/x\.ps1/);
+    const work = /WORK=(.+)/.exec(run('backup', '--user', user))![1].trim();
+    run('apply', '--user', user, '--repo', repo, '--base', base, '--work', work);
+    assert.equal(fs.readFileSync(path.join(user, 'VERSION'), 'utf8'), 'v0.9.0\n');
+    assert.equal(fs.readFileSync(path.join(user, 'src', 'new', 'old.ts'), 'utf8'), 'old\n');
+    // Now on v0.9.0 (VERSION 'v0.9.0', or written as '0.9.0'): already the newest.
+    assert.match(run('detect', '--user', user, '--repo', repo), /^BASE=v0\.9\.0$/m);
+    assert.match(run('plan', '--user', user, '--repo', repo, '--base', '0.9.0'), /기준 v0\.9\.0 → 최신 v0\.9\.0\n이미 최신/);
+  }
+  // A file list naming an old version finds its tag the same way.
+  const listed = userFrom({ ...v8, VERSION: '' });
+  fs.rmSync(path.join(listed, 'VERSION'));
+  fs.writeFileSync(path.join(listed, LIST_FILE), JSON.stringify({ version: 'v8', files: {} }));
+  assert.match(run('detect', '--user', listed, '--repo', repo), /판별: v8\(0\.8\.0\) \(파일 목록 release-files\.json\)\nBASE=v8/);
 });
 
 test('line ends and a BOM do not count as a change, and come back in the user style', () => {
@@ -261,7 +348,7 @@ test('with the user’s file list a file the tag has otherwise is not taken for 
   // Without VERSION the list's version decides; the detect line counts what the user changed by hash.
   fs.rmSync(path.join(user, 'VERSION'));
   const detect = run('detect', '--user', user, '--repo', repo);
-  assert.match(detect, /판별: v7 \(파일 목록 release-files\.json\)/);
+  assert.match(detect, /판별: v7\(0\.7\.0\) \(파일 목록 release-files\.json\)/);
   assert.match(detect, /파일 목록\(release-files\.json\): v7, 목록 3개 중 사용자가 고친 것 0개, 지운 것 0개/);
   const plan = run('plan', '--user', user, '--repo', repo, '--base', 'v7');
   // a.txt: the new version's, not a question; gone.txt: deleted, not a question.

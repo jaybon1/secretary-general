@@ -1,6 +1,8 @@
 // @ts-check
 // 비서 업데이트 도우미(.agents/skills/update/SKILL.md, 공개하지 않은 v8 시험판은 skills/update/SKILL.md, v7은 .claude/skills/update/SKILL.md가 부른다). AI를 부르지 않고 git과 Node 기본 기능만 쓴다.
-// 사용자 폴더(zip을 풀어 쓰며 고쳤을 수 있는 비서 폴더)를 받은 저장소(git clone, tag v7, v8, …)의 최신 tag로 올린다(v7부터, 받았던 버전은 VERSION 파일로 안다).
+// 사용자 폴더(zip을 풀어 쓰며 고쳤을 수 있는 비서 폴더)를 받은 저장소(git clone, tag v7, v8, v0.9.0, …)의 최신 tag로 올린다(v7부터, 받았던 버전은 VERSION 파일로 안다).
+// 버전 번호: v8까지는 tag가 숫자 하나(vN)였고 0.N.0으로 읽는다(v8 = 0.8.0). 그 뒤는 0.x 세 자리(v0.9.0, semver: 끝자리 고침, 가운데 기능 추가,
+// 앞자리 사용자가 손봐야 하는 변경)이고, tag 순서는 git의 이름 정렬이 아니라 이 번호로 센다(parseVersion, sortTags).
 // 사용자가 고친 파일은 기준 tag(사용자가 받았던 버전)와 비교해 찾고, v8부터는 사용자 폴더의 배포판 파일 목록(release-files.json,
 // 받았던 판의 파일마다 내용 해시)으로도 본다: 해시가 그대로인 파일은 tag와 달라도 사용자가 안 고친 것이다. 새 버전도 고친 파일은 git merge-file로 합친 안을
 // 만들어 두기만 하고, 파일마다 유지(keep)·덮어쓰기(new)·섞기(merge)를 사용자에게 묻는다(깨끗이 합쳐져도 묻는다).
@@ -187,21 +189,80 @@ export function recommend(action, filePath, conflicts = 0) {
   return 'keep';
 }
 
+// ---- versions --------------------------------------------------------------------------
+
+/** @typedef {[number, number, number]} Version major, minor, patch */
+
+/**
+ * A version name (a tag, the VERSION file, a moves file key) as [major, minor, patch]: the first releases had one number
+ * (v1 … v8), read as 0.N.0, so v8 is 0.8.0 and v0.9.0 comes after it; later ones are vX.Y.Z. The leading v may be left
+ * out. null for anything else.
+ * @param {string | undefined} name
+ * @returns {Version | null}
+ */
+export function parseVersion(name) {
+  const s = (name ?? '').trim().replace(/^v/i, '');
+  const one = /^(\d+)$/.exec(s);
+  if (one) return [0, Number(one[1]), 0];
+  const three = /^(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  return three ? [Number(three[1]), Number(three[2]), Number(three[3])] : null;
+}
+
+/**
+ * Older first: negative when a comes before b, 0 for the same version (v8 and 0.8.0), positive after. A name that is not
+ * a version comes before every version.
+ * @param {string} a
+ * @param {string} b
+ */
+export function compareVersions(a, b) {
+  const [x, y] = [parseVersion(a), parseVersion(b)];
+  if (!x || !y) return (x ? 1 : 0) - (y ? 1 : 0);
+  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+}
+
+/**
+ * Version tags oldest first, by their numbers (git's v:refname puts v0.9.0 before v1); other names are left out.
+ * @param {string[]} names
+ */
+export function sortTags(names) {
+  return names.filter((n) => parseVersion(n)).sort((a, b) => compareVersions(a, b) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * The tag of the same version as `version` (a VERSION file's 'v8', '0.8.0' or 'v0.9.0'), or undefined.
+ * @param {string[]} tags
+ * @param {string | undefined} version
+ */
+export function findTag(tags, version) {
+  if (!version || !parseVersion(version)) return undefined;
+  return tags.find((t) => t === version) ?? tags.find((t) => parseVersion(t) && compareVersions(t, version) === 0);
+}
+
+/**
+ * How a version is shown to the user: an old one-number tag with its 0.x number, 'v8(0.8.0)'; a new one as it is.
+ * @param {string} tag
+ */
+export function versionLabel(tag) {
+  const v = parseVersion(tag);
+  return v && /^v?\d+$/i.test(tag.trim()) ? `${tag}(${v.join('.')})` : tag;
+}
+
 /**
  * Old path → path in the newest version, following every version after `base` up to `latest` in order.
- * moves: { "<tag>": { "<old path>": "<new path>" } } (the moves file of the newest version).
+ * moves: { "<tag>": { "<old path>": "<new path>" } } (the moves file of the newest version; a key names its version
+ * the way the tag does, and a key of the same version in the other spelling, "0.9.0" for tag v0.9.0, is taken too).
  * @param {Record<string, Record<string, string>> | undefined} moves
  * @param {string[]} tags
  * @param {string} base
  * @param {string} latest
  */
 export function movesBetween(moves, tags, base, latest) {
-  const from = tags.indexOf(base);
-  const to = tags.indexOf(latest);
+  const keys = Object.keys(moves ?? {}).filter((k) => parseVersion(k));
   /** @type {Map<string, string>} */
   const map = new Map();
-  for (const tag of tags.slice(from + 1, to + 1)) {
-    const step = moves?.[tag] ?? {};
+  for (const tag of sortTags(tags).filter((t) => compareVersions(t, base) > 0 && compareVersions(t, latest) <= 0)) {
+    const key = moves?.[tag] ? tag : keys.find((k) => compareVersions(k, tag) === 0);
+    const step = (key && moves?.[key]) || {};
     for (const [old, now] of map) if (step[now]) map.set(old, step[now]);
     for (const [old, now] of Object.entries(step)) if (!map.has(old)) map.set(old, now);
   }
@@ -219,9 +280,12 @@ function git(repo, args, input) {
   return execFileSync('git', ['-C', repo, ...args], { input, maxBuffer: 1 << 28, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
-/** @param {string} repo */
+/**
+ * The repository's version tags, oldest first (sortTags: v1 … v8, then v0.9.0, …).
+ * @param {string} repo
+ */
 export function listTags(repo) {
-  return git(repo, ['tag', '--list', 'v*', '--sort=v:refname']).toString().split('\n').map((s) => s.trim()).filter(Boolean);
+  return sortTags(git(repo, ['tag', '--list', 'v*']).toString().split('\n').map((s) => s.trim()).filter(Boolean));
 }
 
 /**
@@ -577,7 +641,7 @@ function cmdDetect(opts) {
   const { tags, latest } = load(o);
   const version = text(userRaw(o.user, 'VERSION'))?.trim();
   const list = readList(o.user);
-  console.log(`최신: ${latest}`);
+  console.log(`최신: ${versionLabel(latest)}`);
   console.log(`VERSION 파일: ${version ?? '(없음)'}`);
   if (list) {
     // What the user changed or removed among the files the installed version shipped (by hash, no git needed).
@@ -594,10 +658,12 @@ function cmdDetect(opts) {
     const some = (xs) => (xs.length ? ` (${xs.slice(0, 20).join(', ')}${xs.length > 20 ? ' 외' : ''})` : '');
     console.log(`파일 목록(${LIST_FILE}): ${list.version || '(버전 없음)'}, 목록 ${Object.keys(list.files).length}개 중 사용자가 고친 것 ${changed.length}개${some(changed)}, 지운 것 ${gone.length}개${some(gone)}`);
   } else console.log(`파일 목록(${LIST_FILE}): 없음 (v7은 tag 비교로만 찾는다)`);
-  // VERSION first, then the file list's version.
-  const known = version && tags.includes(version) ? { tag: version, by: 'VERSION 파일' } : list?.version && tags.includes(list.version) ? { tag: list.version, by: `파일 목록 ${LIST_FILE}` } : null;
+  // VERSION first, then the file list's version; matched by number, so 'v8' finds tag v8 and '0.9.0' finds v0.9.0.
+  const byVersion = findTag(tags, version);
+  const byList = findTag(tags, list?.version);
+  const known = byVersion ? { tag: byVersion, by: 'VERSION 파일' } : byList ? { tag: byList, by: `파일 목록 ${LIST_FILE}` } : null;
   if (known) {
-    console.log(`판별: ${known.tag} (${known.by})`);
+    console.log(`판별: ${versionLabel(known.tag)} (${known.by})`);
     console.log(`BASE=${known.tag}`);
     console.log('CLEAR=yes');
     return;
@@ -628,9 +694,11 @@ function readMoves(repo, latest) {
  */
 function makePlan(o) {
   const { tags, latest } = load(o);
-  if (!tags.includes(o.base)) throw new Error(`없는 tag예요: ${o.base} (있는 것: ${tags.join(', ')})`);
-  const [baseFiles, newFiles] = versionFiles(o.repo, [o.base, latest]);
-  const moves = movesBetween(readMoves(o.repo, latest), tags, o.base, latest);
+  // --base by number too: 'v8', '0.8.0' and 'v0.8.0' are tag v8.
+  const base = findTag(tags, o.base);
+  if (!base) throw new Error(`없는 tag예요: ${o.base} (있는 것: ${tags.join(', ')})`);
+  const [baseFiles, newFiles] = versionFiles(o.repo, [base, latest]);
+  const moves = movesBetween(readMoves(o.repo, latest), tags, base, latest);
   // The user's file list (v8 on): a file still matching its hash was not changed by the user, whatever the tag says.
   const listed = readList(o.user)?.files ?? {};
   /** @type {Item[]} */
@@ -663,7 +731,7 @@ function makePlan(o) {
     items.push({ path: p, action, base: b, user: u, theirs: t, ...(byList ? { byList } : {}) });
   }
   items.sort((a, b) => (a.path < b.path ? -1 : 1));
-  return { latest, items };
+  return { base, latest, items };
 }
 
 /** @type {Record<string, string>} */
@@ -693,7 +761,7 @@ function printPlan(latest, base, items) {
   /** @type {Record<string, number>} */
   const counts = {};
   for (const i of items) counts[i.action] = (counts[i.action] ?? 0) + 1;
-  console.log(`기준 ${base} → 최신 ${latest}`);
+  console.log(`기준 ${versionLabel(base)} → 최신 ${versionLabel(latest)}`);
   if (items.every((i) => i.action === 'same' || i.action === 'keep')) {
     console.log('이미 최신이에요(바꿀 파일 없음).');
     return;
@@ -713,8 +781,8 @@ function printPlan(latest, base, items) {
 /** @param {Options} opts */
 function cmdPlan(opts) {
   const o = need(opts, 'user', 'repo', 'base');
-  const { latest, items } = makePlan(o);
-  printPlan(latest, o.base, items);
+  const { base, latest, items } = makePlan(o);
+  printPlan(latest, base, items);
 }
 
 /** Choices a question can offer, by kind of item. */
@@ -728,8 +796,8 @@ const CHOICES = {
 function cmdApply(opts) {
   const o = need(opts, 'user', 'repo', 'base', 'work');
   if (!fs.existsSync(path.join(o.work, 'files'))) throw new Error(`백업 사본이 없어요. backup을 먼저 돌리세요: ${o.work}`);
-  const { latest, items } = makePlan(o);
-  printPlan(latest, o.base, items);
+  const { base, latest, items } = makePlan(o);
+  printPlan(latest, base, items);
   const pkgBefore = ['package.json', 'package-lock.json'].map((p) => text(userRaw(o.user, p)));
   /** @type {Result[]} */
   const results = [];
@@ -812,7 +880,7 @@ function cmdApply(opts) {
     folders: whole,
   };
   const links = { ...last, made: [...first.made, ...last.made], remade: [...first.remade, ...last.remade], removed: [...first.removed, ...last.removed], moved: [...first.moved, ...last.moved] };
-  const state = { base: o.base, latest, packageChanged: pkgBefore.some((x, k) => x !== pkgAfter[k]), installId, skills: { ...skillMove, links }, results };
+  const state = { base, latest, packageChanged: pkgBefore.some((x, k) => x !== pkgAfter[k]), installId, skills: { ...skillMove, links }, results };
   fs.writeFileSync(path.join(o.work, 'update.json'), JSON.stringify(state, null, 1));
   console.log('');
   console.log(`적용함: ${results.filter((r) => r.status === 'done').length}개`);

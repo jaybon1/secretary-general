@@ -118,13 +118,12 @@
     },
     {
       "id": "delegate",
-      "description": "일 맡기기: 작업 공간(공간 도구가 비서 폴더를 찾는 secretary.json), 백그라운드 업무 세션과 감시, run-job, 공급자 고르기, 공간 배포판",
+      "description": "일 맡기기: 작업 공간(공간 도구가 비서 폴더를 찾는 secretary.json), 백그라운드 업무 세션과 감시, run-job, 공급자 고르기",
       "core": true,
       "files": [
         "src/idle/run-job-launcher.ts",
         "src/mcp/delegate-tools.ts",
         "src/workspace/",
-        "scripts/export/",
         "scripts/lib/bg-job.ps1",
         "scripts/lib/memory-mcp.ps1",
         "scripts/lib/providers.json",
@@ -137,7 +136,6 @@
         ".agents/skills/delegate/",
         ".agents/skills/grill/",
         "test/providers.test.ts",
-        "test/scan-threats.test.ts",
         "test/secretary-link.test.ts",
         "test/common-skills.test.ts",
         "test/watch.test.ts",
@@ -221,7 +219,7 @@
     },
     {
       "id": "account-handoff",
-      "description": "두 번째 구독(계정 b): 사용률에 따라 계정 a에서 b로 일 넘기기, 계정 b 서버",
+      "description": "다중 구독: 사용률에 따라 계정 a에서 넘길 구독(b, c, …) 중 가장 여유 있는 것으로 일 넘기기(providers.json default가 auto면 run-job·업무 세션도 그 계정으로), 다른 계정으로 비서 서버",
       "enabled": false,
       "files": ["src/usage/handoff-level.ts", "test/usage.test.ts"],
       "checks": [],

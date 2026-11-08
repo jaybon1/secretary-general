@@ -330,6 +330,13 @@ test('feature providers turned on: the default provider needs its key file', asy
   assert.equal(status(await checkSetup(opts))['provider-key'], 'missing');
   write(path.join(opts.keysDir!, 'subscription-b.env'), 'CLAUDE_CONFIG_DIR=x');
   assert.equal(status(await checkSetup(opts))['provider-key'], 'ok');
+  // Without it: default "auto" (several subscriptions) was taken for a provider and asked for auto.env, or a third account's
+  // missing key file went unnoticed until auto picked it.
+  const subs = { subscription: { type: 'claude-subscription' }, 'subscription-b': { type: 'claude-subscription' }, 'subscription-c': { type: 'claude-subscription' }, k: { type: 'claude-api-key' } };
+  write(scriptPath('providers', root), JSON.stringify({ default: 'auto', providers: subs }));
+  assert.equal(status(await checkSetup(opts))['provider-key'], 'missing');
+  write(path.join(opts.keysDir!, 'subscription-c.env'), 'CLAUDE_CONFIG_DIR=y');
+  assert.equal(status(await checkSetup(opts))['provider-key'], 'ok');
 });
 test('processes found last time are offered to the probe, and a reused list that falls short is checked afresh', async () => {
   const { opts, root } = fixture();

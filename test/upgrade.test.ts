@@ -6,6 +6,8 @@ import { test } from 'node:test';
 import { planFromProfile, planProblems, type MovePlan } from '../src/upgrade/big-work-move.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { tempDir, testStore } from './helpers.ts';
+// @ts-expect-error plain .mjs script without types
+import { compareVersions } from '../scripts/update.mjs';
 
 // A v7 profile: the big works were a section of it (consolidate kept '큰 일 상태' there).
 const PROFILE = [
@@ -73,14 +75,14 @@ test('big-work move over the CLI: preview writes a plan without touching data, -
   assert.throws(() => cli('--apply'), /v1에서 만들었는데 지금은 v2/);
 });
 
-test('every file a v7 copy has but v8 does not is followed by the moves file', () => {
+test('every file a v7 copy has but v8 does not is followed by the moves file, except the ones v8 left out', () => {
   // v7's tracked files outside what v8 keeps in place (tools/, the top files and test/ stay). v7's skills were real
   // folders in .claude/skills/; v8 keeps them in .agents/skills/ (.claude/skills is one link an install makes).
   const v7Moved = [
     '.claude/skills/consolidate/SKILL.md', '.claude/skills/delegate/SKILL.md', '.claude/skills/grill/SKILL.md', '.claude/skills/handoff/SKILL.md', '.claude/skills/update/SKILL.md',
-    'scripts/backup-db.ps1', 'scripts/claude-env.ps1', 'scripts/ego-grab.mjs', 'scripts/export-workspace.ps1', 'scripts/install-autostart.ps1',
+    'scripts/backup-db.ps1', 'scripts/claude-env.ps1', 'scripts/ego-grab.mjs', 'scripts/install-autostart.ps1',
     'scripts/install-usage-guard.mjs', 'scripts/notify.ps1', 'scripts/open-chrome.ps1', 'scripts/providers.json', 'scripts/providers.ps1',
-    'scripts/remote-server.ps1', 'scripts/run-job-stats.ps1', 'scripts/run-job.ps1', 'scripts/scan-threats.mjs', 'scripts/server-control.ps1',
+    'scripts/remote-server.ps1', 'scripts/run-job-stats.ps1', 'scripts/run-job.ps1', 'scripts/server-control.ps1',
     'scripts/start-worker.ps1', 'scripts/trust-folder.mjs', 'scripts/usage-file.mjs', 'scripts/usage-guard.mjs', 'scripts/usage-statusline.mjs',
     'scripts/usage.ps1', 'scripts/watch-embedder.mjs', 'scripts/watch-worker.ps1', 'scripts/worker-done.ps1', 'scripts/worker-guard.mjs',
     'scripts/worker-logs.ps1', 'src/board.ts', 'src/config.ts', 'src/context-size.ts', 'src/context.ts', 'src/continuity.ts', 'src/db.ts',
@@ -90,9 +92,14 @@ test('every file a v7 copy has but v8 does not is followed by the moves file', (
   const all = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'update-moves.json'), 'utf8')) as Record<string, Record<string, string>>;
   const moves = all.v8;
   assert.deepEqual(Object.keys(moves).sort(), [...v7Moved].sort());
-  // 없으면 놓치는 실수: 이 배포판 VERSION보다 뒤 버전 칸(예: v8인데 v9 칸)에 적은 옮김은 받은 저장소에 그 tag가 없어 쓰이지 않아, v7에서 올릴 때 사용자가 고친 스킬이 '지울지 물을 것'이 된다.
-  const version = Number(fs.readFileSync(path.join(PROJECT_ROOT, 'VERSION'), 'utf8').trim().replace(/^v/, ''));
-  for (const k of Object.keys(all).filter((x) => x !== 'about')) assert.ok(/^v\d+$/.test(k) && Number(k.slice(1)) <= version, `update-moves.json의 ${k} 칸이 이 배포판(v${version})보다 뒤`);
+  // v8에서 뺀 기능(작업 공간 zip 묶기)의 v7 파일 두 개는 옮김에 적지 않는다: 적으면 새 자리가 v8에 없는데도 업데이트가 옛 파일을
+  // 새 자리로 옮겨 뺀 기능이 되살아난다(classifyMoved). 옮김에 없으면 안 고친 것은 지우고 고친 것만 지울지 묻는다(classify).
+  // 아래 "새 자리가 있어야 한다" 확인이 그 실수를 잡는다.
+  // 없으면 놓치는 실수: 이 배포판 VERSION보다 뒤 버전 칸(예: v0.9.0인데 v0.10.0 칸)에 적은 옮김은 받은 저장소에 그 tag가 없어 쓰이지 않아, 올릴 때 사용자가 고친 파일이 '지울지 물을 것'이 된다.
+  // 칸 이름은 tag 그대로: v8까지는 숫자 하나(0.N.0으로 읽음), 그 뒤는 v0.X.Y(scripts/update.mjs parseVersion).
+  const version = fs.readFileSync(path.join(PROJECT_ROOT, 'VERSION'), 'utf8').trim();
+  assert.match(version, /^v\d+\.\d+\.\d+$/, 'VERSION은 v0.X.Y 꼴(새 tag 이름과 같게)');
+  for (const k of Object.keys(all).filter((x) => x !== 'about')) assert.ok((/^v\d+$/.test(k) || /^v\d+\.\d+\.\d+$/.test(k)) && compareVersions(k, version) <= 0, `update-moves.json의 ${k} 칸이 이 배포판(${version})보다 뒤이거나 tag 이름 꼴이 아님`);
   assert.ok(Object.entries(moves).filter(([from]) => from.startsWith('.claude/skills/')).every(([from, to]) => to === `.agents/skills/${from.slice('.claude/skills/'.length)}`));
   const real = (p: string) => fs.realpathSync(p).toLowerCase();
   for (const [from, to] of Object.entries(moves)) {

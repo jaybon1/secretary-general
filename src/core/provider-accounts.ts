@@ -1,7 +1,7 @@
 /**
  * The TypeScript side of scripts/lib/providers.ps1: which Claude accounts this PC has. Providers are listed in
- * scripts/lib/providers.json; a second subscription keeps CLAUDE_CONFIG_DIR=<its config folder> in the keys
- * folder's <provider>.env (account b: ~/.claude-b).
+ * scripts/lib/providers.json; each subscription after the first keeps CLAUDE_CONFIG_DIR=<its config folder> in the keys
+ * folder's <provider>.env (account b: ~/.claude-b, account c: ~/.claude-c).
  */
 import fs from 'node:fs';
 import os from 'node:os';

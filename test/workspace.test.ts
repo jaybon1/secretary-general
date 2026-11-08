@@ -91,6 +91,10 @@ test('a non-quick workspace keeps what it learns in skills, MEMORY.md and pendin
   // Skills go in .agents/skills (its .claude/skills link is made when the secretary writes secretary.json), listed by the CLI, not in AGENTS.md.
   assert.ok(fs.lstatSync(path.join(ws.folder, '.claude', 'skills')).isSymbolicLink());
   assert.match(fs.readFileSync(path.join(ws.folder, '.gitignore'), 'utf8'), /^\/\.claude\/skills$/m);
+  // 없으면 놓치는 실수: 새 공간의 기록(git)에 큰 영상·소리 파일이 들어가 공간 폴더와 백업이 커진다.
+  const ignore = fs.readFileSync(path.join(ws.folder, '.gitignore'), 'utf8');
+  for (const ext of ['mp4', 'mov', 'mkv', 'webm', 'wav', 'mp3', 'm4a', 'flac', 'aac']) assert.match(ignore, new RegExp(`^\\*\\.${ext}$`, 'm'), ext);
+  assert.match(ignore, /^# 큰 영상·소리 파일:[^\n]*백업/m);
   const memory = fs.readFileSync(path.join(ws.folder, 'MEMORY.md'), 'utf8');
   assert.match(memory, /^# 인스타 계정 사실 메모[\s\S]*"~이다"[\s\S]*2,000자/);
 

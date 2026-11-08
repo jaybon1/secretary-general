@@ -1,9 +1,9 @@
-# secretary — 장기 기억 개인 비서 (범용 배포판 v8)
+# secretary — 장기 기억 개인 비서 (범용 배포판 v0.9.0)
 
 Claude Code를 비서 본체로 쓰고, 기억은 이 폴더의 SQLite 파일 하나(`secretary.db`)에 둔다. Claude 구독 하나만 있으면 된다.
 원칙: **저장은 무제한, 읽기는 예산제.** 기억이 몇 년 치 쌓여도 한 턴에 컨텍스트로 들어가는 양은 고정된다.
 
-버전마다 바뀐 것은 [`CHANGES.md`](CHANGES.md)에 있다. 지금 버전은 폴더 맨 위 `VERSION` 파일이고, 이 버전이 넣은 파일과 내용 해시는 `release-files.json`에 있다(배포판을 만들 때 생긴다. 업데이트·테스트·설치 점검이 사용자가 고치거나 만든 파일을 가리는 데 쓰니 고치지 않는다).
+버전마다 바뀐 것은 [`CHANGES.md`](CHANGES.md)에 있다. 지금 버전은 폴더 맨 위 `VERSION` 파일이고(v0.9.0부터 0.x 세 자리: 끝자리 고침, 가운데 기능 추가, 앞자리 사용자가 손봐야 하는 변경. 그 전의 v1~v8은 0.1.0~0.8.0으로 본다), 이 버전이 넣은 파일과 내용 해시는 `release-files.json`에 있다(배포판을 만들 때 생긴다. 업데이트·테스트·설치 점검이 사용자가 고치거나 만든 파일을 가리는 데 쓰니 고치지 않는다).
 
 ## 설치 (처음 쓰는 사람)
 
@@ -55,12 +55,12 @@ Claude Code를 비서 본체로 쓰고, 기억은 이 폴더의 SQLite 파일 �
 | 일정 (`calendar`) | 꺼짐 | 날짜가 있는 일을 Google Calendar에 바로 기록(claude.ai 커넥터) |
 | 메모 볼트 (`notes`) | 꺼짐 | 말한 내용을 비서 폴더 옆 `notes`에 옵시디언 노트로 정리 |
 | 받은 파일 (`inbox`) | 꺼짐 | 비서에게 넘기는 파일을 두는 비서 폴더 옆 `inbox` |
-| 네트워크 공유 (`network-share`) (실행 확인 안 됨) | 꺼짐 | 다른 PC에서 비서 상위 폴더를 읽기 전용으로 보기(`notes`·`inbox`만 쓰기) |
-| 두 번째 구독 (`account-handoff`) | 꺼짐 | 구독이 둘이면 사용률에 따라 일을 두 번째 계정으로 자동으로 넘김 |
+| 네트워크 공유 (`network-share`) | 꺼짐 | 다른 PC에서 비서 상위 폴더를 읽기 전용으로 보기(`notes`·`inbox`만 쓰기) |
+| 다중 구독 (`account-handoff`) | 꺼짐 | 구독이 둘 이상이면 사용률에 따라 일을 가장 여유 있는 다른 계정으로 자동으로 넘김 |
 | 구독 밖 공급자 (`providers`) | 꺼짐 | 업무 세션·run-job을 API 키, Bedrock, 게이트웨이, 다른 회사 CLI로 |
 | 실수 막기 장치 (`guards`) | 켜짐 | 영어로 샌 답·빠진 끝맺음 줄을 되돌려 고쳐 쓰게 하고, 폴더 위치 막기·되풀이 알림·위임 앞뒤 대조·실수 기록 |
 | 대시보드 (`dashboard`) | 꺼짐 | 한도·돌고 있는 일·업무 칸반을 보는 웹 화면, 결과물 폴더를 폰 브라우저로 읽기 전용으로 보기 |
-| 끝 알림 (`notify`) (실행 확인 안 됨) | 꺼짐 | 답이 끝날 때마다 첫 줄을 이 PC의 ntfy 서버로 보내 폰 앱(원하면 PC 브라우저 웹 푸시)에 띄우기 |
+| 끝 알림 (`notify`) | 꺼짐 | 답이 끝날 때마다 첫 줄을 이 PC의 ntfy 서버로 보내 폰 앱(원하면 PC 브라우저 웹 푸시)에 띄우기 |
 
 꺼진 기능은 파일은 있지만 설치 점검·알림·예약 작업을 건너뛰고 규칙도 없어 비서가 쓰지 않는다. 켜고 끈 것은 사용자 수정으로 남아, 업데이트 때 지켜진다.
 
@@ -79,7 +79,6 @@ Claude Code를 비서 본체로 쓰고, 기억은 이 폴더의 SQLite 파일 �
 - **대화 지우기** — `비서 대화 삭제 2턴`(최근 두 턴), `비서 대화 삭제 #120`, `비서 대화 삭제 #120-#135`처럼 그 글만 보내면, 지울 대화를 낱말 첫 글자로만 보여 주고 승인 코드를 준다. 30분 안에 그 코드만 보내면 AI를 거치지 않고 지우고, 그 대화에서 나온 기억도 무효로 한다. 지운 대화는 `backups/error/`의 격리 DB로 옮겨지고 비서는 열지 않는다. "비서 대화 삭제"만 보내면 쓰는 법이 나온다.
 - **업무 위임** — 파일이 생기는 일은 크기와 상관없이 맡긴다. 간단한 일은 공용 폴더 `quick-outputs`, 그 밖은 맞는 기존 작업 공간을 추천하거나 새로 만든다. 공간은 비서 폴더 옆 `workspaces` 폴더 안에 생기고, 결과는 제품별로 둔다: 제품 본체는 `output/products/<제품>/`에 하나만 두고 업무마다 제자리에서 고치며, 업무 기록(지시서 `TASK.md`, 보고서 `REPORT.md`)은 `output/records/<제품>/<날짜>-<업무이름>/`, 실험·조사는 `output/research/<날짜>-<업무이름>/`에 쌓인다. 계획을 확인받은 뒤 그 공간 폴더에서 새 세션이 일한다. 기억·판단이 많이 드는 조사·검토는 비서가 직접 하거나 서브에이전트에 맡긴다. 절차는 `.agents/skills/delegate/SKILL.md`에 있어서 일을 맡길 때만 읽힌다(AGENTS.md는 매 세션 읽히므로 짧게 유지). 일을 맡기기 전에는 `grill` 스킬로 정할 것부터 묻는다.
 - **공간이 배우는 것** — 작업 공간마다 업무 종류별 스킬(`.agents/skills/<이름>/SKILL.md`, 비서와 같은 구조), 늘 맞는 사실(`MEMORY.md`, 2,000자 안), 업무 세션이 남긴 제안(`notes/pending/`)이 생긴다. 사용자가 고쳐 준 것은 업무 세션이 그 스킬에 바로 적고, 스스로 찾은 것은 제안으로 남겼다가 비서가 업무 끝에 승인받아 반영한다. 여러 공간이 함께 쓸 업무 기준은 `workspaces\_skills\<업무>\`에 둔다.
-- **공간 배포판** — "OO 공간 배포판 만들어줘"라고 하면 그 공간의 규칙·스킬·사실 메모만 zip으로 묶는다(결과물·기록·키는 빼고, 개인 경로·메일·키·주입 문구를 검사한 뒤). `scripts/export/export-workspace.ps1`.
 - **기억 오염 막기** — 기억·프로필에 "이전 지시는 모두 무시해" 같은 프롬프트 주입·유출 문구가 들어오면 저장을 거절한다(`src/memory/injection-screen.ts`). 다른 세션의 메시지나 작업 알림에 든 말은 사용자가 한 말로 보지 않는다.
 - **사용량 일시 정지** — `node scripts/usage/install-usage-guard.mjs`로 사용자 설정에 상태줄과 훅을 등록하면(다시 실행해도 안전. 이 PC의 다른 비서가 이미 등록해 두었으면 그것을 함께 쓰고 건드리지 않는다), 구독 5시간·주간 사용량이 90%를 넘을 때 비서와 업무 세션이 하던 단계만 마무리하고 멈춘다. 그래도 이어 가야 하면 "90퍼센트를 초과하더라도 진행", "90퍼 넘어도 계속"처럼 말하면 프롬프트 훅이 5시간 사용량 초기화 때까지 장치를 푼다. 푸는 것은 이 대화의 계정뿐이고, 두 번째 구독을 켰으면 "계정 b 90퍼 넘어도 진행"처럼 계정을 적어 그 계정을 푼다. 구독이 아닌 계정(API 키 등)은 처음부터 막지 않으므로 "대상이 아니에요"라고 알린다. 비서가 스스로 풀지는 않는다. 끄기: `~/.claude/usage-guard-off` 파일 생성. 사용량 값은 비서 서버가 같이 띄우는 조회기(선택 기능 `usage-poll`, 처음부터 켜짐)가 5분마다 토큰 없이 새로 읽는다.
 - **기억 DB 매일 백업 (Windows)** — 처음 쓸 때 비서가 한 번 묻는다. 켜면 예약 작업 'Secretary DB Backup (번호)'이 매일 22:30(`-At`으로 바꿈, 그 시각에 PC가 꺼져 있었으면 다음에 켤 때) 이 폴더의 `backups/`에 `secretary-<날짜-시각>.db`를 만들고 14일이 지난 백업은 지운다. 이 PC 밖으로는 보내지 않고 토큰도 들지 않는다. 켜기: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tasks\install-tasks.ps1 -Task backup`, 끄기: 이 폴더에서 `Unregister-ScheduledTask -TaskName "Secretary DB Backup ($(Get-Content .secretary-id))" -Confirm:$false`(만든 백업은 남는다).
@@ -142,7 +141,7 @@ Claude Code ─────┼─ UserPromptSubmit 훅 ─→ 관련 기억 자�
 
 | 파일 | 하는 일 |
 |---|---|
-| `update.mjs` | 업데이트 도우미(`update` 스킬이 받은 최신판에서 부른다). 폴더 사본 백업, 받았던 버전 판별(`VERSION`, 없으면 파일 목록 `release-files.json`. v7부터 올린다), 사용자가 고친 파일 찾기(받았던 버전 tag와 비교, 파일 목록이 있으면 그 해시로도), 옮겨진 파일 따라가기, `git merge-file` 3방향 합친 안 만들기. 둘 다 고친 파일은 사용자 파일을 그대로 두고 유지·덮어쓰기·섞기 후보를 `backups/update-<날짜>/`에 둔다(`resolve`로 정함, `--rest`면 남은 것을 추천대로). 기억 DB·모델·`node_modules`·`*.local.*`·`backups`는 건드리지 않는다 |
+| `update.mjs` | 업데이트 도우미(`update` 스킬이 받은 최신판에서 부른다). 폴더 사본 백업, 받았던 버전 판별(`VERSION`, 없으면 파일 목록 `release-files.json`. v7부터 올린다. tag는 번호로 줄 세우고 옛 v1~v8은 0.1.0~0.8.0으로 본다), 사용자가 고친 파일 찾기(받았던 버전 tag와 비교, 파일 목록이 있으면 그 해시로도), 옮겨진 파일 따라가기, `git merge-file` 3방향 합친 안 만들기. 둘 다 고친 파일은 사용자 파일을 그대로 두고 유지·덮어쓰기·섞기 후보를 `backups/update-<날짜>/`에 둔다(`resolve`로 정함, `--rest`면 남은 것을 추천대로). 기억 DB·모델·`node_modules`·`*.local.*`·`backups`는 건드리지 않는다 |
 | `update-moves.json` | 버전마다 옮겨진 파일(옛 자리 → 새 자리). `update.mjs`가 읽는다 |
 | `lib/common.ps1` | 다른 스크립트가 dot-source 하는 공용 함수 (비서 폴더 위치, 앱 환경변수 정리, 로그인 확인, `~/.secretary`·비서 기록 폴더(`state/<번호>`)·사용량 폴더, 한국시간·UTF-8 쓰기, 캐시 기준 55분, 세션 이어 쓰기 기준 55분·20만 토큰) |
 | `lib/providers.ps1`, `lib/providers.json` | 공급자를 골라 환경을 넣는 공용 함수와 공급자 목록(처음엔 이 PC의 구독 `subscription` 하나, 다른 공급자는 기능을 켤 때 넣는다) |
@@ -164,7 +163,6 @@ Claude Code ─────┼─ UserPromptSubmit 훅 ─→ 관련 기억 자�
 | `run-job/wait-job.ps1`, `run-job/run-job-stats.ps1`, `run-job/run-job-other.ps1` | `-Detach`로 띄운 일 55분씩 기다리기, 호출 기록 요약, 다른 회사 CLI 실행(기능 `providers`) |
 | `usage/usage-query.ps1` | 구독 사용량을 토큰 없이 조회(`claude -p "/usage"`, 5시간·주간)해 `~/.claude/usage/subscription-<계정>.json`(계정은 그 공급자 로그인의 메일 @ 앞, 공급자가 달라도 계정이 같으면 같은 파일, 계정이 없는 공급자는 `<공급자>.json`)에 저장. 사용량 조회기(기능 `usage-poll`, `node src/cli.ts usage-poll`, 비서 서버가 같이 띄움)가 5분마다 부르고, 정지 훅은 기록이 5분 넘게 오래되면 예비로 뒤에서 띄운다. 사용량을 못 읽으면(API 키 로그인처럼 `/usage`가 사용량을 주지 않을 때, claude가 없을 때) `<같은 이름>.fail`에 잇따른 실패 횟수를 적고, 조회기·정지 훅은 다음 조회를 5분부터 두 배씩 최대 6시간 미룬다(읽히면 지운다). |
 | `usage/install-usage-guard.mjs`, `usage/usage-guard.mjs`, `usage/usage-statusline.mjs`, `usage/usage-file.mjs` | 사용량 일시 정지 장치를 사용자 설정에 등록, 정지 PreToolUse 훅, 상태줄 프로그램, 사용량 기록 파일 위치 |
-| `export/export-workspace.ps1`, `export/scan-threats.mjs` | 작업 공간의 넘길 것만 복사해 zip으로 묶기(개인 경로·메일·키·주입 문구가 걸리면 묶지 않고 걸린 줄을 보여 줌), 그 검사 |
 | `browser/ego-grab.mjs`, `browser/open-chrome.ps1` | (Ego Lite가 있을 때) 연 웹 페이지 본문을 근거 txt로 저장, 브라우저 작업용 크롬 프로필 창을 이름으로 열기 |
 | `semantic/watch-embedder.mjs` | 의미 검색 도우미가 살아났는지 AI 없이 지켜보다가 살아나면 끝나며 비서를 깨운다. `--retry`는 멈춘 것을 한 번 더 시도한다 |
 
@@ -183,7 +181,7 @@ Claude Code ─────┼─ UserPromptSubmit 훅 ─→ 관련 기억 자�
 | `hooks/` | 훅: 훅 실행(`run-hook.ts`), 세션 시작 글, 질문마다 붙는 알림 목록(`prompt-notices.ts`)과 기억 주입·보낸 쪽 구분·문맥 크기 알림 |
 | `board/` | 상황판, 새 세션에 주는 글, 세션 넘기기, 남은 질문 |
 | `idle/` | 쉬는 시간 작업, 뒤에서 도는 일 기록, run-job 부르기 |
-| `usage/` | 사용량 파일, 사용량 조회기와 조회할 공급자 고르기(기능 `usage-poll`, `scripts/usage.local.json`), 두 번째 구독으로 넘기는 단계(기능 `account-handoff`), "90% 넘어도 진행" 풀기 |
+| `usage/` | 사용량 파일, 사용량 조회기와 조회할 공급자 고르기(기능 `usage-poll`, `scripts/usage.local.json`), 넘길 구독 고르기와 넘기는 단계(기능 `account-handoff`), "90% 넘어도 진행" 풀기 |
 | `workspace/` | 작업 공간 폴더·규칙 글, 돌고 있는 업무의 감시 확인 |
 | `setup/` | 설치 점검(`install-check.ts`, 항목 `check-items.ts`, Windows 조회), 기능 목록(`features.ts`), 한 PC의 다른 비서 설정 가리기(`other-copy.ts`), 배포판 파일 목록 `release-files.json` 읽기(`release-files.ts`), 스킬 연결(`skill-links.ts`) |
 | `upgrade/` | 버전을 올릴 때 한 번 하는 옮기기(v7에서: 프로필의 큰 일 칸 → 큰 일 판, `node src/cli.ts big-work-from-profile`) |
@@ -213,23 +211,18 @@ node src/cli.ts backup      # backups/ 에 스냅샷 (VACUUM INTO)
 | `SECRETARY_TZ` | `Asia/Seoul` | 시각을 보여 줄 시간대 (저장은 항상 UTC) |
 | `SECRETARY_EMBED` | (켜짐) | `off`면 의미 검색을 끄고 단어 검색만 쓴다 |
 | `SECRETARY_SETUP_CHECK` | (켜짐) | `off`면 세션 시작 설치 점검과 질문마다의 알림을 끈다 |
-| `SECRETARY_EMBED_IDLE_MIN` | 60 | 비서 서버 없이 켜진 의미 검색 도우미가 요청 없이 기다리다 꺼지는 시간(분) |
+| `SECRETARY_EMBED_IDLE_MIN` | 60 | 비서 서버가 꺼져 있을 때 켜진 의미 검색 도우미가 요청 없이 기다리다 꺼지는 시간(분). 비서 서버가 떠 있으면 도우미는 서버와 함께 계속 떠 있다가 서버가 꺼지면 따라 꺼진다(이 값은 쓰이지 않는다) |
 | `SECRETARY_EMBED_MODEL_DIR` | `./models` | 임베딩 모델 파일을 받아 두고 찾는 폴더 |
 | `SECRETARY_EMBED_MODEL_REPO` | `jaybon1840/BGE-m3-ko-onnx` | 모델 파일이 없거나 깨졌을 때 다시 받는 허깅페이스 저장소 |
 
 ## 옛 버전에서 갈아타기
 
-기억(`secretary.db`), 검색 모델, 작업 공간은 그대로 이어 쓴다. 버전마다 바뀐 것과 올린 뒤 할 일은 [`CHANGES.md`](CHANGES.md)에 있다(v7에서 v8로 올리면 예약 작업을 번호 붙은 새 이름으로 다시 등록, 사용량 정지 장치 다시 등록, `SECRETARY_<번호>_DIR` 등록, 큰 일 판 옮기기, 스킬 자리 확인이 있다. 스킬은 업데이트가 `.claude/skills/`에서 `.agents/skills/`로 옮기고 `.claude/skills`를 그리로 가는 연결로 만든다).
+기억(`secretary.db`), 검색 모델, 작업 공간은 그대로 이어 쓴다. 버전마다 바뀐 것과 올린 뒤 할 일은 [`CHANGES.md`](CHANGES.md)에 있다(v8에서 v0.9.0으로 올리면 다중 구독(넘길 구독 여럿), 지시서 대조가 공간 스킬 규칙·관련 높은 기억 위 10개를 보여 줌, 질문 기호 세기 고침, 새 작업 공간 `.gitignore`의 큰 영상·소리 파일 줄이 들어오고 작업 공간 zip 묶기는 빠진다. 올린 뒤 할 일은 영상·소리를 다루는 기존 공간의 `.gitignore`에 같은 줄을 넣을지 묻는 것 하나다. v7에서 v8로 올리면 예약 작업을 번호 붙은 새 이름으로 다시 등록, 사용량 정지 장치 다시 등록, `SECRETARY_<번호>_DIR` 등록, 큰 일 판 옮기기, 스킬 자리 확인이 있다. 스킬은 업데이트가 `.claude/skills/`에서 `.agents/skills/`로 옮기고 `.claude/skills`를 그리로 가는 연결로 만든다).
 
-- **v7 이상:** 비서에게 "업데이트 확인해 줘"라고 한다(업데이트는 v7부터 올린다). 비서가 백업하고 최신판을 받아 사용자가 고친 파일을 지키며 얹고, 둘 다 고친 파일은 파일마다 묻고, `CHANGES.md`의 "올린 뒤 할 일"을 함께 한다.
+- **v7 이상:** 비서에게 "업데이트 확인해 줘"라고 한다(업데이트는 v7부터 올린다. v7·v8에서 v0.9.0으로 바로 올라간다). 비서가 백업하고 최신판을 받아 사용자가 고친 파일을 지키며 얹고, 둘 다 고친 파일은 파일마다 묻고, `CHANGES.md`의 "올린 뒤 할 일"을 함께 한다.
 - **최신판 받기가 막히면:** Claude Code 자동 모드에서는 비서의 저장소 받기(`git clone`)가 막힐 수 있다(v7의 업데이트에서 실제로 막혔다). 같은 명령을 다시 시키지 말고 PowerShell 창에서 직접 `git clone https://github.com/jaybon1/secretary-general "$env:TEMP\secretary-update"`로 받은 뒤(이미 있는 폴더면 이름 끝을 바꾼다), 비서에게 받은 폴더의 실제 경로와 함께 "최신판을 이 폴더에 받아 뒀어. 그걸로 업데이트해 줘"라고 한다.
 - **손으로 바꾸기(고친 곳이 없을 때만):** 비서 세션과 비서 서버를 모두 끄고(자동 시작을 쓰면 작업 스케줄러에서 'Secretary Remote Control'로 시작하는 작업을 **사용 안 함**으로 두고 PC를 다시 켠다), `secretary.db`와 `backups/`를 안전한 곳에 한 부 복사한 뒤, 옛 폴더에서 `secretary.db`·`backups/`·`node_modules/`·`models/`만 남기고 나머지를 새 zip의 파일로 바꾼다. 그 폴더에서 `npm install`과 `node src/cli.ts skill-links`(스킬 연결, 옛 버전의 `.claude/skills/`에 사용자가 고치거나 만든 스킬이 있었으면 먼저 `skills/`로 옮긴다) 뒤 `CHANGES.md`의 "올린 뒤 할 일"을 한다. 고친 파일은 새 파일로 덮이므로 고친 곳은 직접 다시 넣는다.
 
 ## 개인 데이터
 
 `secretary.db`(기억·대화 원문)와 `backups/`는 이 PC에만 둔다. 이 폴더를 남에게 줄 때는 이 두 가지와 이 비서의 고유 번호 파일 `.secretary-id`를 빼고 준다(`.gitignore`에 들어 있다. 번호 파일을 함께 주면 받은 쪽 비서가 같은 번호가 되어, 한 PC에 둘 다 있을 때 이 비서의 옛 사본으로 보인다).
-
-## 다음 단계 후보
-
-- 기억이 수만 개로 늘어 의미 검색이 느려지면 sqlite-vec로 벡터 검색 옮기기
-- 확률 판단 재정렬기 (`Reranker` 구현 하나 추가)

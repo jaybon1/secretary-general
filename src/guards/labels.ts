@@ -2,10 +2,10 @@
  * Question labels per session (feature 'guards'): the next free label is counted here so the secretary never has to.
  * A new session (or /clear, which starts one) begins after the open questions it carried over, relabelled A, B, …
  * (board/open-questions.ts carryOverQuestions); a compaction keeps the session, so labels go on where they were. The
- * Stop hook reads the "X. …?" lines (also "X(note). …?") and the "남은 질문:" line of each turn's text; the prompt hook
- * says the next label, after every label the session used.
+ * Stop hook reads the "X. …?" question lines (also "X(note). …?") of each turn's text; the prompt hook says the next
+ * label, after every label the session asked with.
  */
-import { labelAt, labelIndex, parseQuestions, parseRemaining } from '../board/open-questions.ts';
+import { labelAt, labelIndex, parseQuestions } from '../board/open-questions.ts';
 import type { Store } from '../store/store.ts';
 
 export const LABELS_PREFIX = 'question_labels:';
@@ -29,11 +29,12 @@ export function startLabelsAfter(store: Store, sessionId: string, count: number)
 }
 
 /**
- * Every label a turn's text used: the questions it asked ("X. …?", "X(note). …?") and the labels on its "남은 질문:" line
- * (a label left open was used, even when this answer asks nothing new).
+ * Every label a turn's text asked a question with: the question lines ("X. …?", "X(note). …?", a carried one shown again as
+ * "A(옛 G, #4508). …?"). The "남은 질문:" line is not read here: its labels were asked on question lines before (or carried
+ * over, startLabelsAfter), and words on it ("F(새PC 단계)") once moved the next label far past them.
  */
 export function usedLabels(text: string): string[] {
-  return [...new Set([...Object.keys(parseQuestions(text)), ...(parseRemaining(text) ?? [])])];
+  return Object.keys(parseQuestions(text));
 }
 
 /** Stop hook: the labels a turn used move the next one past them (never back). */

@@ -28,6 +28,11 @@ test('parses labeled questions with options and the remaining line', () => {
   assert.match(q.AE, /^AE\. 직전 대화를 얼마나 넣을까요\? 1\) 3번 \(추천\) 2\) 5번$/);
   assert.deepEqual(parseRemaining(text), ['AE', 'Y', 'Z']);
   assert.deepEqual(parseRemaining('남은 질문: 없음'), []);
+  // 없으면 놓치는 실수: 뜻 속 대문자("새PC", "UAC")를 남은 질문 기호로 읽어, 없는 질문 PC·UAC가 열린 채 다음 세션으로 넘어간다.
+  assert.deepEqual(parseRemaining('남은 질문: F(새PC UAC 단계), AB(알림 시각 (KST)), C\n'), ['F', 'AB', 'C']);
+  assert.deepEqual(parseRemaining('남은 질문: A(옛 G, #4508), B(새 PC 설정)'), ['A', 'B']);
+  // Only the front of each item: a capital word later in an item is not a label.
+  assert.deepEqual(parseRemaining('남은 질문: D 급하지 않음 PC 켜면'), ['D']);
   assert.equal(parseRemaining('질문 없음'), null);
 });
 

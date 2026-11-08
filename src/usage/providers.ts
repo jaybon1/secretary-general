@@ -4,7 +4,8 @@
  *   "usage": "claude-usage"   a Claude subscription: `claude -p "/usage"` (no model call, no tokens)
  *   "usage": "agy"            Antigravity CLI: `agy -p=/usage` (no tokens)
  *   "usage": "none" or none   no way to read it (shown as 조회 안 됨)
- *   "label": "…"              optional display name; without it subscription is 계정 a, subscription-b 계정 b, else the name
+ *   "label": "…"              optional display name; without it subscription is 계정 a, subscription-b 계정 b (any
+ *                             subscription-<one or two letters/digits>: 계정 <them>, e.g. subscription-c 계정 c), else the name
  * scripts/usage/usage-query.ps1 does the reading and writes ~/.claude/usage/subscription-<account>.json (usage/files.ts); the dashboard (feature
  * 'dashboard') runs it for the providers checked in its settings.
  */
@@ -39,10 +40,15 @@ interface RawProvider {
   label?: unknown;
 }
 
-/** The name people see: the provider's label, else 계정 a / 계정 b for the two subscriptions, else its name. */
+/**
+ * The name people see: the provider's label, else 계정 a for subscription and 계정 <id> for subscription-<id> (b, c, b2:
+ * a letter, then at most one more letter or digit; the "계정 c 90퍼 넘어도 진행" phrase names it so), else its name.
+ */
 export function providerLabel(name?: string | null, label?: unknown): string {
   if (typeof label === 'string' && label.trim()) return label.trim();
-  return !name || name === 'subscription' ? '계정 a' : name === 'subscription-b' ? '계정 b' : name;
+  if (!name || name === 'subscription') return '계정 a';
+  const id = /^subscription-([A-Za-z][A-Za-z0-9]?)$/.exec(name)?.[1];
+  return id ? `계정 ${id}` : name;
 }
 
 const methodOf = (v: unknown): UsageMethod => ((USAGE_METHODS as readonly unknown[]).includes(v) ? (v as UsageMethod) : 'none');

@@ -582,7 +582,7 @@ test('question labels: a new session starts after the carried questions, its ans
   assert.equal(nextLabel(store, 's2'), 'C', 'never goes back');
 });
 
-test('question labels: a label with a note in brackets counts, and so does every label on the remaining line', () => {
+test('question labels: a label with a note in brackets counts; the remaining line does not move the next label', () => {
   const store = testStore();
   startLabelsAfter(store, 'r1', 19); // next is T
   // "T(S 다시). …?": the label with a note before its dot.
@@ -590,10 +590,12 @@ test('question labels: a label with a note in brackets counts, and so does every
   assert.equal(nextLabel(store, 'r1'), 'U');
   noteAnswerLabels(store, 'r1', 'U. 어떻게 띄울까요?\n1. 도우미\n2. 기타 (직접 입력)\n\n**W(인증).** 비밀번호를 걸까요?\n1. 아니요\n2. 기타 (직접 입력)');
   assert.equal(nextLabel(store, 'r1'), 'X');
-  // An answer that asks nothing new but keeps X open: X was used, the next is Y.
-  noteAnswerLabels(store, 'r1', '결과예요.\n\n남은 질문: U, V, W, X\n\n다음 행동 및 순서: 없음');
-  assert.equal(nextLabel(store, 'r1'), 'Y');
-  assert.deepEqual(usedLabels('A(옛 G, #4508). 알림 시각은요?\n1. 9시\n\n남은 질문: A, B'), ['A', 'B']);
+  // 없으면 놓치는 실수: "남은 질문:" 줄의 뜻 속 대문자("F(새PC UAC 단계)"의 PC)를 기호로 세어 다음 기호가 F에서 PD로 건너뛴다.
+  // The next label counts question lines only ("X. …?"): the remaining line, its notes and its labels move nothing.
+  noteAnswerLabels(store, 'r1', '결과예요.\n\n남은 질문: U, W(인증), F(새PC UAC 단계)\n\n다음 행동 및 순서: 없음');
+  assert.equal(nextLabel(store, 'r1'), 'X');
+  // A carried question shown again in a new session's first answer ("A(옛 G, #4508). …?") is a question line.
+  assert.deepEqual(usedLabels('A(옛 G, #4508). 알림 시각은요?\n1. 9시\n\n남은 질문: A, B'), ['A']);
   // A label mentioned in a sentence is not a question.
   assert.deepEqual(usedLabels('F(알림 시각)는 정했어요.'), []);
   // The whole turn is read: a question asked before the last tool call counts too.
@@ -601,6 +603,9 @@ test('question labels: a label with a note in brackets counts, and so does every
   assert.equal(t.answer, '보냈어요.');
   stopGuard(store, { session_id: 'r1' }, { settings: roots(path.join(os.tmpdir(), 'results')), turn: t });
   assert.equal(nextLabel(store, 'r1'), 'Z');
+  // The question line with a note that has capitals in it counts its own label only.
+  noteAnswerLabels(store, 'r1', 'Z(새PC UAC 단계). 지금 할까요?\n1. 예\n2. 기타 (직접 입력)');
+  assert.equal(nextLabel(store, 'r1'), 'AA');
 });
 
 // ---- where files may go ---------------------------------------------------------------------------------------------

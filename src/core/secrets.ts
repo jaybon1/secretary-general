@@ -1,7 +1,6 @@
 /**
  * Secret-looking strings, replaced before anything is stored. The rule is "never paste keys",
- * but a slip shouldn't end up in the archive forever. Workspace exports are checked with the same
- * list (secretSpans, through scripts/export/scan-threats.mjs).
+ * but a slip shouldn't end up in the archive forever.
  */
 const SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,

@@ -1,12 +1,15 @@
 // 위임 앞뒤 대조(기능 'guards'). 비서 폴더 밖에서는 입구 bin/delegate-check.mjs로 부른다.
-//   node bin/delegate-check.mjs brief <지시 파일> --tag <태그> [--tag <태그>]... [--query <말>] [--db <DB 파일>]
-//     지시서(TASK.md나 지시 파일)와 그 공간·업무 태그가 붙은 결정(decision) 기억을 대조해, 지시서에 안 들어간 듯한 결정을 먼저 보여 준다.
+//   node bin/delegate-check.mjs brief <지시 파일> --tag <태그> [--tag <태그>]... [--query <말>] [--db <DB 파일>] [--memories <개수>] [--rules <줄 수>]
+//     지시서(TASK.md나 지시 파일)와 그 공간·업무 태그가 붙은 결정(decision) 기억을 대조해, 지시서에 안 들어간 듯한 결정 가운데
+//     지시서와 낱말이 겹치는(드문 낱말일수록 무겁게) 것을 관련 높은 순으로 위 몇 개(기본 10) 보여 주고, 들어간 듯한 결정을 잇는다.
+//     이어서 지시서가 있는 공간의 스킬(.agents/skills/*/SKILL.md, common-skills.json의 공통 스킬)에서 지시서와 낱말이 겹치는
+//     규칙 줄을 점수 순으로 위 몇 줄(기본 10) 보여 준다(어긋났는지는 비서가 대조한다).
 //     기억 DB는 읽기만 한다.
 //   node bin/delegate-check.mjs report <보고 파일> [--root <폴더>]... [--top <결과물 상위 폴더>] [--hours <시간>]
 //     보고의 "지웠다·없다·남지 않았다" 류 주장과 언급된 경로를 실제 파일·폴더와 대조하고, --root 아래 남은 시험·임시 폴더 후보와
 //     결과물 상위 폴더(기본: 비서 폴더의 상위)의 낯선 항목·최근 바뀐 항목을 보여 준다.
 // 둘 다 판단은 하지 않고 대조표만 낸다: 빠진 듯한 결정은 지시서에 넣을지, 어긋난 주장은 업무 세션에 물을지 비서가 정한다.
-// 종료 코드: 0 = 걸린 것 없음, 1 = 걸린 것 있음(빠진 듯한 결정, 주장과 다른 실제, 없는 경로), 2 = 쓰는 법 오류.
+// 종료 코드: 0 = 걸린 것 없음, 1 = 걸린 것 있음(지시서와 낱말이 겹치는데 빠진 듯한 결정, 주장과 다른 실제, 없는 경로), 2 = 쓰는 법 오류.
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -82,22 +85,240 @@ export function briefCoverage(brief: string, decisions: Decision[]): Coverage[] 
     .sort((a, b) => a.covered - b.covered || a.decision.id - b.decision.id);
 }
 
-export function briefReport(briefFile: string, coverage: Coverage[], tags: string[]): { text: string; leftOut: number } {
-  const left = coverage.filter((c) => c.covered < LEFT_OUT_BELOW);
+// A tag gathers every decision of a space (sound effects, topic picking, thumbnails…), most of them nothing to do with
+// this brief, so "left out" alone buries the few that matter. Each decision is scored like the skill rules below: the
+// brief's words it shares, a word counting by how rare it is among the gathered decisions (the space's name, which
+// they all carry, tells nothing), and only the best few left-out ones are shown.
+
+export interface RankedCoverage extends Coverage {
+  /** How much the decision shares with the brief (0 = nothing telling). */
+  relevance: number;
+  /** The brief's words found in the decision, most telling first. */
+  shared: string[];
+}
+
+/** Left-out decisions shown by default. */
+export const MEMORIES_SHOWN = 10;
+
+/**
+ * The other active memories, for telling how rare a word is: among a space's few dozen decisions everyday words
+ * ("다음", "이미", "직접") look rare and lift a long, unrelated decision.
+ */
+export function otherMemories(db: DatabaseSync, decisions: Decision[]): string[] {
+  const skip = new Set(decisions.map((d) => d.id));
+  return (db.prepare('SELECT id, content FROM memories WHERE valid_to IS NULL').all() as Array<{ id: number; content: string }>)
+    .filter((r) => !skip.has(r.id))
+    .map((r) => decisionBody(r.content));
+}
+
+/** Scores each decision against the brief, best first; one sharing fewer than two whole words (stems, Latin words) scores 0. */
+export function rankCoverage(brief: string, coverage: Coverage[], corpus: string[] = []): RankedCoverage[] {
+  const have = new Set(searchTerms(withoutFolders(brief)));
+  const terms = coverage.map((c) => lineTerms(decisionBody(c.decision.content)));
+  const df = new Map<string, number>();
+  for (const t of [...terms, ...corpus.map((c) => lineTerms(c))]) for (const k of t.keys()) df.set(k, (df.get(k) ?? 0) + 1);
+  const n = Math.max(coverage.length + corpus.length, 1);
+  const idf = (t: string) => Math.log((n + 1) / ((df.get(t) ?? 0) + 0.5));
+  return coverage
+    .map((c, i) => {
+      const weight = (t: string) => idf(t) * (terms[i].get(t) ?? 0);
+      const shared = [...terms[i].keys()].filter((t) => have.has(t)).sort((a, b) => weight(b) - weight(a));
+      const whole = shared.filter((t) => terms[i].get(t) === 1).length;
+      return { ...c, shared, relevance: whole < 2 ? 0 : shared.reduce((s, t) => s + weight(t), 0) };
+    })
+    .sort((a, b) => b.relevance - a.relevance || a.covered - b.covered || a.decision.id - b.decision.id);
+}
+
+function decisionLine(c: RankedCoverage, mark: string): string {
+  return (
+    `- [${mark} ${Math.round(c.covered * 100)}% · 관련 ${c.relevance.toFixed(1)}] #${c.decision.id} (${formatLocal(c.decision.created_at)}, ${c.decision.tags}) ${c.decision.content}` +
+    (c.shared.length ? `\n    겹친 말: ${c.shared.slice(0, 8).join(', ')}` : '') +
+    (c.missingNames.length ? `\n    지시서에 없는 이름·숫자: ${c.missingNames.join(', ')}` : '')
+  );
+}
+
+/**
+ * The left-out decisions that share words with the brief, best first and at most `top`, then the ones it seems to carry.
+ * leftOut counts the left-out decisions that share words with it (shown or not): those with nothing in common are no finding.
+ */
+export function briefReport(briefFile: string, ranked: RankedCoverage[], tags: string[], top = MEMORIES_SHOWN): { text: string; leftOut: number } {
+  const left = ranked.filter((c) => c.covered < LEFT_OUT_BELOW);
+  const related = left.filter((c) => c.relevance > 0);
+  const shown = related.slice(0, Math.max(0, top));
+  const inBrief = ranked.filter((c) => c.covered >= LEFT_OUT_BELOW);
   const lines = [
     `지시서 대조: ${briefFile}`,
-    `대조한 결정 기억 ${coverage.length}개(태그: ${tags.join(', ') || '없음'}). 지시서에 안 들어간 듯 ${left.length}개.`,
+    `대조한 결정 기억 ${ranked.length}개(태그: ${tags.join(', ') || '없음'}). 지시서에 안 들어간 듯 ${left.length}개 중 지시서와 낱말이 겹치는 것 ${related.length}개, 관련 높은 위 ${shown.length}개(최대 ${top}, --memories로 바꿈):`,
   ];
-  for (const c of coverage) {
-    const mark = c.covered < LEFT_OUT_BELOW ? '빠진 듯' : c.missingNames.length ? '일부' : '들어 있음';
-    lines.push(
-      `- [${mark} ${Math.round(c.covered * 100)}%] #${c.decision.id} (${formatLocal(c.decision.created_at)}, ${c.decision.tags}) ${c.decision.content}` +
-        (c.missingNames.length ? `\n    지시서에 없는 이름·숫자: ${c.missingNames.join(', ')}` : ''),
-    );
+  for (const c of shown) lines.push(decisionLine(c, '빠진 듯'));
+  if (!shown.length && ranked.length) lines.push('(지시서와 겹치는 빠진 결정 없음)');
+  const hidden = left.length - shown.length;
+  if (hidden > 0) lines.push(`(안 보인 빠진 듯한 결정 ${hidden}개: 지시서와 겹치는 말이 적거나 위 ${top}개 밖. 다 보려면 --memories ${left.length})`);
+  if (inBrief.length) {
+    lines.push(`지시서에 들어간 듯 ${inBrief.length}개(관련 높은 순):`);
+    for (const c of inBrief) lines.push(decisionLine(c, c.missingNames.length ? '일부' : '들어 있음'));
   }
-  if (!coverage.length) lines.push('(이 태그의 결정 기억이 없음: 태그가 맞는지 list_topics로 확인한다)');
+  if (!ranked.length) lines.push('(이 태그의 결정 기억이 없음: 태그가 맞는지 list_topics로 확인한다)');
   lines.push('→ "빠진 듯"·"일부"는 지시서에 넣을지 정한다. 이 일과 상관없는 결정이면 그냥 둔다.');
-  return { text: lines.join('\n'), leftOut: left.length };
+  return { text: lines.join('\n'), leftOut: related.length };
+}
+
+// ---- brief: the space's skill rules ---------------------------------------------------------------------------------
+// A brief can break a rule of the space it goes to (e.g. "back up right after uploading" while the space's skill says
+// "back up once the video is public"). Judging that needs a model, so this only lists the skill lines that share words
+// with the brief, most telling first, for the secretary to hold against it.
+
+export interface SkillRule {
+  /** Skill shown to the reader: its folder name, or "공통 <이름>" for a common skill. */
+  skill: string;
+  file: string;
+  line: number;
+  text: string;
+  score: number;
+  /** The brief's words found in the line, most telling first. */
+  shared: string[];
+}
+
+/** Rules shown by default. */
+export const RULES_SHOWN = 10;
+
+/** The space a brief belongs to: the nearest folder above it holding AGENTS.md and .agents/skills. */
+export function findSpaceRoot(briefFile: string): string | null {
+  let dir = path.dirname(path.resolve(briefFile));
+  for (;;) {
+    if (fs.existsSync(path.join(dir, 'AGENTS.md')) && fs.existsSync(path.join(dir, '.agents', 'skills'))) return dir;
+    const up = path.dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+}
+
+/** The space's own SKILL.md files and the common ones its common-skills.json names (workspaces/_skills/<name>), each once. */
+export function spaceSkillFiles(space: string): Array<{ skill: string; file: string }> {
+  const out: Array<{ skill: string; file: string }> = [];
+  const seen = new Set<string>();
+  const add = (skill: string, file: string) => {
+    if (!fs.existsSync(file)) return;
+    let real = file;
+    try {
+      real = fs.realpathSync(file);
+    } catch {}
+    const key = real.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ skill, file });
+  };
+  let common: string[] = [];
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(space, 'common-skills.json'), 'utf8'));
+    if (Array.isArray(j?.skills)) common = j.skills.filter((s: unknown): s is string => typeof s === 'string');
+  } catch {}
+  const commonDir = path.join(path.dirname(space), '_skills');
+  for (const name of common) add(`공통 ${name}`, path.join(commonDir, name, 'SKILL.md'));
+  const skillsDir = path.join(space, '.agents', 'skills');
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(skillsDir).sort();
+  } catch {}
+  for (const n of names) add(n.startsWith('common-') ? `공통 ${n.slice('common-'.length)}` : n, path.join(skillsDir, n, 'SKILL.md'));
+  return out;
+}
+
+/** Rule lines of a SKILL.md: not the front matter, headings, code blocks or the "이유:" (why) lines under a rule. */
+export function ruleLines(text: string): Array<{ line: number; text: string }> {
+  const out: Array<{ line: number; text: string }> = [];
+  const lines = text.split(/\r?\n/);
+  let i = 0;
+  if (lines[0]?.trim() === '---') {
+    const end = lines.findIndex((l, k) => k > 0 && l.trim() === '---');
+    if (end > 0) i = end + 1;
+  }
+  let inCode = false;
+  for (; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (/^(```|~~~)/.test(t)) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode || !t || t.startsWith('#') || /^(이유|근거)\s*:/.test(t) || /^\|?[\s:|-]+\|?$/.test(t)) continue;
+    out.push({ line: i + 1, text: t });
+  }
+  return out;
+}
+
+/**
+ * A path keeps only its last part and a file name loses its usual extension: the folders of an example path
+ * ("output/records/…/ep02-…") and ".py" say nothing of the rule.
+ */
+export function withoutFolders(text: string): string {
+  return text
+    .replace(/[^\s`'"()<>]*[\\/][^\s`'"()<>]*/g, (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '')
+    .replace(/(\w)\.(py|md|json|jsonl|ts|mjs|js|ps1|txt|csv|html)\b/gi, '$1');
+}
+
+/** Bigrams a Korean word starts with: its stem ("백업한다" → 백업), unlike the inner ones ("업한"). */
+function stemTerms(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const [w] of text.normalize('NFC').toLowerCase().matchAll(/[\p{Script=Hangul}\p{Script=Han}]{2,}/gu)) out.add(Array.from(w).slice(0, 2).join(''));
+  return out;
+}
+
+/** Inner bigrams of a Korean word count this much of a stem or a Latin word. */
+const INNER_WEIGHT = 0.4;
+
+/** Terms of a line worth matching, with their weight: not numbers alone, not one Latin letter. */
+function lineTerms(text: string): Map<string, number> {
+  const plain = withoutFolders(text);
+  const stems = stemTerms(plain);
+  const out = new Map<string, number>();
+  for (const t of queryTerms(plain)) {
+    if (/^\d+$/.test(t) || /^[a-z]$/.test(t)) continue;
+    out.set(t, /[\p{Script=Hangul}\p{Script=Han}]/u.test(t) && !stems.has(t) ? INNER_WEIGHT : 1);
+  }
+  return out;
+}
+
+/**
+ * The skill lines sharing words with the brief, best first. A shared word counts by how rare it is among all the
+ * space's rule lines (a word every rule has tells nothing), and a line needs at least two shared words.
+ */
+export function skillRulesFor(brief: string, files: Array<{ skill: string; file: string }>, top = RULES_SHOWN): SkillRule[] {
+  const have = new Set(searchTerms(withoutFolders(brief)));
+  const all: Array<Omit<SkillRule, 'score' | 'shared'> & { terms: Map<string, number> }> = [];
+  for (const f of files) {
+    let text = '';
+    try {
+      text = fs.readFileSync(f.file, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const r of ruleLines(text)) all.push({ skill: f.skill, file: f.file, line: r.line, text: r.text, terms: lineTerms(r.text) });
+  }
+  const df = new Map<string, number>();
+  for (const r of all) for (const t of r.terms.keys()) df.set(t, (df.get(t) ?? 0) + 1);
+  const n = Math.max(all.length, 1);
+  const idf = (t: string) => Math.log((n + 1) / ((df.get(t) ?? 0) + 0.5));
+  const scored: SkillRule[] = [];
+  for (const r of all) {
+    const weight = (t: string) => idf(t) * (r.terms.get(t) ?? 0);
+    const shared = [...r.terms.keys()].filter((t) => have.has(t)).sort((a, b) => weight(b) - weight(a));
+    if (shared.filter((t) => r.terms.get(t) === 1).length < 2) continue;
+    const score = shared.reduce((s, t) => s + weight(t), 0);
+    scored.push({ skill: r.skill, file: r.file, line: r.line, text: r.text, score, shared });
+  }
+  return scored.sort((a, b) => b.score - a.score || a.skill.localeCompare(b.skill) || a.line - b.line).slice(0, Math.max(0, top));
+}
+
+export function rulesReport(space: string | null, files: number, rules: SkillRule[], top: number): string {
+  if (!space) return '공간 스킬 규칙: 지시서 위쪽 폴더에서 공간(AGENTS.md와 .agents/skills가 있는 곳)을 못 찾음. 그 공간 스킬을 직접 연다.';
+  const lines = [`공간 스킬 규칙(지시서와 맞는지 확인): ${space}의 스킬 ${files}개에서 지시서와 낱말이 겹치는 줄 위 ${rules.length}개(최대 ${top}, --rules로 바꿈)`];
+  for (const r of rules) {
+    lines.push(`- [${r.skill} ${path.basename(path.dirname(r.file))}/SKILL.md:${r.line}] ${r.text.length > 300 ? `${r.text.slice(0, 300)}…` : r.text}`);
+    lines.push(`    겹친 말: ${r.shared.slice(0, 8).join(', ')}`);
+  }
+  if (!rules.length) lines.push('(겹치는 줄 없음)');
+  lines.push('→ 지시서의 단계·때·방법이 이 규칙과 어긋나면(예: 규칙은 "공개가 끝난 뒤", 지시서는 "올린 뒤 바로") 지시서를 규칙에 맞추거나, 규칙과 달리 할 까닭을 지시서에 적는다.');
+  return lines.join('\n');
 }
 
 // ---- report ---------------------------------------------------------------------------------------------------------
@@ -216,7 +437,7 @@ export function reportCheck(reportText: string, opts: { reportFile: string; root
 
 const USAGE = [
   '사용:',
-  '  node bin/delegate-check.mjs brief <지시 파일> --tag <태그> [--tag <태그>]... [--query <말>] [--db <DB 파일>]',
+  '  node bin/delegate-check.mjs brief <지시 파일> --tag <태그> [--tag <태그>]... [--query <말>] [--db <DB 파일>] [--memories <개수>] [--rules <줄 수>]',
   '  node bin/delegate-check.mjs report <보고 파일> [--root <폴더>]... [--top <결과물 상위 폴더>] [--hours <시간>]',
 ].join('\n');
 
@@ -249,8 +470,19 @@ export function main(argv: string[], out: (s: string) => void = console.log): nu
     const db = new DatabaseSync(dbFile, { readOnly: true });
     try {
       db.exec('PRAGMA busy_timeout = 5000');
-      const r = briefReport(pos[0], briefCoverage(brief, decisionsFor(db, tags, multi.query?.join(' '))), tags);
+      const count = (v: string | undefined, dflt: number) => {
+        const x = Number(v ?? dflt);
+        return Number.isInteger(x) && x >= 0 ? x : dflt;
+      };
+      const decisions = decisionsFor(db, tags, multi.query?.join(' '));
+      const ranked = rankCoverage(brief, briefCoverage(brief, decisions), otherMemories(db, decisions));
+      const r = briefReport(pos[0], ranked, tags, count(multi.memories?.[0], MEMORIES_SHOWN));
       out(r.text);
+      const shown = count(multi.rules?.[0], RULES_SHOWN);
+      const space = findSpaceRoot(pos[0]);
+      const files = space ? spaceSkillFiles(space) : [];
+      out('');
+      out(rulesReport(space, files.length, skillRulesFor(brief, files, shown), shown));
       return r.leftOut ? 1 : 0;
     } finally {
       db.close();

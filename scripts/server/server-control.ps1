@@ -3,7 +3,7 @@
 #            비서 대화는 그 서버 안에서 돌므로 지금 세션과 따로 돌아야 한다. 이 세션은 끊긴다. 작업은 1분 뒤 작업 스케줄러가 지운다.
 #   show / hide: 떠 있는 서버 창을 바로 보이거나 숨긴다. 보이는 창을 닫으면 서버가 꺼진다.
 #   log: 그 계정의 최근 서버 기록 끝부분(-Lines 줄)을 보여 준다.
-# -Provider subscription-b: 두 번째 구독(계정 b) 서버(기능 account-handoff). 없으면 기본 계정(a) 서버.
+# -Provider subscription-b: 다른 구독(계정 b, c…) 서버(기능 account-handoff). 없으면 기본 계정(a) 서버.
 # -Now: 기다리지 않고 바로 켠다(떠 있으면 정상 종료 뒤 다시). 로그인 자동 실행(install-tasks.ps1 -Task server), 바탕화면 바로가기, 위 예약 작업이
 #       conhost.exe --headless로 이걸 부른다. 작업 스케줄러가 PowerShell을 바로 띄우면 콘솔이 Windows Terminal로 넘어가 숨겨지지 않고,
 #       창 없는 이 스크립트가 Start-Process -WindowStyle로 띄운 서버 창은 conhost 창이라 숨기고 보일 수 있다.

@@ -397,11 +397,14 @@ export const CHECKS: Check[] = [
     label: '기본 공급자 키 파일',
     fix: '`features` 스킬의 공급자 안내(`.agents/skills/features/references/providers.md`)대로 키 폴더에 `<공급자이름>.env`를 사용자가 직접 둔다(업무 세션·run-job이 이 공급자로 돈다)',
     run: ({ o }) => {
-      const def = readJsonFile<{ default?: string }>(scriptPath('providers', o.root))?.default;
+      const config = readJsonFile<{ default?: string; providers?: Record<string, { type?: string }> }>(scriptPath('providers', o.root));
+      const def = config?.default;
       // The PC's own subscription login needs no key file.
       if (!def || def === 'subscription') return ok;
-      const file = path.join(o.keysDir, `${def}.env`);
-      return fs.existsSync(file) ? ok : { status: 'missing', detail: `${file} 없음` };
+      // "auto" (feature account-handoff): any subscription but a may be picked, so each needs its key file.
+      const names = def === 'auto' ? Object.entries(config?.providers ?? {}).filter(([n, p]) => p?.type === 'claude-subscription' && n !== 'subscription').map(([n]) => n) : [def];
+      const absent = names.map((n) => path.join(o.keysDir, `${n}.env`)).filter((f) => !fs.existsSync(f));
+      return absent.length ? { status: 'missing', detail: absent.map((f) => `${f} 없음`).join(', ') } : ok;
     },
   },
 ];

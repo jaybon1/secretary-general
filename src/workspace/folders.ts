@@ -78,8 +78,11 @@ export function createWorkspaceFolder(spec: WorkspaceSpec, now = nowIso(), secre
   return { folder, files };
 }
 
+/** Big video and sound files: their originals are kept by backups, the workspace's history keeps code, scripts, settings, reports and small images. */
+export const MEDIA_GITIGNORE_LINES = ['# 큰 영상·소리 파일: 원본은 백업으로 지키고 기록에는 코드·대본·설정·보고서와 작은 그림만 남긴다', '*.mp4', '*.mov', '*.mkv', '*.webm', '*.wav', '*.mp3', '*.m4a', '*.flac', '*.aac'];
+
 /** Big or rebuildable things stay out of the workspace's local history, and so does the secretary's link (a path on this PC). */
-export const GITIGNORE = ['.venv/', 'venv/', 'node_modules/', '__pycache__/', '*.zip', '*.onnx', '*.tflite', '*.bin', ...GITIGNORE_LINES, ...SKILL_GITIGNORE_LINES, ''].join('\n');
+export const GITIGNORE = ['.venv/', 'venv/', 'node_modules/', '__pycache__/', '*.zip', '*.onnx', '*.tflite', '*.bin', ...MEDIA_GITIGNORE_LINES, ...GITIGNORE_LINES, ...SKILL_GITIGNORE_LINES, ''].join('\n');
 
 /** Each workspace is a local git repo so a worker's bad write can be rolled back; workers commit once per task. */
 function initGit(folder: string): void {

@@ -2,7 +2,7 @@
 # 다른 기기(claude.ai/code, Claude 앱)의 세션 목록에서 이 폴더의 새 비서 세션을 열 수 있게 된다.
 # 서버는 네트워크가 오래 끊기면 스스로 끝나므로, 끝나면 잠시 뒤 다시 띄운다.
 # 로그인할 때 자동 실행: scripts/tasks/install-tasks.ps1 -Task server
-# -Provider subscription-b: 계정 a 한도가 찼을 때 두 번째 구독으로 '비서-b' 서버를 따로 띄운다(기능 account-handoff, 켜는 법은 features 스킬).
+# -Provider subscription-b: 계정 a 한도가 찼을 때 다른 구독(계정 b, 셋째 계정은 subscription-c로 '비서-c')으로 '비서-b' 서버를 따로 띄운다(기능 account-handoff, 켜는 법은 features 스킬).
 # 계정마다 서버 창·서버가 따로라서 서로를 정리하지 않는다.
 # 로그인 자동 실행·바탕화면 바로가기·다시 켜기는 모두 server-control.ps1 -Now로 이 창을 숨겨 띄운다. 창을 닫아 서버가 꺼지는 일이 없게 하려는 것.
 # 창 보이기·숨기기, 다시 켜기, 기록 보기: scripts/server/server-control.ps1

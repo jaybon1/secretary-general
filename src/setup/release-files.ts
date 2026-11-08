@@ -22,7 +22,7 @@ export const RELEASE_FILES = 'release-files.json';
 
 export interface ReleaseFiles {
   about?: string;
-  /** The release version (VERSION), e.g. v8. */
+  /** The release version (VERSION), e.g. v0.9.0 (one number up to v8, read as 0.8.0: scripts/update.mjs parseVersion). */
   version: string;
   /** The original's commit it was built from. */
   original?: string;

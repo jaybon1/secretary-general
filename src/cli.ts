@@ -19,6 +19,7 @@
  *   node src/cli.ts big-work-from-profile <plan.json> [--apply]   (once, updating from v7: profile's 큰 일 칸 → big-work board; first run writes the plan to check, --apply puts it in)
  *   node src/cli.ts embed-server [--parent <pid>] [--refetch]   (semantic-search helper; lives as long as <pid>, else idles out; --refetch downloads the model first)
  *   node src/cli.ts usage-poll [--parent <pid>]   (usage reader, feature usage-poll: the checked providers every 5 minutes; one per PC; ends with <pid>, or at once when the feature is off)
+ *   node src/cli.ts handoff-account [--root <secretary folder>]   (the provider "auto" means now: the subscription with the most room, feature account-handoff; Use-Provider in providers.ps1 runs it)
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,6 +45,7 @@ import { Store } from './store/store.ts';
 import { formatLocal, nowIso } from './core/kst-time.ts';
 import { runConsolidate, runIdleJobs } from './idle/idle-jobs.ts';
 import { runUsagePoll } from './usage/usage-poller.ts';
+import { handoffAccount } from './usage/handoff-level.ts';
 
 async function main(): Promise<void> {
   const [cmd, arg] = process.argv.slice(2);
@@ -102,6 +104,15 @@ async function main(): Promise<void> {
     const parent = arg === '--parent' ? Number(process.argv[4]) || undefined : undefined;
     if (arg !== undefined && !parent) throw new Error('usage: usage-poll [--parent <pid>]');
     runUsagePoll(parent);
+    return;
+  }
+  if (cmd === 'handoff-account') {
+    // What providers.json's default "auto" (or -Provider auto) runs on now; no database needed. --root: the secretary folder
+    // whose providers.json to read (Use-Provider passes its own, the same as this one outside the tests).
+    const i = process.argv.indexOf('--root');
+    const root = i >= 0 ? process.argv[i + 1] : undefined;
+    if (i >= 0 && !root) throw new Error('usage: handoff-account [--root <secretary folder>]');
+    console.log(handoffAccount(Date.now(), undefined, { account: root ? { root } : undefined }));
     return;
   }
 

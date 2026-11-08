@@ -8,7 +8,7 @@
 - 질문 기호: 이 세션의 다음 질문 기호를 훅이 세어 질문마다 알려 준다(새 세션은 넘어온 질문 뒤부터, compact는 이어서, 남은 질문 줄의 기호도 쓴 것으로 센다).
 - 폴더 위치(PreToolUse 훅, 업무 세션 worker-guard도): 비서 상위 폴더 바로 아래에 새 폴더·파일을 만들거나 그 `temp` 폴더에 쓰는 도구 호출을 막는다.
 - 되풀이 점검(PostToolUse 훅 `src/guards/repeat-hook.ts`, 비서·업무 세션·run-job 모두): 같은 종류 조작(같은 도구 + 같은 종류 대상: 셸 명령 앞부분, 한 폴더의 파일 읽기, 한 사이트의 페이지, 같은 브라우저 도구)이 한 턴에 10번 되풀이되면(어느 일에서나 되풀이되는 것은 세지 않는다: 셸로 파일 보기(cat·grep·sed·ls 등), 바로 적어 돌리는 코드(python -c 등), 진행 목록·에이전트 확인, 검색 결과 페이지, 같은 파일 다시·나눠 읽기·쓰기, 같은 명령 다시 돌리기, 이미지 파일 읽기(png·jpg 등, 눈으로 봐야 하는 일이라서. 이미지가 아닌 파일 읽기는 센다)) 막지 않고 "도구·스크립트로 한꺼번에 처리할 수 있는지 따져 보고, 남은 건수와 예상 시간을 계산하라"는 알림을 한 번 띄운다. 기준은 `scripts/guards.local.json`의 `"repeatLimit"`(0이면 끔). 세는 기록은 임시 폴더(`%TEMP%\secretary-repeat\`)에만 두고 기억 DB에는 쓰지 않는다.
-- 위임 앞뒤 대조: `node bin/delegate-check.mjs brief <TASK.md> --tag <태그>`(지시서에 빠진 결정 기억), `node bin/delegate-check.mjs report <REPORT.md> --root <결과 폴더>`(보고의 "지웠다" 주장과 실제 파일). `delegate` 스킬의 대조 단계가 이것을 부른다.
+- 위임 앞뒤 대조: `node bin/delegate-check.mjs brief <TASK.md> --tag <태그>`(지시서에 빠진 결정 기억, 그 공간 스킬에서 지시서와 낱말이 겹치는 규칙 줄), `node bin/delegate-check.mjs report <REPORT.md> --root <결과 폴더>`(보고의 "지웠다" 주장과 실제 파일). `delegate` 스킬의 대조 단계가 이것을 부른다.
 - 실수 기록 도구: `record_mistake`, `update_mistake`, `list_mistakes`.
 
 ## 켜는 순서(설치 때 이미 켜져 있으면 건너뜀)

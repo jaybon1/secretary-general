@@ -52,11 +52,23 @@ export function parseQuestions(text: string): Record<string, string> {
   return found;
 }
 
-/** Labels on the "남은 질문:" line; null when there is no such line, [] for "없음". */
+/**
+ * Labels on the "남은 질문:" line; null when there is no such line, [] for "없음". The line is "A(알림 시각), B(…)":
+ * the notes in brackets are left out and each item gives the label at its front (after a "보류:"-like prefix), so a
+ * capital word in a note ("F(새PC UAC 단계)") or in an item's words is not taken for a label.
+ */
 export function parseRemaining(text: string): string[] | null {
   const m = REMAINING_LINE.exec(text);
   if (!m) return null;
-  return [...m[1].matchAll(/(?<![A-Za-z])([A-Z]{1,2})(?![A-Za-z])/g)].map((x) => x[1]);
+  let line = m[1];
+  // Innermost brackets first, so a note with brackets inside goes whole.
+  for (let prev = ''; prev !== line; ) [prev, line] = [line, line.replace(/[(（][^()（）]*[)）]/g, ' ')];
+  const labels: string[] = [];
+  for (const item of line.split(/[,，、·;]/)) {
+    const x = /^\**([A-Z]{1,2})\**(?![A-Za-z0-9])/.exec(item.trim().replace(/^[^A-Z:：]*[:：]\s*/, ''));
+    if (x) labels.push(x[1]);
+  }
+  return labels;
 }
 
 /** Labels the user picked an option for ("c1", "A2 B1"); a bare "e - …" is discussion, not an answer. */
