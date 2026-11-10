@@ -3,14 +3,14 @@
  *
  * The rerank stage is a plug-in point. Today it's a cheap heuristic; later a
  * probabilistic judge model can replace it without touching storage or packing.
- * Semantic hits (semantic/client.ts) are optional: when the helper isn't ready, recall is word search alone.
+ * Semantic hits (semantic-search/client.ts) are optional: when the server isn't ready, recall is word search alone.
  */
 import { CANDIDATE_POOL } from '../core/config.ts';
-import { semanticClient, type SemanticHits, type SemanticSearch } from '../semantic/client.ts';
+import { semanticClient, type SemanticHits, type SemanticSearch } from '../semantic-search/client.ts';
 import type { Memory, Store } from '../store/store.ts';
-import { estimateTokens } from '../core/tokens.ts';
+import { estimateTokens } from '../core/token-estimate.ts';
 import { formatLocal } from '../core/kst-time.ts';
-import { queryTerms, searchTerms } from './korean-terms.ts';
+import { queryTerms, searchTerms } from './search-terms.ts';
 
 export interface Candidate {
   memory: Memory;
@@ -41,7 +41,7 @@ export interface RecallOptions {
   /** Memories to leave out, e.g. ones this session's context already holds. */
   excludeIds?: ReadonlySet<number>;
   reranker?: Reranker;
-  /** Meaning-based search merged with word search. Default: the helper process, 1.5 s timeout; null turns it off. */
+  /** Meaning-based search merged with word search. Default: the server process, 1.5 s timeout; null turns it off. */
   semantic?: SemanticSearch | null;
   /** Put matching topic summaries ahead of single memories, so the current state survives the budget cut. */
   summariesFirst?: boolean;

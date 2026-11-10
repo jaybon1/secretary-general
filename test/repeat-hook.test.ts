@@ -1,4 +1,4 @@
-// The repeat reminder (feature 'guards', src/guards/repeat-hook.ts): what counts as one kind of call, counting within a
+// The repeat reminder (feature 'mistake-guards', src/mistake-guards/repeat-hook.ts): what counts as one kind of call, counting within a
 // turn from a transcript read bit by bit, telling once per kind and turn, and the hook as Claude Code runs it.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -6,8 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
-import { callKind, callUnit, commandHead, runRepeatHook } from '../src/guards/repeat-hook.ts';
-import { DEFAULT_REPEAT_LIMIT, repeatLimit } from '../src/guards/settings.ts';
+import { callKind, callUnit, commandHead, runRepeatHook } from '../src/mistake-guards/repeat-hook.ts';
+import { DEFAULT_REPEAT_LIMIT, repeatLimit } from '../src/mistake-guards/mistake-guard-settings.ts';
 import { readFeatures } from '../src/setup/features.ts';
 import { tempDir } from './helpers.ts';
 
@@ -155,21 +155,21 @@ test('a session first seen mid-turn counts what its transcript already holds; a 
   assert.match(note, /PowerShell: rename-item\)을 이 턴에서 4번/);
 });
 
-test('the limit: 10 by default, from scripts/guards.local.json repeatLimit, 0 to turn it off', () => {
+test('the limit: 10 by default, from this-secretary.local.json mistake-guards repeatLimit, 0 to turn it off', () => {
   assert.equal(DEFAULT_REPEAT_LIMIT, 10);
   const root = tempDir();
-  const withGuards = (enabled: boolean) => JSON.stringify({ features: readFeatures(PROJECT_ROOT)!.map((f) => (f.id === 'guards' ? { ...f, enabled } : f)) });
+  const withGuards = (enabled: boolean) => JSON.stringify({ features: readFeatures(PROJECT_ROOT)!.map((f) => (f.id === 'mistake-guards' ? { ...f, enabled } : f)) });
   fs.writeFileSync(path.join(root, 'features.json'), withGuards(true));
-  fs.mkdirSync(path.join(root, 'scripts'));
-  const local = path.join(root, 'scripts', 'guards.local.json');
+  const local = path.join(root, 'this-secretary.local.json');
+  const set = (v: unknown) => fs.writeFileSync(local, JSON.stringify({ 'mistake-guards': { repeatLimit: v } }));
   // A temp copy's local file is read (only this copy's own is hidden from tests, test/env.ts).
   const read = () => repeatLimit(root);
   assert.equal(read(), 10);
-  fs.writeFileSync(local, JSON.stringify({ repeatLimit: 15 }));
+  set(15);
   assert.equal(read(), 15);
-  fs.writeFileSync(local, JSON.stringify({ repeatLimit: 0 }));
+  set(0);
   assert.equal(read(), 0);
-  fs.writeFileSync(local, JSON.stringify({ repeatLimit: 'many' }));
+  set('many');
   assert.equal(read(), 10);
   fs.writeFileSync(path.join(root, 'features.json'), withGuards(false));
   assert.equal(read(), 0, 'off with the feature');
@@ -180,7 +180,7 @@ test('the hook as Claude Code runs it: JSON on stdin, a PostToolUse note on stdo
   const t = new Transcript(dir);
   t.prompt('페이지 열어 읽어 줘');
   const run = () =>
-    execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'guards', 'repeat-hook.ts')], {
+    execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'mistake-guards', 'repeat-hook.ts')], {
       input: JSON.stringify({ session_id: 'hook-run', transcript_path: t.file, hook_event_name: 'PostToolUse', tool_name: 'WebFetch' }),
       encoding: 'utf8',
     });
@@ -190,18 +190,18 @@ test('the hook as Claude Code runs it: JSON on stdin, a PostToolUse note on stdo
   const out = JSON.parse(run()) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
   assert.equal(out.hookSpecificOutput.hookEventName, 'PostToolUse');
   assert.match(out.hookSpecificOutput.additionalContext, /같은 조작\(WebFetch: shop\.example\.com\)을 이 턴에서 10번/);
-  assert.equal(execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'guards', 'repeat-hook.ts')], { input: 'not json', encoding: 'utf8' }), '');
+  assert.equal(execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'mistake-guards', 'repeat-hook.ts')], { input: 'not json', encoding: 'utf8' }), '');
 });
 
 test('the hook is put in for the secretary, work sessions and run-jobs', { skip: process.platform !== 'win32' }, () => {
   const settings = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, '.claude', 'settings.json'), 'utf8'));
   const post = settings.hooks.PostToolUse.flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks.map((h) => h.command));
-  assert.ok(post.some((c: string) => c.includes('src/guards/repeat-hook.ts')));
+  assert.ok(post.some((c: string) => c.includes('src/mistake-guards/repeat-hook.ts')));
   const common = path.join(PROJECT_ROOT, 'scripts', 'lib', 'common.ps1');
   const out = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `. '${common}'; [pscustomobject]@{ PostToolUse = @(Get-RepeatHook) } | ConvertTo-Json -Depth 6 -Compress`], { encoding: 'utf8' });
   const hooks = JSON.parse(out).PostToolUse;
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].matcher, 'Bash|PowerShell|Read|Write|WebFetch|mcp__.*');
-  assert.ok(hooks[0].hooks[0].command.endsWith(`${path.join('src', 'guards', 'repeat-hook.ts')}"`));
+  assert.ok(hooks[0].hooks[0].command.endsWith(`${path.join('src', 'mistake-guards', 'repeat-hook.ts')}"`));
   for (const f of ['scripts/worker/worker-lib.ps1', 'scripts/run-job/run-job.ps1']) assert.match(fs.readFileSync(path.join(PROJECT_ROOT, f), 'utf8'), /Get-RepeatHook/, f);
 });

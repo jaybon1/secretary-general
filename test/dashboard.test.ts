@@ -32,7 +32,7 @@ import { DEFAULT_PORT, dashboardOn, dashboardUrls, defaultShare, readSettings } 
 import { gitIgnored, hiddenName, parseRange, parseSharePath, Share } from '../src/dashboard/share.ts';
 import { statusText } from '../src/dashboard/status-text.ts';
 import { readUsageChoice, saveUsageChoice, usageSettingsView } from '../src/usage/usage-settings.ts';
-import { labeler, type ProviderInfo } from '../src/usage/providers.ts';
+import { labeler, type ProviderInfo } from '../src/usage/provider-usage.ts';
 
 test('the task board has a review column next to running, shown as the user\'s turn', () => {
   const s = tempStore();
@@ -94,8 +94,8 @@ test('settings: defaults without a local file; the file adds hosts and changes p
   assert.deepEqual(dashboardUrls(d.settings), [`http://127.0.0.1:${DEFAULT_PORT}/`]);
 
   write(
-    path.join(root, 'scripts', 'dashboard.local.json'),
-    '\uFEFF' + JSON.stringify({ hosts: ['100.1.2.3', '127.0.0.1'], port: 8123, publicUrl: 'https://pc.example.ts.net/', share: { 'ai-agent': null, notes: '../notes', out: '../out', 'bad/name': 'x' }, refreshSec: 1 }),
+    path.join(root, 'this-secretary.local.json'),
+    '\uFEFF' + JSON.stringify({ dashboard: { hosts: ['100.1.2.3', '127.0.0.1'], port: 8123, publicUrl: 'https://pc.example.ts.net/', share: { 'ai-agent': null, notes: '../notes', out: '../out', 'bad/name': 'x' }, refreshSec: 1 } }),
   );
   const s = readSettings(root);
   assert.deepEqual(s.settings.hosts, ['127.0.0.1', '100.1.2.3'], '127.0.0.1 always, once');
@@ -486,7 +486,7 @@ test('work sessions and run-jobs are read from this secretary\'s own records fol
   const withId = tempDir();
   fs.writeFileSync(path.join(withId, '.secretary-id'), 'a3f9\n');
   const mine = secretaryStateDir(withId, home, usage);
-  assert.equal(mine, path.join(home, 'state', 'A3F9'));
+  assert.equal(mine, path.join(home, 'A3F9', 'state'));
   assert.equal(secretaryStateDir(tempDir(), home, usage), usage, 'a copy without an id: the shared folder, as before');
   write(path.join(mine, 'run-job-calls.jsonl'), JSON.stringify({ at: '2026-11-07T10:00:00Z', provider: 'subscription', model: 'mine' }) + '\n');
   write(path.join(usage, 'run-job-calls.jsonl'), JSON.stringify({ at: '2026-11-07T10:00:00Z', provider: 'subscription', model: 'shared' }) + '\n');
@@ -520,7 +520,7 @@ test('running run-jobs: a file left by a run that ended is hidden, and deleted o
   assert.deepEqual(r.running.map((x) => x.pid).sort(), [201, 204]);
   assert.deepEqual(fs.readdirSync(active).sort(), ['201.json', '204.json', '206.json'], 'only the certainly ended ones are deleted');
   assert.equal(runJobState({ pid: 206 }, { at: procs.at, list: [{ pid: 206, started: '2026-11-07T10:00:00Z' }] }), 'running', 'no start time but the pid lives');
-  // Without the process list (sys.ps1 failed): only whether the pid exists, nothing deleted.
+  // Without the process list (running-jobs.ps1 failed): only whether the pid exists, nothing deleted.
   job(999_994, '2026-11-07T10:00:00Z');
   job(process.pid, '2026-11-07T10:00:00Z');
   assert.deepEqual(runJobsActive(dir, undefined, null).running.map((x) => x.pid), [process.pid]);
@@ -542,25 +542,25 @@ test('running run-jobs: a broken file is deleted once it is old, kept while it m
 });
 
 // Without it: the dashboard's process list changes shape and every run-job file counts as ended (and is deleted) or as running.
-test('sys.ps1 lists the PowerShell processes with their start times and when it took the list', { skip: process.platform !== 'win32' }, () => {
+test('running-jobs.ps1 lists the PowerShell processes with their start times and when it took the list', { skip: process.platform !== 'win32' }, () => {
   const before = Date.now();
-  const j = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(PROJECT_ROOT, 'src', 'dashboard', 'sys.ps1')], { encoding: 'utf8' }));
+  const j = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(PROJECT_ROOT, 'src', 'dashboard', 'running-jobs.ps1')], { encoding: 'utf8' }));
   const after = Date.now();
   const at = Date.parse(j.procs.at);
-  assert.ok(at >= before && at <= after, 'at: when sys.ps1 took the list');
+  assert.ok(at >= before && at <= after, 'at: when running-jobs.ps1 took the list');
   const list = [j.procs.list].flat() as { pid: number; started: string }[];
-  // sys.ps1's own PowerShell started before it took the list. Another one (a test running beside this one) may start
+  // running-jobs.ps1's own PowerShell started before it took the list. Another one (a test running beside this one) may start
   // between `at` and the listing and so start after `at` (the run-job check reads that as running), so only `after` bounds them all.
-  assert.ok(list.some((p) => Date.parse(p.started) <= at), 'sys.ps1 runs in PowerShell itself');
+  assert.ok(list.some((p) => Date.parse(p.started) <= at), 'running-jobs.ps1 runs in PowerShell itself');
   assert.ok(list.every((p) => typeof p.pid === 'number' && Date.parse(p.started) <= after));
 });
 
 test('settings page: GET shows the list, POST JSON from the page saves it; other sites, forms and bad bodies refused', async () => {
   const dir = tempDir();
-  const file = path.join(dir, 'usage.local.json');
+  const file = path.join(dir, 'this-secretary.local.json');
   const deps = { keysDir: path.join(dir, 'keys'), home: path.join(dir, 'home'), localAppData: path.join(dir, 'local') };
   const share = new Share({ roots: {}, secretaryRoot: dir, keysDir: path.join(dir, 'keys') });
-  const usage = { view: () => usageSettingsView(PROVIDERS, readUsageChoice(PROVIDERS, file, deps), deps), save: (i: unknown) => saveUsageChoice(i, PROVIDERS, file) };
+  const usage = { view: () => usageSettingsView(PROVIDERS, readUsageChoice(PROVIDERS, dir, deps), deps), save: (i: unknown) => saveUsageChoice(i, PROVIDERS, dir) };
   const l = await listen({ refreshSec: 30, share, usage, status: async () => ({}) }, ['127.0.0.1'], 0, { onTaken: () => assert.fail('taken'), onError: (h, e) => assert.fail(`${h} ${e.code}`) });
   const p = l.ports['127.0.0.1'];
   const call = (u: string, method = 'GET', headers: Record<string, string> = {}, body?: string) =>
@@ -582,7 +582,7 @@ test('settings page: GET shows the list, POST JSON from the page saves it; other
     const ok = await call('/api/usage-settings', 'POST', { ...json, Origin: `http://127.0.0.1:${p}`, 'Sec-Fetch-Site': 'same-origin' }, JSON.stringify({ providers: ['cli', 'nope'] }));
     assert.equal(ok.status, 200, ok.text);
     assert.deepEqual(JSON.parse(ok.text).providers.filter((x: { checked: boolean }) => x.checked).map((x: { name: string }) => x.name), ['cli']);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: ['cli'] });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { 'usage-poll': { providers: ['cli'] } });
     // Refused, nothing changed: a form post, another site's page, a body that is not JSON or not a list, too big.
     assert.equal((await call('/api/usage-settings', 'POST', { 'Content-Type': 'application/x-www-form-urlencoded' }, 'providers=key')).status, 403);
     assert.equal((await call('/api/usage-settings', 'POST', { ...json, Origin: 'https://evil.example' }, '{"providers":["key"]}')).status, 403);
@@ -590,7 +590,7 @@ test('settings page: GET shows the list, POST JSON from the page saves it; other
     assert.equal((await call('/api/usage-settings', 'POST', json, '{nope')).status, 400);
     assert.equal((await call('/api/usage-settings', 'POST', json, '{"providers":"key"}')).status, 400);
     assert.equal((await call('/api/usage-settings', 'POST', json, JSON.stringify({ providers: ['x'.repeat(9000)] }))).status, 413);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: ['cli'] });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { 'usage-poll': { providers: ['cli'] } });
     // Every other write is still refused.
     const put = await call('/api/usage-settings', 'PUT', json, '{}');
     assert.equal(put.status, 405);

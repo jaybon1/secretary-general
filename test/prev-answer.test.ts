@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { compress, lastAnswer, mergeHits, prevAnswerSearch } from '../src/memory/prev-answer-search.ts';
-import type { SemanticHits, SemanticSearch } from '../src/semantic/client.ts';
+import type { SemanticHits, SemanticSearch } from '../src/semantic-search/client.ts';
 import { tempDir } from './helpers.ts';
 
 test('compress keeps the conclusion, the question and its options, and bold headings', () => {

@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { PROJECT_ROOT } from '../src/core/config.ts';
+import { leftoverRenamedFiles, moveRenamedLocalFiles, RENAMED_LOCAL_FILES } from '../src/core/local-settings.ts';
+import { CHECKS } from '../src/setup/check-items.ts';
+import { CHECK } from '../src/core/names.ts';
 import { SCHEMA_VERSION } from '../src/store/schema.ts';
 import { Store } from '../src/store/store.ts';
 import { tempDir, tempStore, testDb, testStore } from './helpers.ts';
@@ -124,4 +129,45 @@ test('a new DB gets the AUTOINCREMENT table without a backup', () => {
   assert.deepEqual(backups(path.dirname(s.db.location()!)), []);
   s.appendLog([{ session_id: 's', message_uuid: 'u1', role: 'user', content: 'x', created_at: new Date().toISOString() }]);
   assert.equal(s.logAfter(0)[0].id, 1);
+});
+
+// 없으면 놓치는 실수: 이름이 바뀐 이 PC 파일(scripts의 이 PC 설정, 의미 검색 서버의 DB 옆 파일)이 옛 이름으로 남아 읽히지 않는다.
+test("this PC's renamed files move once to their new names; a new one already there wins", () => {
+  const root = tempDir();
+  const db = path.join(root, 'secretary.db');
+  fs.mkdirSync(path.join(root, 'scripts'));
+  const [oldName, newName] = Object.entries(RENAMED_LOCAL_FILES)[0];
+  fs.writeFileSync(path.join(root, ...oldName.split('/')), '[]');
+  fs.writeFileSync(`${db}.embedder-failures.log`, 'old log\n');
+  fs.writeFileSync(`${db}.embedder.json`, 'old');
+  fs.writeFileSync(`${db}.semantic-search-server.json`, 'new');
+  const moved = moveRenamedLocalFiles(root, db, {});
+  assert.equal(moved.length, 2);
+  assert.equal(fs.readFileSync(path.join(root, ...newName.split('/')), 'utf8'), '[]');
+  assert.equal(fs.readFileSync(`${db}.semantic-search-server-failures.log`, 'utf8'), 'old log\n');
+  assert.equal(fs.readFileSync(`${db}.semantic-search-server.json`, 'utf8'), 'new', 'the new file is kept');
+  assert.ok(fs.existsSync(`${db}.embedder.json`), 'the old one is left when both are there');
+  assert.deepEqual(moveRenamedLocalFiles(root, db, {}), [], 'once');
+  // 없으면 놓치는 실수: 새·옛 이름 파일이 둘 다 있어 옛 파일을 그대로 둔 것을 아무도 모르고, 옛 파일에만 있던 값이 읽히지 않는 채 남는다.
+  assert.deepEqual(leftoverRenamedFiles(root, db, {}), [[`${db}.embedder.json`, `${db}.semantic-search-server.json`]]);
+  const item = CHECKS.find((c) => c.id === CHECK.renamedLocalFiles)!;
+  const out = item.run({ o: { root, dbPath: db } } as Parameters<typeof item.run>[0]) as { status: string; detail?: string };
+  assert.equal(out.status, 'missing');
+  assert.match(out.detail!, /embedder\.json \(새 이름 secretary\.db\.semantic-search-server\.json 있음\)/);
+  fs.rmSync(`${db}.embedder.json`);
+  assert.deepEqual(leftoverRenamedFiles(root, db, {}), []);
+});
+
+// 없으면 놓치는 실수: 첫 세션 훅보다 의미 검색 서버(cli semantic-search-server)나 다른 cli 명령이 먼저 돌아 새 이름 파일을 만들고,
+// 옛 파일이 그대로 남는다(2026-11-09 secretary.db.embedder*.json 두 개). 모든 cli 명령이 무엇보다 먼저 옮긴다.
+test('every cli command moves the renamed files first, before it can make a new one', () => {
+  const dir = tempDir();
+  const db = path.join(dir, 'secretary.db');
+  fs.writeFileSync(`${db}.embedder.json`, '{"pid":1}');
+  fs.writeFileSync(`${db}.embedder-memory.json`, '{"peakMb":1}');
+  const r = spawnSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'cli.ts'), 'memory-stats'], { encoding: 'utf8', env: { ...process.env, SECRETARY_DB: db } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(`${db}.semantic-search-server.json`, 'utf8'), '{"pid":1}');
+  assert.equal(fs.readFileSync(`${db}.semantic-search-server-memory.json`, 'utf8'), '{"peakMb":1}');
+  assert.ok(!fs.existsSync(`${db}.embedder.json`) && !fs.existsSync(`${db}.embedder-memory.json`));
 });

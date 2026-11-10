@@ -6,8 +6,10 @@ import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { tempDir } from './helpers.ts';
 // @ts-expect-error plain .mjs script without types
-import { ID_ALPHABET, ID_FILE, LIST_FILE, PROTECTED, baseFor, ensureId, classify, classifyMoved, compareVersions, fileHash, findTag, movesBetween, normalize, parseVersion, recommend, restyle, sortTags, versionLabel } from '../scripts/update.mjs';
+import { FEATURE_ID_MOVES, ID_ALPHABET, ID_FILE, LIST_FILE, PROTECTED, baseFor, carryFeatureStates, ensureId, moveLocalFiles, classify, classifyMoved, compareVersions, fileHash, findTag, movesBetween, normalize, parseVersion, recommend, removeFile, restyle, sortTags, versionLabel } from '../scripts/update.mjs';
 import { fileHash as releaseHash } from '../src/setup/release-files.ts';
+import { readFeatures } from '../src/setup/features.ts';
+import { mergeThisSecretaryFiles } from '../src/core/this-secretary.ts';
 
 test('each file is sorted by who changed it since the installed version', () => {
   // base, user, theirs
@@ -146,6 +148,40 @@ test('a v7 or v8 user folder updates to v0.9.0: the base is found from VERSION, 
   assert.match(run('detect', '--user', listed, '--repo', repo), /판별: v8\(0\.8\.0\) \(파일 목록 release-files\.json\)\nBASE=v8/);
 });
 
+// 없으면 놓치는 실수: 공개는 고른 버전만 해서(v0.9.0 다음 v0.11.0, v0.13.0) 옮김 칸이 tag 없는 버전(v0.10.0, v0.12.0)에 적히면, tag만 따라가던 업데이트가 그 옮김을 건너뛰어 사용자가 고친 파일이 '지울지 물을 것'과 '새 파일'로 갈라진다.
+test('a v0.9.0 user skipping versions: moves of versions without a tag are followed in order, up to the newest only', () => {
+  const tags = ['v8', 'v0.9.0', 'v0.11.0', 'v0.13.0'];
+  const moves = { 'v0.10.0': { 'src/a.ts': 'src/b.ts' }, 'v0.11.0': { 'src/c.ts': 'src/d.ts' }, '0.12.0': { 'src/b.ts': 'src/e.ts' }, 'v0.14.0': { 'src/e.ts': 'src/f.ts' } };
+  const m = movesBetween(moves, tags, 'v0.9.0', 'v0.13.0');
+  assert.equal(m.get('src/a.ts'), 'src/e.ts', 'v0.10.0 then 0.12.0, neither tagged');
+  assert.equal(m.get('src/c.ts'), 'src/d.ts');
+  assert.equal(m.size, 3, 'nothing past the newest tag (v0.14.0)');
+  assert.equal(movesBetween(moves, tags, 'v0.11.0', 'v0.13.0').get('src/a.ts'), undefined, 'behind the base');
+  assert.equal(movesBetween(moves, tags, 'v0.11.0', 'v0.13.0').get('src/b.ts'), 'src/e.ts');
+
+  const { repo, run, userFrom } = semverSetup();
+  const g = (...a: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.autocrlf=false', ...a]);
+  const write = (files: Record<string, string>, gone: string[], tag: string) => {
+    for (const f of gone) fs.rmSync(path.join(repo, f));
+    for (const [p, t] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(repo, p)), { recursive: true });
+      fs.writeFileSync(path.join(repo, p), t);
+    }
+    g('add', '-A');
+    g('commit', '-qm', tag);
+    g('tag', tag);
+  };
+  // Published: v0.11.0 (it has v0.10.0's move, written under the untagged v0.10.0), then v0.13.0 (0.12.0's move).
+  const allMoves = { 'v0.9.0': { 'src/old.ts': 'src/new/old.ts' }, 'v0.10.0': { 'src/new/old.ts': 'src/ten/old.ts' }, 'v0.12.0': { 'src/ten/old.ts': 'src/twelve/old.ts' } };
+  write({ VERSION: 'v0.11.0\n', 'src/ten/old.ts': 'old\n', 'scripts/update-moves.json': JSON.stringify(allMoves) }, ['src/new/old.ts'], 'v0.11.0');
+  write({ VERSION: 'v0.13.0\n', 'src/twelve/old.ts': 'old\nnew line\n' }, ['src/ten/old.ts'], 'v0.13.0');
+  const user = userFrom({ 'package.json': '{}\n', VERSION: 'v0.9.0\n', 'a.txt': 'a9\n', 'src/new/old.ts': 'old (mine)\n', 'scripts/update-moves.json': '{}\n' });
+  const plan = run('plan', '--user', user, '--repo', repo, '--base', 'v0.9.0');
+  assert.match(plan, /기준 v0\.9\.0 → 최신 v0\.13\.0/);
+  assert.match(plan, /src\/twelve\/old\.ts \(옛 자리 src\/new\/old\.ts\)/, 'the user’s edit follows both untagged moves');
+  assert.doesNotMatch(plan, /물어볼 것: 새 버전에서 지운 파일/);
+});
+
 test('line ends and a BOM do not count as a change, and come back in the user style', () => {
   assert.equal(normalize('﻿a\r\nb\r\n'), 'a\nb\n');
   assert.equal(classify(normalize('x\r\n'), normalize('﻿x\n'), normalize('y\n')), 'replace');
@@ -155,9 +191,35 @@ test('line ends and a BOM do not count as a change, and come back in the user st
 });
 
 test('personal data, downloads and local settings are never part of an update', () => {
-  for (const p of ['secretary.db', 'secretary.db-wal', 'secretary.db.setup.json', 'secretary.db.embedder-failures.log', 'backups/x.db', 'models/a/b.onnx', 'node_modules/x/package.json', '.claude/settings.local.json', 'scripts/my.local.json', '.git/config', 'keys/a.env', '.secretary-id'])
+  for (const p of ['secretary.db', 'secretary.db-wal', 'secretary.db.setup-check.json', 'secretary.db.semantic-search-server-failures.log', 'secretary.db.embedder.json', 'backups/x.db', 'models/a/b.onnx', 'node_modules/x/package.json', '.claude/settings.local.json', 'scripts/my.local.json', 'this-secretary.local.json', '.git/config', 'keys/a.env', '.secretary-id'])
     assert.ok(PROTECTED.test(p), p);
-  for (const p of ['AGENTS.md', 'src/store/schema.ts', '.claude/settings.json', 'skills/update/SKILL.md', '.claude/skills/update/SKILL.md', 'VERSION', 'features.json', 'scripts/update-moves.json']) assert.ok(!PROTECTED.test(p), p);
+  // An example of this PC's settings is a release file like any other (this-secretary.local.example.json, 0.10.0).
+  for (const p of ['AGENTS.md', 'src/store/schema.ts', '.claude/settings.json', 'skills/update/SKILL.md', '.claude/skills/update/SKILL.md', 'VERSION', 'features.json', 'scripts/update-moves.json', 'this-secretary.local.example.json']) assert.ok(!PROTECTED.test(p), p);
+});
+
+// 없으면 놓치는 실수: 옮기거나 지운 파일의 옛 폴더가 빈 채 남아, SKILL.md 없는 옛 스킬 폴더(.agents/skills/<옛 이름>)가 올린 뒤 설치 점검과 스킬 사양 시험에 걸린다.
+test('a removed file takes the folders it leaves empty with it, never one that still holds something', () => {
+  const user = tempDir();
+  for (const [p, t] of Object.entries({ '.agents/skills/old/references/a.md': 'a', '.agents/skills/old/SKILL.md': 's', '.agents/skills/now/SKILL.md': 'n', 'kept/gone.txt': 'g', 'kept/mine.txt': 'm', 'top.txt': 't' })) {
+    fs.mkdirSync(path.dirname(path.join(user, p)), { recursive: true });
+    fs.writeFileSync(path.join(user, p), t);
+  }
+  const has = (p: string) => fs.existsSync(path.join(user, p));
+  removeFile(user, '.agents/skills/old/references/a.md');
+  assert.ok(!has('.agents/skills/old/references') && has('.agents/skills/old/SKILL.md'), 'the emptied folder goes, its parent with a file stays');
+  removeFile(user, '.agents/skills/old/SKILL.md');
+  assert.ok(!has('.agents/skills/old') && has('.agents/skills/now/SKILL.md'), 'the old skill folder goes, the one beside it stays');
+  removeFile(user, 'kept/gone.txt');
+  assert.ok(has('kept/mine.txt'), "a folder with a file of the user's stays");
+  removeFile(user, 'top.txt');
+  removeFile(user, 'never/was.txt');
+  assert.ok(fs.existsSync(user), 'the user folder itself stays');
+  // A link on the way up (.claude/skills → .agents/skills) is left alone, its target with it.
+  fs.mkdirSync(path.join(user, 'target', 'sub'), { recursive: true });
+  fs.writeFileSync(path.join(user, 'target', 'sub', 'f.txt'), 'f');
+  fs.symlinkSync(path.join(user, 'target'), path.join(user, 'link'), 'junction');
+  removeFile(user, 'link/sub/f.txt');
+  assert.ok(has('link') && has('target') && !has('target/sub'), 'the link stays');
 });
 
 /** A repository with tags v7 and v8 (v8 moves some files), and a user folder installed from v7 with edits. */
@@ -248,7 +310,7 @@ test('an update applies what only one side changed and asks about every file bot
   assert.ok(!has('src/ingest.ts'), 'an unchanged moved file leaves its old place');
   assert.equal(read('src/memory/text.ts'), 'text v8\n');
   assert.equal(read('secretary.db'), 'DB');
-  // The install id: a folder from before it (v7) gets one at the end of apply, said in the output.
+  // The secretary id: a folder from before it (v7) gets one at the end of apply, said in the output.
   const id = read(ID_FILE).trim();
   assert.match(id, /^[A-Z0-9]{4}$/);
   assert.ok(out.includes(`비서 고유 번호: ${id} (새로 만듦, .secretary-id)`));
@@ -297,7 +359,7 @@ test('a folder without VERSION or file list (before v7, or VERSION deleted) is n
   assert.match(run('detect', '--user', user, '--repo', repo), /판별: 못 함 \(VERSION 파일의 v3이 tag에 없고 파일 목록도 없음\)/);
 });
 
-test('the install id is kept: an update never replaces it, and one in lower case is written again in upper case', () => {
+test('the secretary id is kept: an update never replaces it, and one in lower case is written again in upper case', () => {
   const { repo, user, run, read } = setup();
   fs.writeFileSync(path.join(user, ID_FILE), 'my01\r\n');
   const work = /WORK=(.+)/.exec(run('backup', '--user', user))![1].trim();
@@ -305,8 +367,8 @@ test('the install id is kept: an update never replaces it, and one in lower case
   assert.equal(read(ID_FILE), 'MY01\n');
   assert.match(out, /비서 고유 번호: MY01 \(그대로, \.secretary-id\)/);
   assert.deepEqual(ensureId(user), { id: 'MY01', created: false });
-  // Same letters as src/setup/install-id.ts (the secretary makes the same kind of id).
-  assert.equal(ID_ALPHABET, 'ABCDEFGHJKMNPQRSTUVWXYZ23456789');
+  // Same letters as src/setup/secretary-id.ts (the secretary makes the same kind of id).
+  assert.equal(ID_ALPHABET, 'BCDFGHJKMNPQRSTVWXZ23456789');
 });
 
 test('overwrite takes the new version whole; a moved file the user changed alone moves as it is', () => {
@@ -547,4 +609,132 @@ test('from v7 straight to v8 (skills in .agents/skills/): the v8 moves take each
   assert.equal(read('.agents/skills/delegate/SKILL.md'), 'delegate mine\nA\nB\nC\nend\n');
   assert.equal(read('.agents/skills/grill/SKILL.md'), 'grill 2\n');
   assert.ok(fs.lstatSync(path.join(user, '.claude', 'skills')).isSymbolicLink());
+});
+
+// Without it: an update from v0.9.0 leaves an off feature's skill in .agents/skills (with the old disable-model-invocation
+// line the model no longer needs), writes the new version's copy beside it in .agents/skills-off, or moves the skill of a
+// user who turned the feature on out of reach; or a user's edit to the skill is lost.
+test('an off feature skill: v0.9.0 kept it in .agents/skills with a front matter line, now it is in .agents/skills-off, by the user’s own features.json', () => {
+  const make = (newText?: string) => {
+    const repo = tempDir();
+    const g = (...a: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.autocrlf=false', ...a]);
+    const put = (dir: string, files: Record<string, string>) => {
+      for (const [p, t] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true });
+        fs.writeFileSync(path.join(dir, p), t);
+      }
+    };
+    const features = (enabled: boolean) => `${JSON.stringify({ features: [{ id: 'calendar', enabled, files: ['.agents/skills/calendar/'] }] })}\n`;
+    const old = '---\nname: calendar\ndescription: 일정\ndisable-model-invocation: true\n---\n# 일정\n\n1. 넣는다\n가\n나\n다\n';
+    const now = newText ?? '---\nname: calendar\ndescription: 일정\n---\n# 일정\n\n1. 넣는다\n가\n나\n다\n2. 확인한다\n';
+    const v09 = { 'package.json': '{}\n', VERSION: 'v0.9.0\n', 'features.json': features(false), '.agents/skills/calendar/SKILL.md': old };
+    g('init', '-q');
+    put(repo, v09);
+    g('add', '-A');
+    g('commit', '-qm', 'v0.9.0');
+    g('tag', 'v0.9.0');
+    fs.rmSync(path.join(repo, '.agents', 'skills', 'calendar'), { recursive: true });
+    put(repo, { VERSION: 'v0.10.0\n', '.agents/skills-off/calendar/SKILL.md': now });
+    g('add', '-A');
+    g('commit', '-qm', 'v0.10.0');
+    g('tag', 'v0.10.0');
+    const script = path.join(PROJECT_ROOT, 'scripts', 'update.mjs');
+    const user = (files: Record<string, string>) => {
+      const dir = tempDir();
+      put(dir, { ...v09, ...files });
+      const run = (...a: string[]) => execFileSync(process.execPath, [script, ...a], { encoding: 'utf8', stdio: 'pipe' });
+      const work = /WORK=(.+)/.exec(run('backup', '--user', dir))![1].trim();
+      const out = run('apply', '--user', dir, '--repo', repo, '--base', 'v0.9.0', '--work', work);
+      const read = (p: string) => (fs.existsSync(path.join(dir, p)) ? fs.readFileSync(path.join(dir, p), 'utf8') : undefined);
+      return { dir, out, read, run, work };
+    };
+    return { user, features, old, now };
+  };
+  const { user, features, old, now } = make();
+
+  // Off and unchanged: the new copy at the off place, nothing left in .agents/skills.
+  const a = user({});
+  assert.equal(a.read('.agents/skills-off/calendar/SKILL.md'), now);
+  assert.equal(a.read('.agents/skills/calendar/SKILL.md'), undefined);
+  assert.ok(!fs.existsSync(path.join(a.dir, '.agents', 'skills', 'calendar')));
+  assert.match(a.out, /선택 기능 스킬 자리: .*\.agents\/skills\/calendar → \.agents\/skills-off\/calendar/);
+
+  // Off with the user's edit and a file of the user's: the folder moves whole, the edit is asked about at the off place.
+  const b = user({ '.agents/skills/calendar/SKILL.md': old.replace('1. 넣는다', '1. 넣는다(내 방식)'), '.agents/skills/calendar/references/mine.md': '내 메모\n' });
+  assert.equal(b.read('.agents/skills-off/calendar/references/mine.md'), '내 메모\n');
+  assert.match(b.out, /\.agents\/skills-off\/calendar\/SKILL\.md · [^\n]*깨끗이 합쳐짐/);
+  b.run('resolve', '--user', b.dir, '--work', b.work, '--file', '.agents/skills-off/calendar/SKILL.md', '--take', 'merge');
+  assert.equal(b.read('.agents/skills-off/calendar/SKILL.md'), '---\nname: calendar\ndescription: 일정\n---\n# 일정\n\n1. 넣는다(내 방식)\n가\n나\n다\n2. 확인한다\n');
+  assert.ok(!fs.existsSync(path.join(b.dir, '.agents', 'skills', 'calendar')));
+
+  // Turned on by the user (the line taken off, as the features skill said): it stays in .agents/skills and gets the new text.
+  const c = user({ 'features.json': features(true), '.agents/skills/calendar/SKILL.md': old.replace('disable-model-invocation: true\n', '') });
+  assert.equal(c.read('.agents/skills/calendar/SKILL.md'), now);
+  assert.ok(!fs.existsSync(path.join(c.dir, '.agents', 'skills-off')));
+
+  // 없으면 놓치는 실수: 새 판이 그 스킬을 옛 줄 말고는 안 바꾸면 비교가 '같음'·'사용자 것 그대로'로 보아 사용자 폴더에 옛 머리말 줄이 남는다.
+  const plain = make(old.replace('disable-model-invocation: true\n', ''));
+  const d = plain.user({});
+  assert.equal(d.read('.agents/skills-off/calendar/SKILL.md'), plain.now, 'unchanged: the line is gone');
+  assert.match(d.out, /옛 머리말 줄\(disable-model-invocation\)을 뺌: \.agents\/skills-off\/calendar\/SKILL\.md/);
+  const e = plain.user({ '.agents/skills/calendar/SKILL.md': old.replace('가\n', '가(내 것)\n') });
+  assert.equal(e.read('.agents/skills-off/calendar/SKILL.md'), plain.now.replace('가\n', '가(내 것)\n'), 'the user’s edit stays, the line goes');
+  // Turned on but the line left in: it stays in .agents/skills without the line.
+  const f = plain.user({ 'features.json': plain.features(true) });
+  assert.equal(f.read('.agents/skills/calendar/SKILL.md'), plain.now);
+  // A body line that only looks like it (after the front matter) is the user's text and stays.
+  const body = `${plain.now}disable-model-invocation: true\n`;
+  const h = plain.user({ 'features.json': plain.features(true), '.agents/skills/calendar/SKILL.md': body });
+  assert.equal(h.read('.agents/skills/calendar/SKILL.md'), body);
+});
+// 없으면 놓치는 실수: 기능 이름이 바뀐 버전으로 올리면 사용자가 켜 둔 기능(notify → phone-push 등)이 새 이름에서 꺼진 채가 되거나,
+// 기능 목록의 옛 칸 이름(tasks)이 남아 예약 작업을 못 찾거나, 이 비서 설정 파일(scripts/notify.local.json, secretary.db.setup.json,
+// 의미 검색 서버의 secretary.db.embedder*)이 옛 이름으로 남아 읽히지 않는다.
+test('renamed features keep what the user set, and this PC\'s renamed files follow (v0.10.0)', () => {
+  const user = tempDir();
+  const work = tempDir();
+  const entry = (id: string, enabled?: boolean) => `    {\n      "id": "${id}",\n      "description": "d",\n${enabled === undefined ? '' : `      "enabled": ${enabled},\n`}      "files": [],\n      "scheduledTasks": [{ "id": "backup", "name": "x" }]\n    }`;
+  const list = (...entries: string[]) => `{\n  "features": [\n${entries.join(',\n')}\n  ]\n}\n`;
+  fs.mkdirSync(path.join(work, 'files'), { recursive: true });
+  // The user had turned notify on and providers off (as shipped) before the update.
+  fs.writeFileSync(path.join(work, 'files', 'features.json'), list(entry('backup'), entry('notify', true), entry('providers', false)));
+  fs.writeFileSync(path.join(user, 'features.json'), list(entry('db-backup'), entry('phone-push', false), entry('external-providers', false)));
+  assert.deepEqual(carryFeatureStates(user, work), ['notify → phone-push: "enabled": true (사용자가 정해 둔 대로)']);
+  assert.equal(fs.readFileSync(path.join(user, 'features.json'), 'utf8'), list(entry('db-backup'), entry('phone-push', true), entry('external-providers', false)));
+  assert.deepEqual(carryFeatureStates(user, work), [], 'nothing left to carry');
+  // A features.json the user kept as it was: the old ids take the new names (the task id "backup" stays; the core
+  // feature update took its skill's name, secretary-update).
+  fs.writeFileSync(path.join(user, 'features.json'), list(entry('backup'), entry('notify', true), entry('update')));
+  assert.deepEqual(carryFeatureStates(user, work), ['기능 이름 backup → db-backup', '기능 이름 notify → phone-push', '기능 이름 update → secretary-update']);
+  assert.equal(fs.readFileSync(path.join(user, 'features.json'), 'utf8'), list(entry('db-backup'), entry('phone-push', true), entry('secretary-update')));
+  // ...with the old name of the scheduled tasks column too (tasks → scheduledTasks).
+  fs.writeFileSync(path.join(user, 'features.json'), list(entry('db-backup'), entry('notify', true)).replaceAll('"scheduledTasks"', '"tasks"'));
+  assert.deepEqual(carryFeatureStates(user, work), ['기능 이름 notify → phone-push', '기능 목록 칸 이름 tasks → scheduledTasks']);
+  assert.equal(fs.readFileSync(path.join(user, 'features.json'), 'utf8'), list(entry('db-backup'), entry('phone-push', true)));
+  // This PC's own files: renamed when only the old one is there.
+  fs.mkdirSync(path.join(user, 'scripts'));
+  fs.writeFileSync(path.join(user, 'scripts', 'notify.local.json'), '{"topic":"t"}');
+  fs.writeFileSync(path.join(user, 'scripts', 'guards.local.json'), '{}');
+  fs.writeFileSync(path.join(user, 'secretary.db.setup.json'), '{"skip":["notify"]}');
+  fs.writeFileSync(path.join(user, 'other.db.setup.json'), 'old');
+  fs.writeFileSync(path.join(user, 'other.db.setup-check.json'), 'new');
+  fs.writeFileSync(path.join(user, 'secretary.db.embedder-failures.log'), 'log');
+  assert.deepEqual(moveLocalFiles(user).sort(), [
+    'scripts/guards.local.json → scripts/mistake-guards.local.json',
+    'scripts/notify.local.json → scripts/phone-push.local.json',
+    'secretary.db.embedder-failures.log → secretary.db.semantic-search-server-failures.log',
+    'secretary.db.setup.json → secretary.db.setup-check.json',
+    '새 이름 파일이 이미 있어 옛 파일을 그대로 둠: other.db.setup.json (새 이름 other.db.setup-check.json)',
+  ]);
+  assert.equal(fs.readFileSync(path.join(user, 'scripts', 'phone-push.local.json'), 'utf8'), '{"topic":"t"}');
+  assert.equal(fs.readFileSync(path.join(user, 'secretary.db.setup-check.json'), 'utf8'), '{"skip":["notify"]}');
+  assert.equal(fs.readFileSync(path.join(user, 'other.db.setup-check.json'), 'utf8'), 'new');
+  // 없으면 놓치는 실수: 0.10.0으로 올린 뒤 따로 있던 이 비서 설정 파일(scripts/*.local.json)이 this-secretary.local.json에 안 들어가 끝 알림 등이 설정 없는 것처럼 돈다.
+  // Then the separate files go into this-secretary.local.json by this version's features.json (apply does both, in this order).
+  const merged = mergeThisSecretaryFiles(user, { features: readFeatures(PROJECT_ROOT) });
+  assert.deepEqual(merged.left, []);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(user, 'this-secretary.local.json'), 'utf8')), { 'phone-push': { topic: 't' } });
+  assert.ok(!fs.existsSync(path.join(user, 'scripts', 'phone-push.local.json')) && !fs.existsSync(path.join(user, 'scripts', 'mistake-guards.local.json')), 'the old files moved to backups/this-secretary-merge/');
+  assert.deepEqual(mergeThisSecretaryFiles(user, { features: readFeatures(PROJECT_ROOT) }).left, [], 'again: nothing more');
+  assert.deepEqual(Object.keys(FEATURE_ID_MOVES).sort(), ['account-handoff', 'backup', 'board', 'consolidate', 'guards', 'memory', 'notify', 'providers', 'update']);
 });

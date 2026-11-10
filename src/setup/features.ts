@@ -1,7 +1,7 @@
 /**
  * The optional features, listed in features.json at the project root: for each one its files, install
  * check items (setup/check-items.ts), prompt hook notices (hooks/prompt-notices.ts) and scheduled tasks
- * (scripts/tasks/install-tasks.ps1, which reads the same file, names included). A feature with "enabled": false keeps its files
+ * (scripts/scheduled/install-scheduled-tasks.ps1, which reads the same file, names included). A feature with "enabled": false keeps its files
  * but its checks, notices and tasks are skipped. Core features ("core": true) are always on and carry no
  * "enabled". Every check, notice and task belongs to exactly one feature, core or not (test/features.test.ts).
  *
@@ -11,7 +11,7 @@
 import path from 'node:path';
 import { PROJECT_ROOT } from '../core/config.ts';
 import { readJson, readJsonFile } from '../core/json-file.ts';
-import { readInstallId, taskNameWith } from './install-id.ts';
+import { readSecretaryId, taskNameWith } from './secretary-id.ts';
 
 export const FEATURES_FILE = 'features.json';
 
@@ -21,7 +21,7 @@ export interface Feature {
   /** Always on; such an entry has no `enabled`. */
   core?: boolean;
   enabled?: boolean;
-  /** Only matters on the original's PC (main PC, its own keys and helpers): its install check items say "원본 전용". */
+  /** Only matters on the original's PC (main PC, its own keys and server companions): its install check items say "원본 전용". */
   originalOnly?: boolean;
   /** Paths relative to the project root; a folder ends with '/'. */
   files: string[];
@@ -29,10 +29,34 @@ export interface Feature {
   checks: string[];
   /** Prompt hook notice names (hooks/prompt-notices.ts). */
   notices: string[];
-  /** Its Windows scheduled tasks: the scripts/tasks/install-tasks.ps1 -Task id and the name the task is registered under (with the install id after it). */
-  tasks: ScheduledTask[];
+  /** Its Windows scheduled tasks: the scripts/scheduled/install-scheduled-tasks.ps1 -Task id and the name the task is registered under (with the secretary id after it). */
+  scheduledTasks: ScheduledTask[];
   /** Where AGENTS.md has this feature's rules: text found there as is. */
   rules: string[];
+  /** Its section in this PC's settings file this-secretary.local.json and the separate files it came from (core/this-secretary.ts). */
+  thisSecretary?: ThisSecretaryColumn;
+}
+
+/** One file a this-secretary.local.json section came from: its path (from the secretary folder), and which of its keys go there (pick) or not (omit). */
+export type ThisSecretarySource =
+  | string
+  | {
+      file: string;
+      pick?: string[];
+      omit?: string[];
+      /** A shape change (core/this-secretary.ts TRANSFORMS): tailscale-device, tailscale-device-field (with field, as, hostFrom). */
+      transform?: string;
+      field?: string;
+      as?: string;
+      hostFrom?: string;
+    };
+
+/** features.json "thisSecretary": the feature's section and the separate files it was in before (until 2026-11-10). */
+export interface ThisSecretaryColumn {
+  section: string;
+  /** In the PC's shared file (all-secretaries.local.json), not this secretary's: every secretary on the PC uses the same value. */
+  shared?: boolean;
+  from?: ThisSecretarySource[];
 }
 
 export interface ScheduledTask {
@@ -40,11 +64,11 @@ export interface ScheduledTask {
   name: string;
 }
 
-export type FeatureItem = 'checks' | 'notices' | 'tasks';
+export type FeatureItem = 'checks' | 'notices' | 'scheduledTasks';
 
-/** The names of one kind a feature owns (for tasks, their ids). */
+/** The names of one kind a feature owns (for scheduled tasks, their ids). */
 export const itemNames = (f: Feature, kind: FeatureItem): string[] =>
-  kind === 'tasks' ? (f.tasks ?? []).map((t) => t.id) : (f[kind] ?? []);
+  kind === 'scheduledTasks' ? (f.scheduledTasks ?? []).map((t) => t.id) : (f[kind] ?? []);
 
 export const featuresPath = (root = PROJECT_ROOT) => path.join(root, FEATURES_FILE);
 
@@ -79,18 +103,18 @@ export function disabledItems(kind: FeatureItem, root = PROJECT_ROOT): Set<strin
 }
 
 /**
- * Scheduled task id → its name in features.json, without the install id: the name tasks were registered under before
+ * Scheduled task id → its name in features.json, without the secretary id: the name tasks were registered under before
  * the id (an old name to move from); empty without the file.
  */
 export function baseTaskNames(root = PROJECT_ROOT): Record<string, string> {
-  return Object.fromEntries((readFeatures(root) ?? []).flatMap((f) => f.tasks ?? []).map((t) => [t.id, t.name]));
+  return Object.fromEntries((readFeatures(root) ?? []).flatMap((f) => f.scheduledTasks ?? []).map((t) => [t.id, t.name]));
 }
 
 /**
- * Scheduled task id → the name it is registered under: the features.json name with root's install id, e.g.
- * 'Secretary Idle Jobs (A3F9)' (setup/install-id.ts; the name alone while root has no id yet). Empty without the file
+ * Scheduled task id → the name it is registered under: the features.json name with root's secretary id, e.g.
+ * 'Secretary Idle Jobs (A3F9)' (setup/secretary-id.ts; the name alone while root has no id yet). Empty without the file
  * (the install check then can't look the tasks up).
  */
-export function scheduledTaskNames(root = PROJECT_ROOT, id: string | null = readInstallId(root)): Record<string, string> {
+export function scheduledTaskNames(root = PROJECT_ROOT, id: string | null = readSecretaryId(root)): Record<string, string> {
   return Object.fromEntries(Object.entries(baseTaskNames(root)).map(([k, name]) => [k, taskNameWith(name, id)]));
 }

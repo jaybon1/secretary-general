@@ -18,7 +18,7 @@ test('duplicate check: a recent active memory close in meaning stops the save; s
     return { median: 0.3, hits: [old.id, recent.id, replaced.id, summary.id].map((id) => ({ id, sim: 0.9 })).concat([{ id: weak.id, sim: DUP_MIN_SIM - 0.01 }]) };
   };
   const r = await checkDuplicates(s, search, { content: ' 상황판은 쉬는 시간에 갱신한다 ', tags: ['비서', ' 상황판 '], supersedes: [replaced.id] });
-  assert.deepEqual(queries, ['상황판은 쉬는 시간에 갱신한다\n비서 상황판'], 'same text the helper embeds memories with');
+  assert.deepEqual(queries, ['상황판은 쉬는 시간에 갱신한다\n비서 상황판'], 'same text the server embeds memories with');
   assert.deepEqual(r.similar.map((x) => x.memory.id), [recent.id]);
   assert.equal(r.maxId, weak.id);
   assert.match(duplicateMessage(r.similar, (iso) => iso.slice(0, 10)), new RegExp(`#${recent.id} decision [^\\n]*\\(점수 0\\.900\\): 2026-11-05 상황판은[\\s\\S]*supersedes[\\s\\S]*allow_similar: true`));

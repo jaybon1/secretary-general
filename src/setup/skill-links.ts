@@ -23,7 +23,7 @@ export const SKILLS_DIR = '.agents/skills';
 /** Where Claude Code reads skills: one link to SKILLS_DIR. */
 export const CLAUDE_SKILLS_DIR = '.claude/skills';
 /** The old place of the real skill folders (the secretary up to v8, workspaces before): moved into SKILLS_DIR. */
-export const OLD_SKILLS_DIR = 'skills';
+export const OLD_SKILLS_DIR = 'skills'; // legacy-name: old-skills-layout
 /** The folders the CLIs read skills from: Claude Code, then Codex and Antigravity. */
 export const SKILL_LINK_DIRS = [CLAUDE_SKILLS_DIR, SKILLS_DIR] as const;
 /**
@@ -38,7 +38,7 @@ export const SKILL_GITIGNORE_LINES = [
   `/${SKILLS_DIR}.json`,
 ];
 /** Lines of the old layout's .gitignore block, taken out when the new lines go in. */
-const OLD_GITIGNORE_LINES = [
+const OLD_GITIGNORE_LINES = [ // legacy-name: old-skills-layout
   '# 공통 스킬(workspaces/_skills)로 가는 연결(비서가 common-skills.json대로 만든다, PC마다 다르다)',
   '.claude/skills/common-*',
   '.agents/skills/common-*',

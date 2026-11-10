@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { continuityContext } from '../src/board/board-notice.ts';
+import { continuityContext } from '../src/session-continuity/situation-board-notice.ts';
 import { reviewNote } from '../src/mcp/delegate-tools.ts';
 import { SCHEMA_VERSION } from '../src/store/schema.ts';
 import { REVIEW_REMIND_DAYS, staleReviewLines } from '../src/workspace/review-check.ts';

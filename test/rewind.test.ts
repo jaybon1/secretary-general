@@ -164,7 +164,7 @@ test('dry run and keep-memories', () => {
   const doomed = s.remember({ kind: 'fact', content: '버려진 턴의 기억' }).id;
   const { kept, old } = rewoundTurn(doomed);
   const file = write([...kept, ...old, marker('p2', 'a1'), prompt('p2b', 's1', '다시'), answer('a2b', 'p2b', '새 답')]);
-  // Logged by hand without the cleanup, as an older version would have.
+  // Logged directly by the test without the cleanup, as an older version would have.
   s.appendLog(['p1', 'a1', 'p2', 'a2', 'p2b'].map((u) => ({ session_id: 's1', message_uuid: u, role: u.startsWith('p') ? 'user' : 'assistant', content: u, created_at: at() })));
 
   const plan = cleanRewound(s, file, { dryRun: true });

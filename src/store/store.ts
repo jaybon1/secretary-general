@@ -10,10 +10,11 @@ import type { LogEntry, LogRowInfo } from './conversation-log.ts';
 import * as memoryDb from './memories.ts';
 import type { Memory, MemoryKind, NewMemory, Profile } from './memories.ts';
 import * as metaDb from './meta-usage.ts';
+import * as titleDb from './user-title.ts';
 import * as workDb from './workspaces-tasks.ts';
 import type { Task, TaskStatus, TaskWithWorkspace, Workspace, WorkspaceKind } from './workspaces-tasks.ts';
-import * as guardDb from './guards.ts';
-import type { GuardHit, Mistake, MistakeCause, NewMistake, TurnTools } from './guards.ts';
+import * as guardDb from './mistake-guards.ts';
+import type { GuardHit, Mistake, MistakeCause, NewMistake, TurnTools } from './mistake-guards.ts';
 
 export {
   MEMORY_KINDS,
@@ -37,7 +38,7 @@ export {
   type MistakeFinder,
   type NewMistake,
   type TurnTools,
-} from './guards.ts';
+} from './mistake-guards.ts';
 export {
   TASK_STATUSES,
   WORKSPACE_KINDS,
@@ -290,6 +291,22 @@ export class Store {
     return workDb.reviewWaiting(this.db, before);
   }
 
+  // ---- the user's title (store/user-title.ts) --------------------------------------
+
+  /** The name the user is called by, kept in the DB (meta user_title), or null. */
+  userTitle(): string | null {
+    return titleDb.getUserTitle(this.db);
+  }
+
+  /** Sets it (the trailing 님 taken off); 사용자 itself clears it. Returns what is kept. */
+  setUserTitle(title: string): string | null {
+    return titleDb.setUserTitle(this.db, title);
+  }
+
+  clearUserTitle(): void {
+    titleDb.clearUserTitle(this.db);
+  }
+
   // ---- meta / usage (store/meta-usage.ts) ----------------------------------------
 
   getMeta(key: string): string | undefined {
@@ -343,7 +360,7 @@ export class Store {
     return metaDb.injectedIds(this.db, sessionId);
   }
 
-  // ---- mistake guards (store/guards.ts) -----------------------------------------
+  // ---- mistake guards (store/mistake-guards.ts) -----------------------------------------
 
   /** One turn's tool names and check results (the Stop hook, when the turn really ends). */
   saveTurnTools(t: { sessionId: string; turnUuid: string; tools: string[]; guard: GuardHit[] }): void {

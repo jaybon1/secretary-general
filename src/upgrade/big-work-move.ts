@@ -2,7 +2,7 @@
  * One-off move of the profile's '큰 일 상태' section onto the big-work board (cli big-work-from-profile), for an
  * update from v7: before v8 the big works were a section of the core profile. Kept only in this release
  * (the original secretary moved its own profile once and dropped this code); the update skill runs it.
- * Preview writes a plan file the secretary checks and fixes by hand (each line's state is a judgement);
+ * Preview writes a plan file the secretary checks and fixes itself (each line's state is a judgement);
  * --apply puts the plan on the board and saves the profile without the section as a new version.
  */
 import { BIG_WORK_LIMITS, BIG_WORK_STATES, renderBigWork, type BigWorkState } from '../store/big-work.ts';
@@ -77,7 +77,7 @@ export function findSection(profile: string): { start: number; end: number } | n
  */
 export function planFromProfile(profile: string, version: number): MovePlan {
   const sec = findSection(profile);
-  if (!sec) throw new Error("프로필에서 '큰 일' 칸을 찾지 못했어요(제목 줄에 '큰 일'이 든 칸). 계획 파일을 손으로 만들어 --apply로 넣으세요.");
+  if (!sec) throw new Error("프로필에서 '큰 일' 칸을 찾지 못했어요(제목 줄에 '큰 일'이 든 칸). 비서가 계획 파일을 직접 만들어 --apply로 넣으세요.");
   const lines = profile.split('\n');
   const section = lines.slice(sec.start, sec.end);
   const rows: PlanRow[] = [];

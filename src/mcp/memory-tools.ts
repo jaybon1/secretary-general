@@ -5,11 +5,11 @@
 import { z } from 'zod';
 import { BUDGET } from '../core/config.ts';
 import { checkDuplicates, duplicateMessage } from '../memory/duplicate-check.ts';
-import { clip, fail, formatLog, logHead, ok, type ToolContext } from './common.ts';
+import { clip, fail, formatLog, logHead, ok, type ToolContext } from './tool-common.ts';
 import { formatMemory, recall } from '../memory/recall.ts';
-import { semanticClient } from '../semantic/client.ts';
+import { semanticClient } from '../semantic-search/client.ts';
 import { MEMORY_KINDS, MemoryRaceError, SUMMARY_MIN_MEMORIES, SUMMARY_SKIP_TOPICS } from '../store/store.ts';
-import { estimateTokens } from '../core/tokens.ts';
+import { estimateTokens } from '../core/token-estimate.ts';
 import { formatLocal } from '../core/kst-time.ts';
 
 /** /consolidate reads every message whole; one longer than this is handed out alone, a part per call. */
@@ -46,7 +46,7 @@ export function registerMemoryTools({ server, store, readonly: READONLY }: ToolC
         try {
           // After two races in a row, save anyway rather than loop.
           const r = store.remember({ ...input, expectMaxId: dup && !dup.skipped && attempt < 3 ? dup.maxId : undefined });
-          const note = dup?.skipped ? ' (의미 검색 도우미가 응답하지 않아 중복 확인은 못 함)' : '';
+          const note = dup?.skipped ? ' (의미 검색 서버가 응답하지 않아 중복 확인은 못 함)' : '';
           return ok(`기억 #${r.id} 저장${r.superseded.length ? ` · 무효 처리: ${r.superseded.map((i) => `#${i}`).join(', ')}` : ''}${note}`);
         } catch (err) {
           if (!(err instanceof MemoryRaceError)) throw err;
@@ -81,7 +81,7 @@ export function registerMemoryTools({ server, store, readonly: READONLY }: ToolC
       }
       if (!query) return fail('query나 ids 중 하나가 필요해요.');
       const budget = budget_tokens ?? BUDGET.recall;
-      // An explicit recall can wait a little longer for the semantic helper than the per-prompt hook.
+      // An explicit recall can wait a little longer for the semantic-search server than the per-prompt hook.
       const r = await recall(store, query, { budgetTokens: budget, includeInvalid: include_invalid, semantic: semanticClient(5000) });
       // Only explicit recalls count as use; auto-injection would let a memory keep promoting itself.
       if (!READONLY) {

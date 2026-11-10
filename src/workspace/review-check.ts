@@ -1,6 +1,6 @@
 /**
  * Tasks waiting for the user's own look at the result (status 'review', the plan's "검수 대기: 예"): after a few days they
- * are asked about again, on a new session's board (board/board-notice.ts) and at memory consolidation ("기억 정리 확인",
+ * are asked about again, on a new session's board (session-continuity/situation-board-notice.ts) and at memory consolidation ("기억 정리 확인",
  * memory/consolidate-notice.ts; the /consolidate skill reads list_tasks). Waiting does not hold up the workspace: its
  * next task may be handed over meanwhile.
  */

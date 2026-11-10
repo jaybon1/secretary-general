@@ -4,6 +4,7 @@
  */
 import fs from 'node:fs';
 import type { Store } from '../store/store.ts';
+import { TAG } from '../core/names.ts';
 
 export const NUDGE_START = 150_000;
 export const NUDGE_STEP = 50_000;
@@ -49,5 +50,5 @@ export function contextNudge(store: Store, sessionId: string, tokens: number): s
   const step = Math.floor((tokens - NUDGE_START) / NUDGE_STEP);
   if (!store.markOnce(NUDGED_PREFIX + sessionId, String(step), (last) => Number(last) >= step)) return '';
   const man = Math.round(tokens / 10_000);
-  return `<secretary-context>이 세션 맥락이 약 ${man}만 토큰이다. 답 끝("다음 행동" 위)에 "대화가 약 ${man}만 토큰 쌓였어요. 주제가 바뀌면 /clear 하세요(대화는 DB에 남아요)." 한 줄을 붙인다.</secretary-context>`;
+  return `<${TAG.contextSize}>이 세션 맥락이 약 ${man}만 토큰이다. 답 끝("다음 행동" 위)에 "대화가 약 ${man}만 토큰 쌓였어요. 주제가 바뀌면 /clear 하세요(대화는 DB에 남아요)." 한 줄을 붙인다.</${TAG.contextSize}>`;
 }

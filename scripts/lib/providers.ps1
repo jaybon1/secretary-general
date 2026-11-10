@@ -1,5 +1,5 @@
 ﻿# 다른 스크립트가 dot-source 해서 쓰는 공용 함수: 업무 세션·작업을 어느 공급자로 돌릴지 고른다(common.ps1 다음에 부른다).
-# (업무 세션 다루기는 worker-lib.ps1, 기억 MCP 붙이기는 memory-mcp.ps1, 다른 회사 CLI 실행은 run-job-other.ps1)
+# (업무 세션 다루기는 worker-lib.ps1, 기억 MCP 붙이기는 memory-mcp.ps1, 다른 회사 CLI 실행은 run-job-other-cli.ps1)
 # 공급자 목록과 기본값은 scripts/lib/providers.json(비밀값 없음). 키는 저장소 밖 키 폴더의 <공급자이름>.env에
 # KEY=VALUE 줄로 둔다. 키 폴더: SECRETARY_KEYS_DIR, 없으면 %USERPROFILE%\.secretary\keys (Get-SecretaryHome, common.ps1을 먼저 dot-source 한다)
 # 비서 세션 자신은 언제나 구독으로 돈다. 이 함수는 비서가 따로 띄우는 claude 프로세스에만 쓴다.
@@ -23,13 +23,13 @@ function Set-KeyEnv([string]$Name) {
   }
 }
 
-# 'auto'(providers.json의 default나 -Provider auto, 기능 account-handoff "다중 구독"): 넘길 구독(계정 a 'subscription' 밖의 claude-subscription) 중
-# 지금 가장 여유 있는 것. 고르는 규칙은 질문 훅의 <secretary-usage> 줄과 같은 코드(node src/cli.ts handoff-account, src/usage/handoff-level.ts)다.
+# 'auto'(providers.json의 default나 -Provider auto, 기능 multi-subscription "다중 구독"): 넘길 구독(계정 a 'subscription' 밖의 claude-subscription) 중
+# 지금 가장 여유 있는 것. 고르는 규칙은 질문 훅의 <secretary-usage> 줄과 같은 코드(node src/cli.ts subscription-pick, src/usage/subscription-routing.ts)다.
 # 그 명령이 실패하면 넘길 구독 중 providers.json에서 첫째, 없으면 계정 a.
 function Resolve-AutoProvider($config) {
   $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
   $picked = $null
-  try { $picked = "$(& node --no-warnings (Join-Path $root 'src\cli.ts') handoff-account --root $root 2>$null)".Trim() } catch {}
+  try { $picked = "$(& node --no-warnings (Join-Path $root 'src\cli.ts') subscription-pick --root $root 2>$null)".Trim() } catch {}
   if ($picked -and $picked -ne 'auto' -and $config.providers.$picked) { return $picked }
   $first = $config.providers.PSObject.Properties | Where-Object { $_.Value.type -eq 'claude-subscription' -and $_.Name -ne 'subscription' } | Select-Object -First 1
   if ($first) { $first.Name } else { 'subscription' }
@@ -42,7 +42,7 @@ function Use-Provider([string]$Name) {
   if ($Name -eq 'auto') { $Name = Resolve-AutoProvider $config }
   $p = $config.providers.$Name
   if (-not $p) { throw "공급자 설정이 없어요: $Name (scripts/lib/providers.json)" }
-  # 사용량 기록(~/.claude/usage/subscription-<계정>.json, Get-UsageKey)을 어느 공급자 것으로 볼지 상태줄·정지 훅에 알려 준다.
+  # 사용량 기록(~/.secretary/usage/subscription-<계정>.json, Get-UsageKey)을 어느 공급자 것으로 볼지 상태줄·정지 훅에 알려 준다.
   $env:SECRETARY_PROVIDER = $Name
   switch ($p.type) {
     # 두 번째부터의 구독 계정(b, c, …)은 키 폴더의 <공급자이름>.env에 CLAUDE_CONFIG_DIR=<그 계정으로 /login한 설정 폴더>를 둔다. 없으면 이 PC 기본 로그인.
@@ -97,14 +97,14 @@ function Get-AccountConfigDirs {
   $dirs
 }
 
-# 사용량 기록 이름(~/.claude/usage/<이름>.json, <이름>.refresh, guard-override-<이름>.json): Claude 구독 공급자는 "subscription-<로그인 계정>"
+# 사용량 기록 이름(~/.secretary/usage/<이름>.json, <이름>.refresh, usage-guard-override-<이름>.json, 2026-11-09 전에는 ~/.claude/usage와 guard-override-<이름>.json): Claude 구독 공급자는 "subscription-<로그인 계정>"
 # (로그인 폴더 .claude.json의 oauthAccount.emailAddress에서 @ 앞, 예: subscription-kim2), 계정을 못 읽거나 계정이 없는 공급자는 공급자 이름.
 # 공급자 이름(subscription, subscription-b 등)은 넣지 않는다: 계정이 같으면 같은 파일이다.
 # 한 PC의 두 비서가 다른 계정으로 로그인해도 서로의 사용량·정지 해제를 읽거나 덮어쓰지 않게 한다.
-# TS 쪽 짝(같은 규칙): src/usage/files.ts usageKey, src/core/provider-accounts.ts providerLoginFile·loginAccount.
+# TS 쪽 짝(같은 규칙): src/usage/usage-files.ts usageKey, src/core/provider-accounts.ts providerLoginFile·loginAccount.
 
 # 공급자의 로그인 파일(.claude.json). 구독 공급자만: 키 파일의 CLAUDE_CONFIG_DIR, 없으면 지금 프로세스가 그 공급자로 돌 때(SECRETARY_PROVIDER)
-# 지금 CLAUDE_CONFIG_DIR, 없으면 기본 로그인(사용자 폴더, 시험은 SECRETARY_LOGIN_HOME으로 임시 폴더). Use-Provider가 띄우는 것과 같은 폴더다.
+# 지금 CLAUDE_CONFIG_DIR, 없으면 기본 로그인(사용자 폴더, 시험은 SECRETARY_TEST_LOGIN_HOME으로 임시 폴더). Use-Provider가 띄우는 것과 같은 폴더다.
 # -Clean은 부른 쪽 환경(CLAUDE_CONFIG_DIR·SECRETARY_PROVIDER)을 보지 않는다: Clear-HostClaudeEnv + Use-Provider $Name 뒤에 읽는 것과 같다
 # (키 파일의 CLAUDE_CONFIG_DIR, 없으면 기본 로그인). 다른 공급자들의 지금 이름을 셀 때 쓴다(Remove-LegacyUsageFiles).
 function Get-ProviderLoginFile([string]$Name, [switch]$Clean) {
@@ -120,7 +120,7 @@ function Get-ProviderLoginFile([string]$Name, [switch]$Clean) {
   $current = if ($env:SECRETARY_PROVIDER) { $env:SECRETARY_PROVIDER } else { 'subscription' }
   if (-not $dir -and -not $Clean -and $current -eq $Name -and $env:CLAUDE_CONFIG_DIR) { $dir = $env:CLAUDE_CONFIG_DIR }
   if ($dir) { return Join-Path $dir '.claude.json' }
-  $loginHome = if ($env:SECRETARY_LOGIN_HOME) { $env:SECRETARY_LOGIN_HOME } else { $env:USERPROFILE }
+  $loginHome = if ($env:SECRETARY_TEST_LOGIN_HOME) { $env:SECRETARY_TEST_LOGIN_HOME } else { $env:USERPROFILE }
   Join-Path $loginHome '.claude.json'
 }
 
@@ -147,8 +147,8 @@ function Get-UsageKey([string]$Name, [switch]$Clean) {
 function Get-UsageFile([string]$Name, [string]$Ext = 'json') { Join-Path (Get-UsageDir) "$(Get-UsageKey $Name).$Ext" }
 
 # 지금 이름($Key)에서 거슬러 본 옛 이름: 계정 칸이 없던 "<공급자>"와, 계정 앞에 공급자 이름이 붙던 "<공급자>-<계정>"(예: subscription-b-kim2).
-# 지금 이름이 공급자 이름 그대로면(계정을 못 읽음) 없다. TS 쪽 짝: src/usage/files.ts legacyUsageKeys.
-function Get-LegacyUsageKeys([string]$Name, [string]$Key) {
+# 지금 이름이 공급자 이름 그대로면(계정을 못 읽음) 없다. TS 쪽 짝: src/usage/usage-files.ts legacyUsageKeys.
+function Get-LegacyUsageKeys([string]$Name, [string]$Key) { # legacy-name: usage-key-no-account
   $plain = $Name -replace '[^A-Za-z0-9_.-]', '_'
   if (-not $Key -or $Key -eq $plain -or -not $Key.StartsWith('subscription-')) { return @() }
   @($plain, "$plain-$($Key.Substring('subscription-'.Length))") | Select-Object -Unique | Where-Object { $_ -ne $Key }
@@ -156,24 +156,24 @@ function Get-LegacyUsageKeys([string]$Name, [string]$Key) {
 
 # 계정 이름으로 쓴 바로 뒤, 옛 이름(Get-LegacyUsageKeys)의 .json·.refresh를 지운다. 어떤 공급자의 지금 이름과 같은 이름은 지우지 않는다
 # (계정 이름이 b면 subscription의 새 이름 subscription-b가 공급자 subscription-b의 옛 이름과 같다). 옛 "<공급자>-<계정>" 정지 해제
-# (guard-override-<옛 이름>.json)는 같은 계정이므로 새 이름에 없을 때 옮기고, 그 밖의 옛 해제는 지운다.
+# (usage-guard-override-<옛 이름>.json)는 같은 계정이므로 새 이름에 없을 때 옮기고, 그 밖의 옛 해제는 지운다.
 # 지금 이름 목록은 공급자마다 그 공급자 환경으로 깨끗이 센다(Get-UsageKey -Clean, usage-query.ps1이 조회하는 환경과 같다): 부른 쪽에
 # CLAUDE_CONFIG_DIR가 남아 있어도 다른 공급자의 실제 계정 이름을 옛 이름으로 잘못 보고 지우지 않게.
-# TS 쪽 짝: src/usage/files.ts dropLegacyUsageFiles(상태줄이 쓴 뒤 부른다).
+# TS 쪽 짝: src/usage/usage-files.ts dropLegacyUsageFiles(상태줄이 쓴 뒤 부른다).
 function Remove-LegacyUsageFiles([string]$Name, [string]$Key) {
   $old = @(Get-LegacyUsageKeys $Name $Key)
   $dir = Get-UsageDir
-  $found = $old | Where-Object { $k = $_; @("$k.json", "$k.refresh", "guard-override-$k.json") | Where-Object { Test-Path -LiteralPath (Join-Path $dir $_) } }
+  $found = $old | Where-Object { $k = $_; @("$k.json", "$k.refresh", "usage-guard-override-$k.json") | Where-Object { Test-Path -LiteralPath (Join-Path $dir $_) } }
   if (-not $found) { return }
   $current = @((Get-ProviderConfig).providers.PSObject.Properties | ForEach-Object { Get-UsageKey $_.Name -Clean })
   $plain = $Name -replace '[^A-Za-z0-9_.-]', '_'
-  $lift = Join-Path $dir "guard-override-$Key.json"
+  $lift = Join-Path $dir "usage-guard-override-$Key.json"
   foreach ($oldKey in $old) {
     if ($current -contains $oldKey) { continue }
     foreach ($ext in 'json', 'refresh') {
       Remove-Item -LiteralPath (Join-Path $dir "$oldKey.$ext") -Force -ErrorAction SilentlyContinue
     }
-    $oldLift = Join-Path $dir "guard-override-$oldKey.json"
+    $oldLift = Join-Path $dir "usage-guard-override-$oldKey.json"
     if (-not (Test-Path -LiteralPath $oldLift)) { continue }
     if ($oldKey -ne $plain -and -not (Test-Path -LiteralPath $lift)) { Move-Item -LiteralPath $oldLift $lift -ErrorAction SilentlyContinue }
     else { Remove-Item -LiteralPath $oldLift -Force -ErrorAction SilentlyContinue }

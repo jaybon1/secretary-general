@@ -13,7 +13,7 @@ import {
   renderCharter,
   type TaskSpec,
   type WorkspaceSpec,
-} from '../src/workspace/folders.ts';
+} from '../src/workspace/workspace-create.ts';
 import { tempDir, tempStore, testStore } from './helpers.ts';
 
 const NOW = '2026-10-20T15:30:00Z'; // 2026-10-21 00:30 KST
@@ -44,7 +44,7 @@ test('a team workspace gets a dated folder, a charter, role files and an output 
   const parent = tempDir();
   const ws = createWorkspaceFolder(team({ parentDir: parent }), NOW);
   assert.equal(ws.folder, path.join(parent, 'web-team-20261021'));
-  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.claude/agents/designer.md', '.claude/agents/developer.md', 'notes/history.md', 'notes/history/.gitkeep', 'MEMORY.md', 'notes/pending/.gitkeep', '.gitignore', 'secretary.json']);
+  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.claude/agents/designer.md', '.claude/agents/developer.md', 'notes/history.md', 'notes/history/.gitkeep', 'MEMORY.md', 'notes/pending/.gitkeep', '.gitignore', 'secretary-link.local.json']);
   assert.ok(fs.existsSync(path.join(ws.folder, '.git')), 'each workspace is a local git repo');
   assert.match(fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8'), /git commit -m/, 'workers commit once per task');
   assert.ok(fs.statSync(path.join(ws.folder, 'output')).isDirectory());
@@ -76,7 +76,7 @@ test('a team workspace gets a dated folder, a charter, role files and an output 
 test('the quick folder has a fixed name and no team', () => {
   const ws = createWorkspaceFolder({ ...QUICK_SPEC, parentDir: tempDir() }, NOW);
   assert.equal(path.basename(ws.folder), 'quick-outputs');
-  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.gitignore', 'secretary.json'], 'quick tasks are unrelated, so no shared history');
+  assert.deepEqual(ws.files, ['AGENTS.md', 'CLAUDE.md', '.gitignore', 'secretary-link.local.json'], 'quick tasks are unrelated, so no shared history');
   const charter = fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8');
   assert.doesNotMatch(charter, /history\.md|notes\/history|스킬과 기억|notes\/pending|고친 스킬/, 'no learning files in the shared quick folder');
   assert.match(charter, /_sandbox/, 'quick tasks keep test folders out too');
@@ -88,7 +88,7 @@ test('the quick folder has a fixed name and no team', () => {
 test('a non-quick workspace keeps what it learns in skills, MEMORY.md and pending proposals', () => {
   const ws = createWorkspaceFolder({ kind: 'solo', name: 'insta', title: '인스타 계정', purpose: '게시물 제작', parentDir: tempDir() }, NOW);
   assert.ok(fs.statSync(path.join(ws.folder, 'notes', 'pending')).isDirectory());
-  // Skills go in .agents/skills (its .claude/skills link is made when the secretary writes secretary.json), listed by the CLI, not in AGENTS.md.
+  // Skills go in .agents/skills (its .claude/skills link is made when the secretary writes secretary-link.local.json), listed by the CLI, not in AGENTS.md.
   assert.ok(fs.lstatSync(path.join(ws.folder, '.claude', 'skills')).isSymbolicLink());
   assert.match(fs.readFileSync(path.join(ws.folder, '.gitignore'), 'utf8'), /^\/\.claude\/skills$/m);
   // 없으면 놓치는 실수: 새 공간의 기록(git)에 큰 영상·소리 파일이 들어가 공간 폴더와 백업이 커진다.

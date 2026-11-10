@@ -17,12 +17,13 @@
  * 질문의 <secretary-rewind> 알림으로 한 번 알린다. Stop 훅(ingestTranscript)과 질문 훅(기억 주입보다 먼저)에서 돈다.
  */
 import fs from 'node:fs';
-import { boardReflects } from '../board/situation-board.ts';
-import { dropQuestionsFrom } from '../board/open-questions.ts';
+import { boardReflects } from '../session-continuity/situation-board.ts';
+import { dropQuestionsFrom } from '../session-continuity/open-questions.ts';
 import { parseTranscriptLine } from './ingest-transcript.ts';
 import { deleteLogRows } from './purge.ts';
 import type { LogRowInfo, Store } from '../store/store.ts';
 import { nowIso } from '../core/kst-time.ts';
+import { TAG } from '../core/names.ts';
 
 export const REWIND_REASON = '되감기로 버려진 대화에서 저장됨';
 const DONE_PREFIX = 'rewind_cut:';
@@ -213,7 +214,7 @@ export interface RewindResult extends RewindPlan {
  * Finds abandoned branches in a transcript and removes them from the DB the way "비서 대화 삭제" does (log/purge.ts
  * deleteLogRows): rows copied to the quarantine, deleted and blocked, file traces cleared, the board and open
  * questions that came from them dropped, and the memories saved in them invalidated (once per branch: a branch
- * already handled is not forgotten again, so a memory brought back by hand stays).
+ * already handled is not forgotten again, so a memory the secretary brought back directly stays).
  * dryRun only reports; keepMemories deletes the rows but leaves the memories as they are.
  */
 export function cleanRewound(store: Store, transcriptPath: string, opts: { dryRun?: boolean; keepMemories?: boolean } = {}): RewindResult {
@@ -268,5 +269,5 @@ export function rewindNotice(store: Store, transcriptPath?: string): string {
   if (!pending?.length) return '';
   store.setJson(NOTICE_KEY, []);
   const ids = pending.map((i) => `#${i}`).join(', ');
-  return `<secretary-rewind>되감기로 버려진 대화에서 저장된 기억 ${ids}를 무효 처리했다(그 대화 기록은 지웠다). 답 끝("다음 행동" 위)에 "되감기로 버려진 대화의 기억 ${ids}를 무효 처리했어요." 한 줄을 붙인다. 내용은 적지 않는다.</secretary-rewind>`;
+  return `<${TAG.rewind}>되감기로 버려진 대화에서 저장된 기억 ${ids}를 무효 처리했다(그 대화 기록은 지웠다). 답 끝("다음 행동" 위)에 "되감기로 버려진 대화의 기억 ${ids}를 무효 처리했어요." 한 줄을 붙인다. 내용은 적지 않는다.</${TAG.rewind}>`;
 }

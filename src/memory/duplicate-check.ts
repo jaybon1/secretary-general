@@ -8,11 +8,11 @@
  * therefore only stops the first attempt and shows the similar memories; the writer then skips,
  * supersedes, or saves anyway with allow_similar.
  *
- * Race: the check and the insert are separate steps (the meaning search runs in the helper
+ * Race: the check and the insert are separate steps (the meaning search runs in the server
  * process). The caller passes the highest memory id it checked against as expectMaxId; the
  * insert transaction refuses if a newer memory exists, and the caller checks again.
  */
-import type { SemanticSearch } from '../semantic/client.ts';
+import type { SemanticSearch } from '../semantic-search/client.ts';
 import { normalizeTags, type Memory, type Store } from '../store/store.ts';
 
 export const DUP_MIN_SIM = 0.85;
@@ -24,7 +24,7 @@ export interface DuplicateCheck {
   /** Highest memory id when the check started: the expectMaxId for the insert. */
   maxId: number;
   similar: Array<{ memory: Memory; sim: number }>;
-  /** The meaning-search helper did not answer; nothing was compared. */
+  /** The semantic-search server did not answer; nothing was compared. */
   skipped: boolean;
 }
 
@@ -34,10 +34,10 @@ export async function checkDuplicates(
   input: { content: string; tags?: string[]; supersedes?: number[] },
   now = Date.now(),
 ): Promise<DuplicateCheck> {
-  // Read before the search: the helper backfills vectors for everything saved up to that moment.
+  // Read before the search: the server backfills vectors for everything saved up to that moment.
   const maxId = store.maxMemoryId();
   const tags = normalizeTags(input.tags);
-  // Same text the helper embeds memories with (content, then tags on the next line).
+  // Same text the server embeds memories with (content, then tags on the next line).
   const hits = await search(tags ? `${input.content.trim()}\n${tags}` : input.content.trim(), { limit: SEARCH_LIMIT });
   if (!hits) return { maxId, similar: [], skipped: true };
   const replaced = new Set(input.supersedes ?? []);

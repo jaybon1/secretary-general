@@ -1,14 +1,14 @@
-﻿# 구독 공급자의 사용량을 토큰 없이 조회해 공급자·계정별 파일(~/.claude/usage/subscription-<계정>.json, 이름 규칙은 providers.ps1 Get-UsageKey)에
+﻿# 구독 공급자의 사용량을 토큰 없이 조회해 공급자·계정별 파일(~/.secretary/usage/subscription-<계정>.json, 이름 규칙은 providers.ps1 Get-UsageKey)에
 # 저장하고 한 줄로 보여 준다. 쓴 바로 뒤 옛 이름(<공급자>.json·<공급자>-<계정>.json과 .refresh)은 지운다(Remove-LegacyUsageFiles).
 # claude -p "/usage"는 모델을 부르지 않는다(토큰 0). 빈 폴더에서 MCP 없이 돌려 다른 설정이 끼지 않게 한다.
 # agy(antigravity)도 /usage로 토큰 없이 조회한다. 나머지는 무료 조회 명령이 없어 건너뛴다(Copilot의 /usage는 -p에서
 # 일반 질문으로 처리돼 크레딧을 쓰고, Bedrock은 AWS CLI가 있어야 조회된다).
 # 어떻게 조회할지는 providers.json의 공급자마다 "usage" 칸이 정한다: "claude-usage"(구독 /usage), "agy"(Antigravity),
-# 없거나 "none"이면 조회 안 됨(src/usage/providers.ts). 공급자가 늘면 그 칸만 채운다.
+# 없거나 "none"이면 조회 안 됨(src/usage/provider-usage.ts). 공급자가 늘면 그 칸만 채운다.
 # 기능 usage-poll(비서 서버와 같이 뜨는 조회기, src/usage/usage-poller.ts)이 설정에서 고른 공급자를 5분마다 이 스크립트로 조회한다.
 # usage-guard.mjs도 기록이 5분 넘게 오래되면 이 스크립트를 몰래 띄워 갱신한다(대시보드가 꺼졌을 때의 예비).
 # 사용량을 못 읽으면(/usage가 사용량을 주지 않는 API 키 로그인, claude 없음, 시간 초과) <같은 이름>.fail에 실패 횟수를 적고, 읽으면 지운다.
-# 정지 훅과 조회기는 그 횟수만큼 다음 조회를 미룬다(5분부터 두 배씩 최대 6시간, src/usage/files.ts failureWait).
+# 정지 훅과 조회기는 그 횟수만큼 다음 조회를 미룬다(5분부터 두 배씩 최대 6시간, src/usage/usage-files.ts failureWait).
 # 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/usage/usage-query.ps1 [-Provider <이름>]
 #     -Provider를 안 주면 providers.json에서 조회할 수 있는 공급자를 모두 조회한다.
 param([string]$Provider)
@@ -32,7 +32,7 @@ $claudeError = $null
 try { $claude = Get-ClaudeExe } catch { $claude = $null; $claudeError = "$_" }
 $kst = Get-KstZone
 
-# 실패 기록(<이름>.fail): { at, count, reason }. count는 잇따른 실패 횟수. TS 쪽 짝: src/usage/files.ts recordFailure·failureWait.
+# 실패 기록(<이름>.fail): { at, count, reason }. count는 잇따른 실패 횟수. TS 쪽 짝: src/usage/usage-files.ts recordFailure·failureWait.
 function Save-UsageFailure([string]$Key, [string]$Reason) {
   $file = Join-Path $outDir "$Key.fail"
   $count = 0

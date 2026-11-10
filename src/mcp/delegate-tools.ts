@@ -5,11 +5,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { PROJECT_ROOT, WORKSPACE_ROOT } from '../core/config.ts';
-import { clip, fail, ok, type ToolContext } from './common.ts';
+import { clip, fail, ok, type ToolContext } from './tool-common.ts';
 import { BIG_WORK_CHECK, TASK_STATUSES, type TaskWithWorkspace, type Workspace } from '../store/store.ts';
 import { formatLocal } from '../core/kst-time.ts';
 import { reviewDays } from '../workspace/review-check.ts';
-import { LINK_FILE, QUICK_SPEC, REPORT_FILE, SLUG, TASK_FILE, createTaskFolder, createWorkspaceFolder, locateWorkspaceFolder, readReport, writeLink } from '../workspace/folders.ts';
+import { LINK_FILE, QUICK_SPEC, REPORT_FILE, SLUG, TASK_FILE, createTaskFolder, createWorkspaceFolder, locateWorkspaceFolder, readReport, writeLink } from '../workspace/workspace-create.ts';
 
 const slug = z.string().regex(SLUG, '영문 소문자·숫자·하이픈만').max(40);
 
@@ -139,7 +139,7 @@ export function registerDelegateTools({ server, store }: ToolContext): void {
         if (!found) throw new Error(`공간 #${w.id} 폴더를 찾지 못했어요: ${w.folder}. 폴더를 이 컴퓨터의 ${WORKSPACE_ROOT}로 옮기거나 새 공간을 만드세요.`);
         w = store.moveWorkspace(w.id, found);
       }
-      // The workspace's tools find this secretary in its secretary.json: written or put right before each task.
+      // The workspace's tools find this secretary in its secretary-link.local.json: written or put right before each task.
       const linked = writeLink(w.folder, PROJECT_ROOT);
       const tf = createTaskFolder(w.folder, {
         name, title, goal, context, doneCriteria: done_criteria, proof, risks, product, planFirst: plan_first, lockTests: lock_tests, review,

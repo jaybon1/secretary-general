@@ -40,10 +40,10 @@ export function accountConfigDirs(root = PROJECT_ROOT, env = process.env): strin
 }
 
 /**
- * The home folder whose .claude.json is this PC's default login (~/.claude.json). SECRETARY_LOGIN_HOME moves it: the
+ * The home folder whose .claude.json is this PC's default login (~/.claude.json). SECRETARY_TEST_LOGIN_HOME moves it: the
  * tests point it at their temp folder (test/env.ts) so they never read this PC's login. scripts/lib/providers.ps1 does the same.
  */
-export const loginHome = (env = process.env): string => env.SECRETARY_LOGIN_HOME || os.homedir();
+export const loginHome = (env = process.env): string => env.SECRETARY_TEST_LOGIN_HOME || os.homedir();
 
 export interface AccountDeps {
   /** The secretary folder whose scripts/lib/providers.json says which providers are Claude subscriptions. */

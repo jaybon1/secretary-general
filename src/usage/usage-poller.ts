@@ -1,16 +1,16 @@
 /**
  * The usage reader (feature 'usage-poll'): every 5 minutes, for each provider checked in the usage settings
- * (usage-settings.ts: scripts/usage.local.json, which the dashboard's /settings page writes) whose usage can be read,
- * runs scripts/usage/usage-query.ps1 -Provider <name> (no tokens), which writes the provider's usage file in ~/.claude/usage
- * (usage/files.ts usageKey): subscription-<account>.json for a Claude subscription whose login can be read (the account,
+ * (usage-settings.ts: the usage-poll section of this-secretary.local.json, which the dashboard's /settings page writes) whose usage can be read,
+ * runs scripts/usage/usage-query.ps1 -Provider <name> (no tokens), which writes the provider's usage file in ~/.secretary/usage
+ * (usage/usage-files.ts usageKey): subscription-<account>.json for a Claude subscription whose login can be read (the account,
  * not the provider's name, names it), else <name>.json.
  * One at a time (a small PC), and a round still going makes the next one wait its turn.
  *
  *   node src/cli.ts usage-poll [--parent <PID>]
  *
- * The secretary server (scripts/server/remote-server.ps1, account a) starts it with --parent: it ends when that window
+ * The secretary server (scripts/remote-server/remote-server.ps1, account a) starts it with --parent: it ends when that window
  * does, ends at once when the feature is off in features.json, and when another reader runs on this PC (one lock file
- * in ~/.claude/usage, as every secretary on the PC shares the usage files, one per account). It writes no log file.
+ * in ~/.secretary/usage, as every secretary on the PC shares the usage files, one per account). It writes no log file.
  *
  * The usage guard (scripts/usage/usage-guard.mjs) still refreshes a record older than 5 minutes on its own, as a
  * backup when this is off. Both leave a .refresh mark named like the usage file (subscription-<account>.refresh or
@@ -22,15 +22,16 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECT_ROOT } from '../core/config.ts';
-import { NO_MODEL_ENV } from '../core/model-guard.ts';
+import { NO_MODEL_ENV } from '../core/no-model-calls.ts';
 import { scriptPath, USAGE_DIR } from '../core/paths.ts';
-import { pidAlive } from '../core/process.ts';
+import { pidAlive } from '../core/windows-process.ts';
 import { featureOn, readFeatures } from '../setup/features.ts';
-import { failureWait, readFailure, recordFailure, refreshFile } from './files.ts';
-import { readProviders } from './providers.ts';
+import { FEATURE } from '../core/names.ts';
+import { failureWait, readFailure, recordFailure, refreshFile } from './usage-files.ts';
+import { readProviders } from './provider-usage.ts';
 import { readUsageChoice } from './usage-settings.ts';
 
-export const FEATURE_ID = 'usage-poll';
+export const FEATURE_ID = FEATURE.usagePoll;
 
 export const POLL_MS = 5 * 60_000;
 /** A reading that started this recently is taken as still running (usage-query.ps1 gives up on one account after 90 s). */
@@ -47,7 +48,7 @@ export interface PollerDeps {
   log?: (line: string) => void;
 }
 
-/** The provider's refresh mark, named like its usage file (subscription-<account>.refresh, usage/files.ts refreshFile). */
+/** The provider's refresh mark, named like its usage file (subscription-<account>.refresh, usage/usage-files.ts refreshFile). */
 export const refreshMark = (name: string, usageDir = USAGE_DIR) => refreshFile(name, usageDir);
 
 export class UsagePoller {
@@ -83,7 +84,7 @@ export class UsagePoller {
   /**
    * One round; the names it read. A round still going when the next is due: the next one does nothing. A provider whose
    * readings keep failing (an API key login, whose /usage gives no usage; no claude) waits longer each time
-   * (usage/files.ts failureWait) instead of being tried every 5 minutes for ever.
+   * (usage/usage-files.ts failureWait) instead of being tried every 5 minutes for ever.
    */
   async tick(): Promise<string[]> {
     if (this.running) return [];
@@ -133,7 +134,10 @@ export function pollOn(root = PROJECT_ROOT): boolean {
   return !f || featureOn(f);
 }
 
-/** The one-reader-per-PC lock: the reader's PID. */
+/**
+ * The one-reader-per-PC lock: the reader's PID. Only here: every secretary on this PC (account b's server too) runs from
+ * a copy that reads it, so no reader takes the old ~/.claude/usage/usage-poll.pid any more (taken there too until 2026-11-10).
+ */
 export const lockFile = (usageDir = USAGE_DIR) => path.join(usageDir, 'usage-poll.pid');
 
 /** Takes the lock; false while a live process holds it. A lock left by a reader that died is taken over. */
@@ -166,7 +170,7 @@ export function releaseLock(file: string, pid = process.pid): void {
 /** The providers to read this round: checked in the usage settings and readable. */
 export function checkedReadable(root = PROJECT_ROOT): string[] {
   const list = readProviders(root);
-  const checked = new Set(readUsageChoice(list, scriptPath('usageLocal', root)).checked);
+  const checked = new Set(readUsageChoice(list, root).checked);
   return list.filter((p) => p.usage !== 'none' && checked.has(p.name)).map((p) => p.name);
 }
 

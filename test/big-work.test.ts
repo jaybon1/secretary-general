@@ -90,3 +90,31 @@ test('migration 9 adds the big_work table to an existing v8 database without tou
   s.setBigWork({ name: '새 일', state: '진행 중' });
   assert.equal(s.bigWork().length, 1);
 });
+
+// 없으면 놓치는 실수: 큰 일 상태 '사용자 차례'로 이름을 바꾸면서 옛 DB(상태 값이 사용자 이름으로 된 CHECK)의 줄을 안 옮기거나, 배포판 DB(이미 '사용자 차례')에서 옮기기가 깨진다.
+test('migration 15: the user\'s-turn state takes the name 사용자 차례, from an old named value or already so, keeping ids and history', () => {
+  for (const old of ['홍길동님 차례', '사용자 차례']) {
+    const file = path.join(tempDir(), 'v14.db');
+    const v14 = testStore(file, 14);
+    v14.appendLog([{ session_id: 's', message_uuid: 'u1', role: 'user', content: '이사 계약은 내가 볼게', created_at: '2026-11-01T00:00:00.000Z' }]);
+    v14.db.close();
+    // The table as a DB made before had it: its user's-turn value in the CHECK (a release DB's was already 사용자 차례).
+    const raw = new DatabaseSync(file);
+    raw.exec(`DROP TABLE big_work;
+      CREATE TABLE big_work (id INTEGER PRIMARY KEY, name TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('진행 중', '${old}', '보류', '운영 중', '끝남', '지움')),
+        note TEXT NOT NULL DEFAULT '', source_log_id INTEGER REFERENCES raw_log (id), created_at TEXT NOT NULL);
+      CREATE INDEX big_work_name ON big_work (name, id);`);
+    const add = raw.prepare('INSERT INTO big_work (name, state, note, source_log_id, created_at) VALUES (?, ?, ?, ?, ?)');
+    add.run('이사 계약', '진행 중', '', null, '2026-11-01T00:00:00.000Z');
+    add.run('이사 계약', old, '집주인 답 확인', 1, '2026-11-02T00:00:00.000Z');
+    add.run('블로그', '운영 중', '', null, '2026-11-03T00:00:00.000Z');
+    raw.close();
+    const s = testStore(file);
+    assert.deepEqual(s.bigWorkHistory('이사 계약').map((r) => [r.id, r.state, r.note, r.source_log_id]), [[1, '진행 중', '', null], [2, '사용자 차례', '집주인 답 확인', 1]], old);
+    assert.deepEqual(s.bigWork().map((r) => [r.name, r.state]), [['이사 계약', '사용자 차례'], ['블로그', '운영 중']], old);
+    // The new CHECK: the old name is refused, today's is taken.
+    assert.throws(() => s.db.prepare("INSERT INTO big_work (name, state, created_at) VALUES ('x', '홍길동님 차례', 'now')").run(), /CHECK/);
+    assert.ok(s.setBigWork({ name: '블로그', state: '사용자 차례', seenId: 3 }));
+    s.db.close();
+  }
+});

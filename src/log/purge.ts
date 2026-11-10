@@ -1,7 +1,7 @@
 /**
  * "비서 대화 삭제": the user deletes chosen conversation rows from the secretary DB, e.g. a turn that makes every
  * model call fail once it is read back (memory injection, the board, search_log). Two ways in: a fixed phrase
- * ("비서 대화 삭제 2턴", "비서 대화 삭제 #120-#135"; before 2026-11-06 "대화 지워 …"), and `node src/cli.ts purge-log` by hand.
+ * ("비서 대화 삭제 2턴", "비서 대화 삭제 #120-#135"; before 2026-11-06 "대화 지워 …"), and `node src/cli.ts purge-log` run directly by the user or the secretary.
  * - The phrase is not blocked (a block reason does not show on the phone): the prompt hook hands it to the
  *   secretary with only an order to run `purge-log preview …` once and pass its output on, and nothing else
  *   (no memories, board or notices). The preview lists the rows (id, who, length, word count) with each word's
@@ -22,21 +22,22 @@
  *   the list. raw_log ids are never handed out again (AUTOINCREMENT), so no watermark moves.
  * - Transcript files are not touched.
  *
- * Nothing reads the quarantine except restorePurged (by hand, from the CLI): not search, recall, the board,
+ * Nothing reads the quarantine except restorePurged (run directly from the CLI): not search, recall, the board,
  * the injection or any MCP tool. Lists and reports give row ids, times, roles and lengths, never the text (the
  * preview adds only each word's first letter).
  */
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boardReflects, resetBoardAfterPurge } from '../board/situation-board.ts';
-import { dropQuestionsFrom } from '../board/open-questions.ts';
+import { boardReflects, resetBoardAfterPurge } from '../session-continuity/situation-board.ts';
+import { dropQuestionsFrom } from '../session-continuity/open-questions.ts';
 import { transaction } from '../store/schema.ts';
 import { ingestTranscript } from './ingest-transcript.ts';
 import type { LogRowInfo, Store } from '../store/store.ts';
 import { formatLocal, nowIso } from '../core/kst-time.ts';
-import { indexText } from '../memory/korean-terms.ts';
+import { indexText } from '../memory/search-terms.ts';
 import { catchUpTranscripts, transcriptDirs } from './catch-up.ts';
+import { CLI, TAG } from '../core/names.ts';
 
 export const QUARANTINE_FILE = 'purged-log-error.db';
 export const PURGE_REASON = '사용자가 지운 대화에서 저장됨';
@@ -45,7 +46,7 @@ const CODE_PREFIX = 'purge_code:';
 /** Every code handed out lately: a message holding just one of them is not conversation (turn counting). */
 const CODES_KEY = 'purge_codes';
 /** The "확인" previews of before (no longer used): dropped when met. */
-const OLD_PENDING_PREFIX = 'purge_pending:';
+const OLD_PENDING_PREFIX = 'purge_pending:'; // legacy-name: purge-pending-prefix
 const NOTICE_KEY = 'purge_notice';
 /** An approval code older than this deletes nothing. */
 export const CODE_MAX_MS = 30 * 60 * 1000;
@@ -453,7 +454,7 @@ export function deleteLogRows(store: Store, logIds: number[], memoryIds: number[
 }
 
 /**
- * Deletes what a plan listed (deleteLogRows). With `notify` (the CLI by hand) the secretary is told on its next
+ * Deletes what a plan listed (deleteLogRows). With `notify` (the CLI run directly) the secretary is told on its next
  * prompt; the approval code's turn tells it right away instead (purgeDone), so it passes `false`.
  */
 export function executePurge(store: Store, plan: PurgePlan, notify = true): PurgeResult {
@@ -669,12 +670,12 @@ function catchUp(store: Store, transcriptPath: string | undefined, deps: HookDep
 
 /** The order the secretary gets with a delete phrase: run the preview once and pass on what it prints. */
 export function previewOrder(spec: PurgeSpec, sessionId?: string): string {
-  const cmd = `node src/cli.ts purge-log preview ${specArg(spec)}${sessionId ? ` --here ${sessionId}` : ''}`;
+  const cmd = `node src/cli.ts ${CLI.purgeLog} preview ${specArg(spec)}${sessionId ? ` --here ${sessionId}` : ''}`;
   return [
-    '<secretary-purge-preview>',
+    `<${TAG.purgePreview}>`,
     '사용자가 "비서 대화 삭제" 미리 보기를 청했다(이 질문에는 기억·상황판·알림을 붙이지 않았다). 아래 명령을 비서 폴더에서 한 번만 돌리고(모델을 부르지 않아 몇 초면 끝난다), 출력을 고치거나 줄이거나 풀이를 덧붙이지 말고 그대로 전한다. 지울 대화의 내용을 짐작하거나 기억·대화 기록 도구로 찾아보지 않고, 다른 일은 하지 않는다.',
     cmd,
-    '</secretary-purge-preview>',
+    `</${TAG.purgePreview}>`,
   ].join('\n');
 }
 
@@ -693,7 +694,7 @@ export function purgeHook(store: Store, prompt: string, sessionId?: string, tran
   const cmd = parsePurgeCommand(prompt);
   if (!cmd) return null;
   if (!cmd.spec) {
-    return { context: `<secretary-purge-preview>사용자가 "비서 대화 삭제" 명령을 지울 대상 없이 보냈다. 도구를 쓰지 말고 아래 쓰는 법을 그대로 전한다.\n${USAGE}\n</secretary-purge-preview>` };
+    return { context: `<${TAG.purgePreview}>사용자가 "비서 대화 삭제" 명령을 지울 대상 없이 보냈다. 도구를 쓰지 말고 아래 쓰는 법을 그대로 전한다.\n${USAGE}\n</${TAG.purgePreview}>` };
   }
   try {
     catchUp(store, transcriptPath, deps);
@@ -706,7 +707,7 @@ export function purgeHook(store: Store, prompt: string, sessionId?: string, tran
 function approve(store: Store, state: CodeState, sessionId: string | undefined, transcriptPath: string | undefined, deps: HookDeps): HookAction {
   const again = `다시 지우려면 '${PHRASE} ${specText(state.spec)}'부터 보내세요`;
   const tell = (why: string) => ({
-    context: `<secretary-purge-code>사용자가 보낸 "${state.code}"는 대화 지우기 승인 코드인데, ${why} 이 질문에는 기억·상황판을 붙이지 않았다. 도구를 쓰지 말고 그 사실과 "${again}." 한 줄만 전한다.</secretary-purge-code>`,
+    context: `<${TAG.purgeCode}>사용자가 보낸 "${state.code}"는 대화 지우기 승인 코드인데, ${why} 이 질문에는 기억·상황판을 붙이지 않았다. 도구를 쓰지 말고 그 사실과 "${again}." 한 줄만 전한다.</${TAG.purgeCode}>`,
   });
   const now = (deps.now ?? Date.now)();
   if (state.used) return tell(`${formatLocal(state.used)}에 이미 그 코드로 지웠다. 이번에는 아무것도 안 지웠다.`);
@@ -738,10 +739,10 @@ export function purgeDone(plan: PurgePlan, r: PurgeResult, sameSession: boolean)
   lines.push(formatResult(r));
   if (sameSession) lines.push('이 세션 맥락에 그 대화가 아직 남아 있으면 /clear 하거나 그 앞으로 되감기하세요(DB 정리는 다음 세션이 다시 읽지 않게 하는 것).');
   return [
-    '<secretary-purge-done>',
+    `<${TAG.purgeDone}>`,
     '사용자가 보낸 메시지는 대화 지우기 승인 코드였고, 질문 훅이 이미 지웠다(이 질문에는 기억·상황판·알림을 붙이지 않았다). 도구를 쓰지 말고 아래 결과를 고치거나 줄이거나 풀이를 덧붙이지 말고 그대로 전한다. 지운 대화의 내용을 짐작하거나 되묻지 않고, 다른 일은 하지 않는다.',
     ...lines,
-    '</secretary-purge-done>',
+    `</${TAG.purgeDone}>`,
   ].join('\n');
 }
 
@@ -760,5 +761,5 @@ export function purgeNotice(store: Store): string {
   const what = pending.map((p) => `#${p.from}~#${p.to}(${p.rows}줄)`).join(', ');
   const ids = [...new Set(pending.flatMap((p) => p.forgotten))].map((i) => `#${i}`).join(', ');
   const mem = ids ? `, 그 턴의 기억 ${ids}를 무효 처리` : '';
-  return `<secretary-purge>사용자가 "비서 대화 삭제" 명령으로 대화 기록 ${what}를 지웠다${mem}. 지운 대화는 따로 보관됐고 비서는 읽지 않는다. 그 내용을 짐작하거나 되묻지 않는다. 답 끝("다음 행동" 위)에 "대화 ${what}를 지웠어요${ids ? `(기억 ${ids} 무효 처리)` : ''}." 한 줄을 붙인다.</secretary-purge>`;
+  return `<${TAG.purge}>사용자가 "비서 대화 삭제" 명령으로 대화 기록 ${what}를 지웠다${mem}. 지운 대화는 따로 보관됐고 비서는 읽지 않는다. 그 내용을 짐작하거나 되묻지 않는다. 답 끝("다음 행동" 위)에 "대화 ${what}를 지웠어요${ids ? `(기억 ${ids} 무효 처리)` : ''}." 한 줄을 붙인다.</${TAG.purge}>`;
 }

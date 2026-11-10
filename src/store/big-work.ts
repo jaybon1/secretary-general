@@ -5,6 +5,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './schema.ts';
 import { assertNoThreat } from '../memory/injection-screen.ts';
+import { userWords } from './user-title.ts';
 import { formatLocal, nowIso } from '../core/kst-time.ts';
 
 /** Big-work states; the first four are on the board, 끝남 and 지움 take a work off it. */
@@ -56,7 +57,7 @@ export function setBigWork(
   if (Array.from(name).length > BIG_WORK_LIMITS.nameChars) throw new Error(`큰 일 이름은 ${BIG_WORK_LIMITS.nameChars}자 안으로 써 주세요: ${name}`);
   if (Array.from(note).length > BIG_WORK_LIMITS.noteChars) throw new Error(`메모는 ${BIG_WORK_LIMITS.noteChars}자 안으로 써 주세요(지금 ${Array.from(note).length}자).`);
   if (!BIG_WORK_STATES.includes(input.state)) throw new Error(`상태는 ${BIG_WORK_STATES.join('·')} 중 하나예요: ${input.state}`);
-  assertNoThreat(`${name} ${note}`, '큰 일 판');
+  assertNoThreat(`${name} ${note}`, '큰 일 판', userWords(db));
   return transaction(db, () => {
     const current = db.prepare('SELECT * FROM big_work WHERE name = ? ORDER BY id DESC LIMIT 1').get(name) as BigWork | undefined;
     const onBoard = current && !OFF_BOARD.has(current.state);

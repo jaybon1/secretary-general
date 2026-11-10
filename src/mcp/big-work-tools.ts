@@ -2,7 +2,7 @@
  * 비서 MCP 서버의 큰 일 판 도구: set_big_work(한 줄 넣기·고치기·빼기)와 list_big_work(판·이력 보기).
  */
 import { z } from 'zod';
-import { fail, ok, type ToolContext } from './common.ts';
+import { fail, ok, type ToolContext } from './tool-common.ts';
 import { BIG_WORK_LIMITS, BIG_WORK_STATES, renderBigWork } from '../store/store.ts';
 import { formatLocal } from '../core/kst-time.ts';
 

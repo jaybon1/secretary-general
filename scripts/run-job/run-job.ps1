@@ -1,32 +1,37 @@
 ﻿# 비서가 직접 하더라도 비용이 큰 작업을 공급자(기본: providers.json의 default)로 한 번 돌리고 결과 글만 돌려받는다.
 # 비서 세션은 구독으로 돌고 세션 안에서 공급자를 바꿀 수 없으므로 별도 claude -p 프로세스로 실행한다.
-# 작업 폴더(-Folder)를 안 주면 workspaces\run-job-home에서 돈다(공통 규칙은 그 AGENTS.md, 일마다 output/research/<날짜-일이름>/, 보고서는 남기고 받아 온 큰 재료만 다 쓰면 비서가 지운다).
-# 그 폴더가 없으면 임시 폴더에서 돈다. 비서 폴더에는 업무 파일을 만들지 않는다. 긴 지시는 -PromptFile로.
+# 작업 폴더(-Folder)를 안 주면 workspaces\_run-job-home에서 돈다(공통 규칙은 그 AGENTS.md, 일마다 output/research/<날짜-일이름>/, 보고서는 남기고 받아 온 큰 재료만 다 쓰면 비서가 지운다).
+# workspaces는 SECRETARY_WORKSPACE_ROOT, 없으면 비서 폴더 옆(src/core/config.ts WORKSPACE_ROOT와 같다). 그 폴더가 없으면 오류로 멈춘다
+# (node src/cli.ts workspace-aux-folders가 만든다). 비서 폴더에는 업무 파일을 만들지 않는다. 긴 지시는 -PromptFile로.
+# -Staff <이름>: 반복 일 담당자(src/staff/<이름>.json, src/staff/staff.ts, 예: memory-consolidation, situation-board)로 돈다.
+#   작업 폴더는 workspaces\_staff\<이름>이고, 공급자·모델·effort·새 세션·기억 도구·허용/금지 도구를
+#   그 파일에서 읽는다(허용 도구 목록은 그 파일 한 곳). 같은 값을 따로 주면 오류다.
 #
 # Claude Code 공급자는 사용자 설정의 MCP(계정 커넥터 포함)를 붙이지 않는다(도구 설명이 매 턴 문맥을 키우므로).
 # 그 일에 MCP가 필요하면 -McpConfig <MCP 설정 JSON 파일>로 그것만 붙인다.
 # 구독 공급자면 비서 기억 읽기 도구(recall·search_log, --readonly 기억 MCP)를 늘 함께 붙이고, 구독이 아니면 붙이지 않는다.
-# -MemoryWrite: 쉬는 시간 기억 정리(src/idle/idle-jobs.ts) 전용. 읽기 전용 대신 쓰기 도구가 있는 기억 MCP를 붙이고,
-#   기억 정리 도구만 허용하며 내장 도구(파일·명령·웹)는 모두 뺀다. 구독 공급자에서만 된다(2026-11-05 결정).
+#   담당자 설정의 memory가 write면(기억 정리) 읽기 전용 대신 쓰기 도구가 있는 기억 MCP를 붙이고, 설정의 도구만 허용하며
+#   금지 도구(파일·명령·웹)는 모두 뺀다. 구독 공급자에서만 된다(2026-11-05 결정).
 # -DryRun: 실행하지 않고 공급자와 MCP 인자만 찍는다(시험용).
 # Claude Code 공급자는 결과 끝에 '(이어 부름|새 세션) 세션: <id>'를 찍는다. -Resume을 안 주면 이 비서의 같은 공급자·작업 폴더·모델의
-# 마지막 세션을 55분 안·문맥 20만 토큰 미만일 때 자동으로 이어 부른다(상태: 이 비서의 기록 폴더 ~/.secretary/state/<비서 번호>/run-job-sessions.json).
+# 마지막 세션을 55분 안·문맥 20만 토큰 미만일 때 자동으로 이어 부른다(상태: 이 비서의 기록 폴더 ~/.secretary/<비서 번호>/state/run-job-sessions.json).
 # 앞 일과 섞이면 안 되면 -New, 특정 세션을 이어 쓰려면 -Resume <id>(같은 -Folder·공급자에서).
 # 호출마다 토큰·비용·시간을 같은 폴더의 run-job-calls.jsonl에 한 줄씩 남긴다(요약: scripts/run-job/run-job-stats.ps1).
 # 도는 동안은 같은 폴더의 run-job-active/<PID>.json(pid, started_at, provider, model, folder, label=지시 첫 줄)을 두고 끝나면 지운다.
 # -RawJson <파일>을 주면 claude -p의 json 출력(토큰·비용 포함)을 그 파일에 남긴다.
 #
 # 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job/run-job.ps1 [-Provider <이름>] -Model <opus|sonnet|haiku|공급자 models의 이름> [-Effort <low|medium|high|xhigh|max>] [-Folder <폴더>] [-McpConfig <파일>] [-Resume <세션 id> | -New] [-RawJson <파일>] [-DryRun] [-Detach] (-Prompt <지시> | -PromptFile <파일>)
+#     담당자로: run-job.ps1 -Staff <이름> [-RawJson <파일>] [-DryRun] [-Detach] (-Prompt <지시> | -PromptFile <파일>)
 
 param(
   [string]$Provider,
   [string]$Model,
   [string]$Effort,
-  [string]$Folder = "$PSScriptRoot\..\..\..\workspaces\run-job-home",
+  [string]$Folder,
   [string]$McpConfig,
   [string]$Resume,
   [switch]$New,
-  [switch]$MemoryWrite,
+  [string]$Staff,
   [string]$RawJson,
   [string]$Prompt,
   [string]$PromptFile,
@@ -38,9 +43,29 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\lib\common.ps1"
 . "$PSScriptRoot\..\lib\providers.ps1"
 . "$PSScriptRoot\..\lib\memory-mcp.ps1"
-. "$PSScriptRoot\run-job-other.ps1"
+. "$PSScriptRoot\run-job-other-cli.ps1"
 # 한글 지시·결과·오류 문구가 깨지지 않게, 무엇이든 내보내기 전에 표준입출력을 UTF-8로 맞춘다.
 $claude = Initialize-ClaudeScript
+# 결과물 상위의 workspaces 폴더(src/core/config.ts WORKSPACE_ROOT와 같다).
+$workspaceRoot = if ($env:SECRETARY_WORKSPACE_ROOT) { $env:SECRETARY_WORKSPACE_ROOT } else { Join-Path (Split-Path -Parent $SecretaryRoot) 'workspaces' }
+$memoryWrite = $false
+$staffConfig = $null
+if ($Staff) {
+  if ($Staff -notmatch '^[a-z0-9]+(-[a-z0-9]+)*$') { throw "담당자 이름이 아니에요: $Staff" }
+  $staffFile = Join-Path $SecretaryRoot "src\staff\$Staff.json"
+  if (-not (Test-Path $staffFile -PathType Leaf)) { throw "담당자 설정이 없어요: $staffFile" }
+  foreach ($k in 'Provider', 'Model', 'Effort', 'Folder', 'McpConfig', 'Resume', 'New') {
+    if ($PSBoundParameters.ContainsKey($k)) { throw "-Staff와 -$($k)는 함께 줄 수 없어요(값은 $staffFile 한 곳에서 정해요)." }
+  }
+  $staffConfig = Get-Content -Raw -Encoding UTF8 $staffFile | ConvertFrom-Json
+  $Provider = $staffConfig.provider; $Model = $staffConfig.model; $Effort = $staffConfig.effort
+  $New = [switch][bool]$staffConfig.newSession
+  $memoryWrite = $staffConfig.memory -eq 'write'
+  # 담당자 폴더는 workspaces\_staff\<담당자 이름>(src/staff/staff.ts staffFolder와 같다).
+  $Folder = Join-Path (Join-Path $workspaceRoot '_staff') $Staff
+  # 담당자 폴더는 비서 코드가 만든다(node src/cli.ts workspace-aux-folders). 없으면 빈 폴더만 만들어 돌린다.
+  if (-not (Test-Path $Folder -PathType Container)) { New-Item -ItemType Directory -Force $Folder | Out-Null }
+}
 $info = Use-Provider $Provider
 if ($PromptFile) { $Prompt = Get-Content -Raw -Encoding UTF8 $PromptFile }
 if (-not $Prompt) { throw '-Prompt나 -PromptFile이 필요해요.' }
@@ -54,7 +79,15 @@ if ($Resume -and $info.Type -in $OtherCliTypes) {
 }
 if ($Resume -and $New) { throw '-Resume과 -New는 함께 줄 수 없어요.' }
 if ($RawJson) { $RawJson = [IO.Path]::GetFullPath($RawJson) }
-if (-not $PSBoundParameters.ContainsKey('Folder') -and -not (Test-Path $Folder -PathType Container)) { $Folder = [IO.Path]::GetTempPath() }
+$folderGiven = $PSBoundParameters.ContainsKey('Folder') -or $Staff
+if (-not $folderGiven) {
+  $Folder = Join-Path $workspaceRoot '_run-job-home'
+  # 없으면 멈춘다(2026-11-09 결정). 임시 폴더에서 돌면 그 폴더의 공통 규칙(AGENTS.md)과 결과 자리가 빠진다.
+  # 설치 점검 'workspace-aux-folders'(node src/cli.ts workspace-aux-folders)가 이 폴더를 만들고, 옛 이름 run-job-home이면 옮긴다.
+  if (-not (Test-Path $Folder -PathType Container)) {
+    throw "run-job 기본 작업 폴더가 없어요: $Folder (SECRETARY_WORKSPACE_ROOT=$($env:SECRETARY_WORKSPACE_ROOT)). 비서 폴더에서 node src/cli.ts workspace-aux-folders로 만들거나(옛 이름 run-job-home이면 옮긴다) -Folder를 주세요."
+  }
+}
 if (-not (Test-Path $Folder -PathType Container)) { throw "작업 폴더가 없어요: $Folder" }
 # 작업 폴더로 옮겨 가기 전에 절대 경로로 바꿔 둔다.
 if ($McpConfig) {
@@ -63,12 +96,12 @@ if ($McpConfig) {
 }
 # 비서 폴더에서 돌면 프로필·기억 주입 훅과 기억 MCP가 붙어 개인정보가 공급자에게 넘어가므로, 구독 밖 공급자는 막는다.
 if ($info.Type -ne 'claude-subscription' -and (Resolve-Path $Folder).Path.TrimEnd('\') -eq $SecretaryRoot.TrimEnd('\')) {
-  throw "구독이 아닌 공급자($($info.Name))는 비서 폴더에서 돌리지 않아요. -Folder를 빼거나(workspaces\run-job-home) 작업 공간을 주세요."
+  throw "구독이 아닌 공급자($($info.Name))는 비서 폴더에서 돌리지 않아요. -Folder를 빼거나(workspaces\_run-job-home) 작업 공간을 주세요."
 }
 
-# -Detach: 이 백그라운드 명령과 떼어 따로 돌리고 바로 끝난다(scripts/lib/bg-job.ps1). 55분 넘게 걸릴 수 있는 일에 쓰고, scripts/run-job/wait-job.ps1로 55분씩 기다린다.
+# -Detach: 이 백그라운드 명령과 떼어 따로 돌리고 바로 끝난다(scripts/lib/detached-job.ps1). 55분 넘게 걸릴 수 있는 일에 쓰고, scripts/run-job/wait-job.ps1로 55분씩 기다린다.
 if ($Detach -and -not $DryRun) {
-  . "$PSScriptRoot\..\lib\bg-job.ps1"
+  . "$PSScriptRoot\..\lib\detached-job.ps1"
   $label = (($Prompt -split "`n") | Where-Object { $_.Trim() } | Select-Object -First 1).Trim() -replace '^#+\s*', ''
   if ($label.Length -gt 60) { $label = $label.Substring(0, 60) + '…' }
   Start-DetachedSelf $PSCommandPath $PSBoundParameters $label
@@ -79,9 +112,9 @@ if ($Detach -and -not $DryRun) {
 
 Set-Location $Folder
 $Model = Resolve-ProviderModel $info $Model
-# 다른 회사 CLI(Copilot, Antigravity)는 Claude Code가 아니라 따로 돌린다(run-job-other.ps1). 이어 부르기·기록은 없다.
+# 다른 회사 CLI(Copilot, Antigravity)는 Claude Code가 아니라 따로 돌린다(run-job-other-cli.ps1). 이어 부르기·기록은 없다.
 if ($info.Type -in $OtherCliTypes) {
-  if ($DryRun) { "공급자: $($info.Name) ($($info.Type)) · 다른 회사 CLI(run-job-other.ps1)"; exit 0 }
+  if ($DryRun) { "공급자: $($info.Name) ($($info.Type)) · 다른 회사 CLI(run-job-other-cli.ps1)"; exit 0 }
   exit (Invoke-OtherCliJob $info $Model $Prompt $Folder)
 }
 $modelArg = @('--model', $Model)
@@ -93,8 +126,8 @@ if (-not $Effort) {
 if (-not $Effort) { $Effort = $info.Effort }
 $effortArg = if ($Effort) { @('--effort', $Effort) } else { @() }
 # 자동 판단(auto) 모드는 구독에서만 동작하므로, 다른 공급자는 start-worker.ps1과 같은 허용 목록으로 돌린다.
-# 같은 종류 조작이 한 턴에 여러 번 되풀이되면 막지 않고 알리는 훅(common.ps1 Get-RepeatHook). 기억 정리(-MemoryWrite)는 도구가 기억뿐이라 넣지 않는다.
-$repeatHooks = if ($MemoryWrite) { @() } else { @(Get-RepeatHook) }
+# 같은 종류 조작이 한 턴에 여러 번 되풀이되면 막지 않고 알리는 훅(common.ps1 Get-RepeatHook). 담당자(-Staff)는 도구가 정해져 있어 넣지 않는다.
+$repeatHooks = if ($staffConfig) { @() } else { @(Get-RepeatHook) }
 # 설정 파일은 내용이 같으면 다시 쓰지 않아, 동시에 도는 run-job이 반쯤 쓴 파일을 읽지 않는다.
 function Write-RunJobSettings([string]$Name, $Settings) {
   $file = Join-Path $env:TEMP $Name
@@ -117,13 +150,24 @@ $env:CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = '0'
 $mcpArg = @('--strict-mcp-config')
 # 구독 공급자면 비서 기억 읽기 도구(recall·search_log)를 늘 붙인다. 구독이 아니면 개인 기억이 바깥으로 나가므로 붙이지 않는다.
 $mcpFiles = @()
-if ($MemoryWrite) {
-  if (-not (Test-MemoryMcp $info)) { throw "-MemoryWrite는 구독 공급자에서만 써요(지금: $($info.Name))." }
-  # 내장 도구는 지연 로딩된 MCP 도구를 불러오는 ToolSearch만 남긴다.
-  $mcpFiles += New-MemoryMcpConfig -Writable
-  # --tools만으로는 Bash가 남는 것을 봐서(2026-11-05 시험) 파일·명령·웹 도구를 금지 목록에도 넣는다.
-  $mcpArg += @('--mcp-config') + $mcpFiles + @('--tools', 'ToolSearch', '--allowedTools', ($MemoryConsolidateTools -join ','),
-    '--disallowedTools', 'Bash,PowerShell,Read,Write,Edit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Agent,Monitor')
+if ($staffConfig) {
+  # 담당자: 기억 도구·허용/금지 도구는 담당자 설정(src/staff/<이름>.json) 한 곳에서만 정한다.
+  if ($staffConfig.memory -ne 'none' -and -not (Test-MemoryMcp $info)) { throw "기억 도구를 쓰는 담당자는 구독 공급자에서만 돌아요(지금: $($info.Name))." }
+  $allowed = @()
+  if ($memoryWrite) {
+    $mcpFiles += New-MemoryMcpConfig -Writable
+    $allowed += @($staffConfig.mcpTools | ForEach-Object { "mcp__secretary__$_" })
+  } elseif ($staffConfig.memory -eq 'read') {
+    $mcpFiles += New-MemoryMcpConfig
+    $allowed += $MemoryReadTools
+  }
+  if ($mcpFiles) { $mcpArg += @('--mcp-config') + $mcpFiles }
+  # 내장 도구는 설정의 tools만 남긴다(기억 정리는 지연 로딩된 MCP 도구를 불러오는 ToolSearch만, 상황판은 없음).
+  # 빈 목록은 --tools ""(내장 도구 없음)다. PowerShell 5.1은 빈 인자를 빼고 넘기므로 따옴표 두 개를 글자로 넘긴다.
+  # --tools만으로는 Bash가 남는 것을 봐서(2026-11-05 시험) 설정의 deniedTools를 금지 목록에도 넣는다.
+  $mcpArg += @('--tools', $(if (@($staffConfig.tools).Count) { @($staffConfig.tools) -join ',' } else { '""' }))
+  if ($allowed.Count) { $mcpArg += @('--allowedTools', ($allowed -join ',')) }
+  if (@($staffConfig.deniedTools).Count) { $mcpArg += @('--disallowedTools', (@($staffConfig.deniedTools) -join ',')) }
 } else {
   if (Test-MemoryMcp $info) { $mcpFiles += New-MemoryMcpConfig }
   if ($McpConfig) { $mcpFiles += $McpConfig }

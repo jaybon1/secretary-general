@@ -1,8 +1,8 @@
 {
-  "about": "비서의 기능 목록. core는 언제나 켜짐(enabled 없음). 선택 기능은 enabled가 false면 파일은 그대로 두고 그 기능의 설치 점검(checks, src/setup/check-items.ts), 질문 훅 알림(notices, src/hooks/prompt-notices.ts), 예약 작업(tasks, scripts/tasks/install-tasks.ps1 -Task의 id와 등록되는 작업 이름 name(실제 이름은 그 뒤에 비서 고유 번호가 붙어 'Secretary Idle Jobs (A3F9)' 꼴, .secretary-id), 설치 점검도 이 이름으로 찾는다)을 건너뛴다. files는 비서 폴더 기준 경로(폴더는 / 로 끝남), rules는 이 기능 규칙의 글: 켜진 기능은 AGENTS.md에, 꺼진 기능은 켤 때 AGENTS.md에 넣을 글로 .agents/skills/features/references/<id>.md에 있다. 켜고 끄기는 비서가 features 스킬로 한다(사용자에게 묻고). 점검·알림·작업과 bin·src·scripts·.agents/skills·test의 파일은 모두 꼭 한 기능에 속한다(test/features.test.ts).",
+  "about": "비서의 기능 목록. core는 언제나 켜짐(enabled 없음). 선택 기능은 enabled가 false면 파일은 그대로 두고 그 기능의 설치 점검(checks, src/setup/check-items.ts), 질문 훅 알림(notices, src/hooks/prompt-notices.ts), 예약 작업(scheduledTasks, scripts/scheduled/install-scheduled-tasks.ps1 -Task의 id와 등록되는 작업 이름 name(실제 이름은 그 뒤에 비서 고유 번호가 붙어 'Secretary Idle Jobs (A3F9)' 꼴, .secretary-id), 설치 점검도 이 이름으로 찾는다)을 건너뛴다. files는 비서 폴더 기준 경로(폴더는 / 로 끝남), rules는 이 기능 규칙의 글: 켜진 기능은 AGENTS.md에, 꺼진 기능은 켤 때 AGENTS.md에 넣을 글로 .agents/skills/feature-toggle/references/<id>.md에 있다. 켜고 끄기는 비서가 feature-toggle 스킬로 한다(사용자에게 묻고). 점검·알림·작업과 bin·src·scripts·.agents/skills·test의 파일은 모두 꼭 한 기능에 속한다(test/features.test.ts).",
   "features": [
     {
-      "id": "memory",
+      "id": "memory-core",
       "description": "기억 DB, 기억 도구(MCP), 훅(자동 주입·대화 저장), 의미 검색, 공용 바탕 코드",
       "core": true,
       "files": [
@@ -13,29 +13,32 @@
         "src/hooks/prompt-sender.ts",
         "src/hooks/run-hook.ts",
         "src/hooks/session-start.ts",
-        "src/idle/job-record.ts",
+        "src/staff/job-record.ts",
         "src/log/",
         "src/mcp/big-work-tools.ts",
-        "src/mcp/common.ts",
+        "src/mcp/tool-common.ts",
         "src/mcp/memory-tools.ts",
         "src/mcp/server.ts",
         "src/memory/duplicate-check.ts",
         "src/memory/injection-screen.ts",
-        "src/memory/korean-terms.ts",
+        "src/memory/search-terms.ts",
         "src/memory/prev-answer-search.ts",
         "src/memory/recall.ts",
-        "src/semantic/",
+        "src/semantic-search/",
         "src/store/",
         "scripts/lib/common.ps1",
-        "scripts/semantic/",
+        "scripts/lib/this-secretary.ps1",
+        "scripts/semantic-search/",
         "test/big-work.test.ts",
         "test/db.test.ts",
         "test/duplicate.test.ts",
-        "test/embedder-down.test.ts",
+        "test/semantic-search-outage.test.ts",
         "test/env.ts",
         "test/helpers.ts",
         "test/ingest.test.ts",
+        "test/legacy-names.test.ts",
         "test/mcp.test.ts",
+        "test/names.test.ts",
         "test/memory.test.ts",
         "test/prev-answer.test.ts",
         "test/prompt-notices.test.ts",
@@ -44,35 +47,49 @@
         "test/purge.test.ts",
         "test/rewind.test.ts",
         "test/run-tests.mjs",
-        "test/semantic.test.ts"
+        "test/semantic.test.ts",
+        "test/this-secretary.test.ts",
+        "test/wording.test.ts",
+        "this-secretary.local.example.json",
+        "all-secretaries.local.example.json"
       ],
-      "checks": ["db", "packages", "model"],
-      "notices": ["memory", "rewind", "purge"],
-      "tasks": [],
-      "rules": ["## 언제 `remember` 하는가"]
+      "checks": ["db", "npm-packages", "semantic-search-model"],
+      "notices": ["memory-core", "rewind", "purge"],
+      "scheduledTasks": [],
+      "rules": ["## 언제 `remember` 하는가"],
+      "thisSecretary": {
+        "section": "paths",
+        "from": [
+          {
+            "file": "scripts/mistake-guards.local.json",
+            "pick": ["otherPcRoot"]
+          }
+        ]
+      }
     },
     {
       "id": "setup-check",
-      "description": "설치 점검(세션 시작 안내, setup-check)과 이 기능 목록·기능 켜고 끄기(features 스킬), 예약 작업 등록 스크립트, 바깥용 입구(bin/)와 비서 폴더 환경변수(SECRETARY_<번호>_DIR) 확인, 비서 고유 번호(.secretary-id), 스킬 자리(.agents/skills/<이름>에 실제 폴더, .claude/skills는 그리로 가는 정션 하나, 옛 skills/ 옮기기, skill-links)",
+      "description": "설치 점검(세션 시작 안내, setup-check)과 이 기능 목록·기능 켜고 끄기(feature-toggle 스킬), 예약 작업 등록 스크립트, 바깥용 입구(bin/)와 비서 폴더 환경변수(SECRETARY_<번호>_DIR) 확인, 비서 고유 번호(.secretary-id), 스킬 자리(.agents/skills/<이름>에 실제 폴더, .claude/skills는 그리로 가는 정션 하나, 옛 skills/ 옮기기, skill-links)",
       "core": true,
       "files": [
         "src/setup/",
-        "scripts/tasks/install-tasks.ps1",
-        ".agents/skills/features/",
+        "scripts/scheduled/install-scheduled-tasks.ps1",
+        ".agents/skills/feature-toggle/",
         "test/entry-points.test.ts",
         "test/features.test.ts",
         "test/ps1-syntax.test.ts",
         "test/setup.test.ts",
         "test/skill-links.test.ts",
+        "test/skill-spec.test.ts",
         "features.json"
       ],
-      "checks": ["features", "skills", "entry-points", "release-files", "secretary-dir"],
-      "notices": ["setup"],
-      "tasks": [],
-      "rules": ["`features` 스킬"]
+      "checks": ["features", "skills", "entry-points", "release-files", "renamed-local-files", "secretary-dir-env"],
+      "notices": ["setup-check"],
+      "scheduledTasks": [],
+      "rules": ["`feature-toggle` 스킬"]
     },
     {
-      "id": "update",
+      "id": "secretary-update",
       "description": "업데이트: GitHub 저장소의 새 버전으로 올리기(사용자 수정은 지키고 묻기, 옮겨진 파일 따라가기), 버전을 올릴 때 한 번 하는 옮기기",
       "core": true,
       "files": [
@@ -80,51 +97,60 @@
         "scripts/update.mjs",
         "scripts/update-moves.json",
         "src/upgrade/",
-        ".agents/skills/update/",
+        ".agents/skills/secretary-update/",
         "test/update.test.ts",
         "test/upgrade.test.ts"
       ],
       "checks": [],
       "notices": [],
-      "tasks": [],
+      "scheduledTasks": [],
       "rules": []
     },
     {
-      "id": "board",
+      "id": "session-continuity",
       "description": "상황판, 세션 사이 이어가기(남은 질문), 문맥 크기 알림, 세션 넘기기",
       "core": true,
       "files": [
-        "src/board/",
+        "src/session-continuity/",
+        "src/staff/situation-board.json",
         "src/hooks/context-size-nudge.ts",
-        ".agents/skills/handoff/",
-        "test/board.test.ts",
+        ".agents/skills/session-handoff/",
+        "test/situation-board.test.ts",
         "test/context-size.test.ts",
-        "test/continuity.test.ts"
+        "test/open-questions.test.ts"
       ],
       "checks": [],
-      "notices": ["board", "context-size"],
-      "tasks": [],
+      "notices": ["situation-board", "context-size"],
+      "scheduledTasks": [],
       "rules": ["`<secretary-board>` 상황판"]
     },
     {
-      "id": "consolidate",
-      "description": "기억 정리(/consolidate)와 정리 결과·밀린 정리 알림",
+      "id": "memory-consolidation",
+      "description": "기억 정리: 정리 담당(src/staff/memory-consolidation.json, 비서 대화 밖 workspaces/_staff/memory-consolidation에서 돈다)과 /consolidate, 정리 결과·밀린 정리 알림",
       "core": true,
-      "files": ["src/memory/consolidate-notice.ts", ".agents/skills/consolidate/", "test/consolidate.test.ts"],
+      "files": [
+        "src/memory/consolidate-notice.ts",
+        "src/memory/consolidate-run.ts",
+        "src/staff/memory-consolidation.json",
+        ".agents/skills/consolidate/",
+        "test/consolidate.test.ts",
+        "test/staff.test.ts"
+      ],
       "checks": [],
-      "notices": ["consolidate"],
-      "tasks": [],
-      "rules": ["`/consolidate` 결과가 오면"]
+      "notices": ["memory-consolidation"],
+      "scheduledTasks": [],
+      "rules": ["기억 정리 보고가 오면"]
     },
     {
       "id": "delegate",
-      "description": "일 맡기기: 작업 공간(공간 도구가 비서 폴더를 찾는 secretary.json), 백그라운드 업무 세션과 감시, run-job, 공급자 고르기",
+      "description": "일 맡기기: 작업 공간(공간 도구가 비서 폴더를 찾는 secretary-link.local.json), 백그라운드 업무 세션과 감시, run-job, 공급자 고르기",
       "core": true,
       "files": [
-        "src/idle/run-job-launcher.ts",
+        "src/staff/launch.ts",
+        "src/staff/staff.ts",
         "src/mcp/delegate-tools.ts",
         "src/workspace/",
-        "scripts/lib/bg-job.ps1",
+        "scripts/lib/detached-job.ps1",
         "scripts/lib/memory-mcp.ps1",
         "scripts/lib/providers.json",
         "scripts/lib/providers.ps1",
@@ -134,39 +160,39 @@
         "scripts/run-job/wait-job.ps1",
         "scripts/worker/",
         ".agents/skills/delegate/",
-        ".agents/skills/grill/",
+        ".agents/skills/plan-grill/",
         "test/providers.test.ts",
         "test/secretary-link.test.ts",
         "test/common-skills.test.ts",
         "test/watch.test.ts",
-        "test/worker-guard.test.ts",
+        "test/worker-folder-guard.test.ts",
         "test/worker-lib.test.ts",
         "test/review.test.ts",
         "test/workspace.test.ts"
       ],
-      "checks": ["workspace-links"],
-      "notices": ["watch"],
-      "tasks": [],
+      "checks": ["workspace-links", "workspace-aux-folders"],
+      "notices": ["watch-missing"],
+      "scheduledTasks": [],
       "rules": ["## 일 맡기기 (위임)"]
     },
     {
       "id": "remote-server",
       "description": "다른 기기에서 쓰기: Remote Control 서버(로그인할 때 자동 시작), 서버 다루기",
       "core": true,
-      "files": ["bin/server-control.ps1", "scripts/server/", ".agents/skills/server-ops/"],
+      "files": ["bin/server-control.ps1", "scripts/remote-server/", ".agents/skills/server-ops/"],
       "checks": ["server-task", "server-running"],
       "notices": [],
-      "tasks": [{ "id": "server", "name": "Secretary Remote Control" }],
+      "scheduledTasks": [{ "id": "server", "name": "Secretary Remote Control" }],
       "rules": ["`server-ops` 스킬을 따른다"]
     },
     {
-      "id": "backup",
+      "id": "db-backup",
       "description": "매일 기억 DB 백업(이 PC의 backups/에 14일 보관)",
       "core": true,
-      "files": ["bin/backup-db.ps1", "scripts/tasks/backup-db.ps1"],
+      "files": ["bin/backup-db.ps1", "scripts/scheduled/backup-db.ps1"],
       "checks": ["backup-task"],
       "notices": [],
-      "tasks": [{ "id": "backup", "name": "Secretary DB Backup" }],
+      "scheduledTasks": [{ "id": "backup", "name": "Secretary DB Backup" }],
       "rules": []
     },
     {
@@ -176,35 +202,39 @@
       "files": [
         "bin/usage-guard.mjs",
         "bin/usage-statusline.mjs",
-        "src/usage/files.ts",
-        "src/usage/guard-override.ts",
-        "src/usage/providers.ts",
+        "src/usage/usage-files.ts",
+        "src/usage/usage-guard-override.ts",
+        "src/usage/provider-usage.ts",
         "scripts/usage/",
         "test/usage-guard.test.ts"
       ],
       "checks": ["usage-hooks"],
-      "notices": ["guard-override"],
-      "tasks": [],
+      "notices": ["usage-guard-override"],
+      "scheduledTasks": [],
       "rules": ["90퍼센트를 초과하더라도 진행"]
     },
     {
       "id": "usage-poll",
-      "description": "사용량 뒤에서 조회: 비서 서버가 켜져 있는 동안 고른 공급자(scripts/usage.local.json, 없으면 조회할 수 있고 이 PC에 설정된 공급자: 처음엔 구독 하나)의 사용량을 5분마다 조회(토큰 0, node src/cli.ts usage-poll, 이 PC에 하나만). 사용량 정지 장치(90%)가 늘 새 값을 본다. 꺼 두면 정지 훅이 기록이 5분 넘게 오래됐을 때만 갱신한다",
+      "description": "사용량 뒤에서 조회: 비서 서버가 켜져 있는 동안 고른 공급자(this-secretary.local.json의 usage-poll 칸, 없으면 조회할 수 있고 이 PC에 설정된 공급자: 처음엔 구독 하나)의 사용량을 5분마다 조회(토큰 0, node src/cli.ts usage-poll, 이 PC에 하나만). 사용량 정지 장치(90%)가 늘 새 값을 본다. 꺼 두면 정지 훅이 기록이 5분 넘게 오래됐을 때만 갱신한다",
       "enabled": true,
       "files": ["src/usage/usage-poller.ts", "src/usage/usage-settings.ts", "test/usage-poll.test.ts"],
       "checks": [],
       "notices": [],
-      "tasks": [],
-      "rules": []
+      "scheduledTasks": [],
+      "rules": [],
+      "thisSecretary": {
+        "section": "usage-poll",
+        "from": ["scripts/usage.local.json"]
+      }
     },
     {
       "id": "idle-jobs",
       "description": "쉬는 시간 자동 작업: 대화가 멈추면 상황판 미리 갱신, 쌓인 대화 기억 정리",
       "enabled": true,
-      "files": ["bin/idle-jobs.ps1", "src/idle/idle-jobs.ts", "scripts/tasks/idle-jobs.ps1", "test/idle-jobs.test.ts"],
+      "files": ["bin/idle-jobs.ps1", "src/idle/idle-jobs.ts", "scripts/scheduled/idle-jobs.ps1", "test/idle-jobs.test.ts"],
       "checks": ["idle-jobs-task"],
       "notices": [],
-      "tasks": [{ "id": "idle-jobs", "name": "Secretary Idle Jobs" }],
+      "scheduledTasks": [{ "id": "idle-jobs", "name": "Secretary Idle Jobs" }],
       "rules": ["기억 정리는 쉬는 시간에 저절로 돈다"]
     },
     {
@@ -214,27 +244,27 @@
       "files": ["bin/ego-grab.mjs", "scripts/browser/", ".agents/skills/chrome-fallback/"],
       "checks": [],
       "notices": [],
-      "tasks": [],
+      "scheduledTasks": [],
       "rules": ["## 브라우저 작업"]
     },
     {
-      "id": "account-handoff",
+      "id": "multi-subscription",
       "description": "다중 구독: 사용률에 따라 계정 a에서 넘길 구독(b, c, …) 중 가장 여유 있는 것으로 일 넘기기(providers.json default가 auto면 run-job·업무 세션도 그 계정으로), 다른 계정으로 비서 서버",
       "enabled": false,
-      "files": ["src/usage/handoff-level.ts", "test/usage.test.ts"],
+      "files": ["src/usage/subscription-routing.ts", "test/subscription-routing.test.ts"],
       "checks": [],
-      "notices": ["usage"],
-      "tasks": [],
+      "notices": ["subscription-routing"],
+      "scheduledTasks": [],
       "rules": ["- **넘기기 단계:**"]
     },
     {
-      "id": "providers",
+      "id": "external-providers",
       "description": "구독 밖 공급자: 다른 계정 API 키, Bedrock, Anthropic 호환 게이트웨이, 다른 회사 CLI(Copilot, Antigravity)",
       "enabled": false,
-      "files": ["scripts/run-job/run-job-other.ps1"],
+      "files": ["scripts/run-job/run-job-other-cli.ps1"],
       "checks": ["provider-key"],
       "notices": [],
-      "tasks": [],
+      "scheduledTasks": [],
       "rules": ["구독이 아닌 공급자(특히 외부 게이트웨이)"]
     },
     {
@@ -244,7 +274,7 @@
       "files": [".agents/skills/calendar/"],
       "checks": [],
       "notices": [],
-      "tasks": [],
+      "scheduledTasks": [],
       "rules": ["## 일정 → Google Calendar (자동)"]
     },
     {
@@ -254,7 +284,7 @@
       "files": [],
       "checks": [],
       "notices": [],
-      "tasks": [],
+      "scheduledTasks": [],
       "rules": ["- `../notes`: 사용자가 말한 내용을 비서가 정리해 쌓는 옵시디언 볼트"]
     },
     {
@@ -264,7 +294,7 @@
       "files": [],
       "checks": [],
       "notices": [],
-      "tasks": [],
+      "scheduledTasks": [],
       "rules": ["- `../inbox`: 사용자가 비서에게 넘기는 파일."]
     },
     {
@@ -274,7 +304,7 @@
       "files": [],
       "checks": [],
       "notices": [],
-      "tasks": [],
+      "scheduledTasks": [],
       "rules": ["비서 상위 폴더는 다른 PC에서 네트워크 공유로 본다"]
     },
     {
@@ -284,36 +314,53 @@
       "files": ["bin/dashboard.mjs", "src/dashboard/", "test/dashboard.test.ts"],
       "checks": [],
       "notices": [],
-      "tasks": [],
-      "rules": ["누르면 열리는 링크 한 줄(`[https://<"]
+      "scheduledTasks": [],
+      "rules": ["누르면 열리는 링크 한 줄(`[https://<"],
+      "thisSecretary": {
+        "section": "dashboard",
+        "from": ["scripts/dashboard.local.json"]
+      }
     },
     {
-      "id": "notify",
-      "description": "끝 알림: 비서 본 세션의 턴이 끝나면 끝(Stop) 훅이 모델 호출 없이 답 첫 줄을 이 PC의 ntfy 서버로 보내 폰 앱에 띄운다(우선순위 4, 누르면 이 세션의 Claude 대화가 열림. 설정 scripts/notify.local.json이 있을 때만, 보내기는 따로 떨어진 프로세스가 해 훅이 기다리지 않는다). ntfy 서버는 로그인 때 예약 작업으로 관리자 없이 띄운다(scripts/notify/install-ntfy.ps1)",
+      "id": "phone-push",
+      "description": "끝 알림: 비서 본 세션의 턴이 끝나면 끝(Stop) 훅이 모델 호출 없이 답 첫 줄을 이 PC의 ntfy 서버로 보내 폰 앱에 띄운다(우선순위 4, 누르면 이 세션의 Claude 대화가 열림. this-secretary.local.json의 phone-push 칸이 있을 때만, 보내기는 따로 떨어진 프로세스가 해 훅이 기다리지 않는다). ntfy 서버는 로그인 때 예약 작업으로 관리자 없이 띄운다(scripts/phone-push/install-ntfy.ps1)",
       "enabled": false,
-      "files": ["src/notify/", "scripts/notify/", "test/notify.test.ts"],
-      "checks": ["notify"],
+      "files": ["src/phone-push/", "scripts/phone-push/", "test/phone-push.test.ts"],
+      "checks": ["phone-push"],
       "notices": [],
-      "tasks": [{ "id": "ntfy", "name": "Secretary ntfy" }],
-      "rules": []
+      "scheduledTasks": [{ "id": "ntfy", "name": "Secretary ntfy Server" }],
+      "rules": [],
+      "thisSecretary": {
+        "section": "phone-push",
+        "from": ["scripts/phone-push.local.json"]
+      }
     },
     {
-      "id": "guards",
-      "description": "실수 막기 장치: 답 검사(영어 답, 경로 표기: 막거나 다음 질문에 알림)와 턴마다 부른 도구 기록(Stop 훅), 질문 다음 기호 알림, 결과물 상위 폴더에 새 폴더·temp에 쓰기 막기(PreToolUse 훅, 업무 세션 worker-guard도), 같은 종류 조작이 한 턴에 여러 번 되풀이되면 도구·스크립트로 바꿀지 따져 보라는 알림(PostToolUse 훅, 비서·업무 세션·run-job), 위임 앞뒤 대조(bin/delegate-check.mjs), 실수 기록 도구(record_mistake·update_mistake·list_mistakes)",
+      "id": "mistake-guards",
+      "description": "실수 막기 장치: 답 검사(영어 답, 경로 표기: 막거나 다음 질문에 알림)와 턴마다 부른 도구 기록(Stop 훅), 질문 다음 기호 알림, 결과물 상위 폴더에 새 폴더·temp에 쓰기 막기(PreToolUse 훅, 업무 세션 worker-folder-guard도), 같은 종류 조작이 한 턴에 여러 번 되풀이되면 도구·스크립트로 바꿀지 따져 보라는 알림(PostToolUse 훅, 비서·업무 세션·run-job), 위임 앞뒤 대조(bin/delegate-check.mjs), 실수 기록 도구(record_mistake·update_mistake·list_mistakes)",
       "enabled": true,
       "files": [
-        "src/guards/",
+        "src/mistake-guards/",
         "src/mcp/mistake-tools.ts",
         "bin/delegate-check.mjs",
         "scripts/delegate-check/",
-        "test/guards.test.ts",
+        "test/mistake-guards.test.ts",
         "test/delegate-check.test.ts",
         "test/repeat-hook.test.ts"
       ],
       "checks": [],
-      "notices": ["guard-warn", "question-label"],
-      "tasks": [],
-      "rules": ["다음 기호는 훅이 알려 줌", "`record_mistake`로 한 건 적는다"]
+      "notices": ["answer-check-warn", "question-label"],
+      "scheduledTasks": [],
+      "rules": ["다음 기호는 훅이 알려 줌", "`record_mistake`로 한 건 적는다"],
+      "thisSecretary": {
+        "section": "mistake-guards",
+        "from": [
+          {
+            "file": "scripts/mistake-guards.local.json",
+            "omit": ["otherPcRoot"]
+          }
+        ]
+      }
     }
   ]
 }

@@ -1,4 +1,4 @@
-﻿# run-job 호출 기록(이 비서의 기록 폴더 ~/.secretary/state/<비서 번호>의 run-job-calls.jsonl, common.ps1 Get-SecretaryStateDir)의 최근 N개를 이어 부름/새 세션별로 묶어 평균 비용·시간·문맥 크기를 보여준다.
+﻿# run-job 호출 기록(이 비서의 기록 폴더 ~/.secretary/<비서 번호>/state의 run-job-calls.jsonl, common.ps1 Get-SecretaryStateDir)의 최근 N개를 이어 부름/새 세션별로 묶어 평균 비용·시간·문맥 크기를 보여준다.
 # 이어 부르기 기준값(55분, 문맥 20만 토큰)을 실측으로 고칠 때 본다.
 # 업무 세션 재사용 기록(worker-reuse.jsonl, start-worker·worker-done이 남김)이 있으면 그 요약도 덧붙인다.
 # 시험이 부른 호출(작업 폴더가 %TEMP% 아래이고 모델이 Haiku)은 뺀다(-WithTests면 넣는다): 2026-11-07까지 npm test의 쉬는 시간

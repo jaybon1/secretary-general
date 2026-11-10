@@ -1,4 +1,4 @@
-// npm test (and npm run test:dist): node --test on the given files (default test/*.test.ts), every test process set up
+// npm test (and npm run test:release-build): node --test on the given files (default test/*.test.ts), every test process set up
 // by test/env.ts first. %TEMP% (TEMP, TMP) is a fresh folder of this run, so what the tests make in it is theirs alone;
 // afterwards the run fails if anything is left in it or is new in the repository (git status, ignored files included),
 // and says what. The folder itself goes in the end.
@@ -47,4 +47,16 @@ try {
 }
 if (problems.length) console.error(`\n시험 뒤 흔적(남기지 않게 고친다):\n- ${problems.join('\n- ')}`);
 else console.log(`\n시험 뒤 흔적 없음 (%TEMP% 시험 폴더 비었음${before ? ', 저장소 새 파일 없음' : ', git 밖이라 저장소는 안 봄'})`);
+// The old-names rows whose day has come, once more at the very end of a whole run (test/legacy-names.test.ts says them
+// among its results; this is not a failure).
+if (!process.argv[2]) {
+  try {
+    const { dueLegacyNames, removeWhen } = await import('../src/core/legacy-names.ts');
+    const due = dueLegacyNames();
+    if (due.length) {
+      console.log(`\n옛 이름 읽기 다시 볼 날 지난 줄 ${due.length}개(실패 아님, src/core/legacy-names.ts):`);
+      for (const r of due) console.log(`- ${r.id}(${r.checkBy}): ${r.old} → ${r.now}. 지울 조건: ${removeWhen(r)}`);
+    }
+  } catch {}
+}
 process.exitCode = r.status !== 0 ? (r.status ?? 1) : problems.length ? 1 : 0;

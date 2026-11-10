@@ -9,5 +9,5 @@ test('prompt notices: joined in list order, the one marked first runs before the
   const out = await promptNotices({ store: tempStore(), prompt: '질문' }, [n('a', 'A'), n('b', ''), n('board', 'B', true), n('c', 'C')]);
   assert.equal(out, 'A\nB\nC');
   assert.deepEqual(ran, ['board', 'a', 'b', 'c']);
-  assert.deepEqual(PROMPT_NOTICES.map((x) => x.name), ['guard-override', 'usage', 'setup', 'watch', 'context-size', 'consolidate', 'rewind', 'purge', 'board', 'memory', 'guard-warn', 'question-label']);
+  assert.deepEqual(PROMPT_NOTICES.map((x) => x.name), ['usage-guard-override', 'subscription-routing', 'setup-check', 'watch-missing', 'context-size', 'memory-consolidation', 'rewind', 'purge', 'situation-board', 'memory-core', 'answer-check-warn', 'question-label']);
 });

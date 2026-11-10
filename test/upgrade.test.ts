@@ -55,7 +55,7 @@ test('big-work move over the CLI: preview writes a plan without touching data, -
   const planFile = path.join(dir, 'plan.json');
   const cli = (...args: string[]) =>
     execFileSync(process.execPath, [path.join(PROJECT_ROOT, 'src', 'cli.ts'), 'big-work-from-profile', planFile, ...args], {
-      env: { ...process.env, SECRETARY_DB: db, SECRETARY_EMBED: 'off', SECRETARY_SETUP_CHECK: 'off' },
+      env: { ...process.env, SECRETARY_DB: db, SECRETARY_SEMANTIC_SEARCH: 'off', SECRETARY_SETUP_CHECK: 'off' },
       encoding: 'utf8',
     });
   assert.match(cli(), /프로필 v1의 큰 일 칸 5줄 → 판 4줄[\s\S]*고칠 것 없음/);
@@ -99,10 +99,14 @@ test('every file a v7 copy has but v8 does not is followed by the moves file, ex
   // 칸 이름은 tag 그대로: v8까지는 숫자 하나(0.N.0으로 읽음), 그 뒤는 v0.X.Y(scripts/update.mjs parseVersion).
   const version = fs.readFileSync(path.join(PROJECT_ROOT, 'VERSION'), 'utf8').trim();
   assert.match(version, /^v\d+\.\d+\.\d+$/, 'VERSION은 v0.X.Y 꼴(새 tag 이름과 같게)');
-  for (const k of Object.keys(all).filter((x) => x !== 'about')) assert.ok((/^v\d+$/.test(k) || /^v\d+\.\d+\.\d+$/.test(k)) && compareVersions(k, version) <= 0, `update-moves.json의 ${k} 칸이 이 배포판(${version})보다 뒤이거나 tag 이름 꼴이 아님`);
+  for (const k of Object.keys(all).filter((x) => x !== 'about' && x !== 'scheduledTasks')) assert.ok((/^v\d+$/.test(k) || /^v\d+\.\d+\.\d+$/.test(k)) && compareVersions(k, version) <= 0, `update-moves.json의 ${k} 칸이 이 배포판(${version})보다 뒤이거나 tag 이름 꼴이 아님`);
   assert.ok(Object.entries(moves).filter(([from]) => from.startsWith('.claude/skills/')).every(([from, to]) => to === `.agents/skills/${from.slice('.claude/skills/'.length)}`));
   const real = (p: string) => fs.realpathSync(p).toLowerCase();
-  for (const [from, to] of Object.entries(moves)) {
+  // A later version may move the file again (v0.10.0: .agents/skills/grill → plan-grill): the update follows the columns in
+  // order, so the place to find now is the end of that chain.
+  const later = Object.keys(all).filter((k) => k !== 'about' && k !== 'scheduledTasks' && compareVersions(k, 'v8') > 0).sort(compareVersions);
+  const now = (to: string) => later.reduce((p, k) => all[k][p] ?? p, to);
+  for (const [from, to] of Object.entries(moves).map(([f, t]) => [f, now(t)])) {
     // Gone, or (a skill once the link is made) the new file itself seen through a link.
     const old = path.join(PROJECT_ROOT, from);
     assert.ok(!fs.existsSync(old) || real(old) === real(path.join(PROJECT_ROOT, to)), `${from} should be gone now`);

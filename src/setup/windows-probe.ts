@@ -1,12 +1,12 @@
 /**
- * The Windows side of the install check (setup/install-check.ts): scheduled tasks via schtasks.exe (registered, and the
- * file each one runs), processes via one PowerShell WMI query (core/process.ts), or, when the last check's processes
+ * The Windows side of the install check (setup/setup-check.ts): scheduled tasks via schtasks.exe (registered, and the
+ * file each one runs), processes via one PowerShell WMI query (core/windows-process.ts), or, when the last check's processes
  * are known, one tasklist per pid.
  */
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { parseProcesses, processQueryArgs } from '../core/process.ts';
-import type { Probe, ProbeQuery, Proc } from './install-check.ts';
+import { parseProcesses, processQueryArgs } from '../core/windows-process.ts';
+import type { Probe, ProbeQuery, Proc } from './setup-check.ts';
 
 /** Each probe (schtasks, PowerShell) gives up after this; its items are then "unknown". */
 const PROBE_TIMEOUT_MS = 5000;

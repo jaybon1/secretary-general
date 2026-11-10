@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict';
+import { fixAuxFolders } from '../src/workspace/aux-folders.ts';
+import { RUN_JOB_HOME, workspaceRootOf, writeLink } from '../src/workspace/secretary-link.ts';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { tempDir, write } from './helpers.ts';
+import { changedReleaseFiles, readReleaseFiles } from '../src/setup/release-files.ts';
+import { allSecretariesFile } from '../src/core/this-secretary.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
-import { ENTRY_POINTS, entryPath, entryText, LEGACY_SECRETARY_DIR_ENV, secretaryDirEnv, secretaryLogDir, scriptPath, type EntryName } from '../src/core/paths.ts';
-import { LOG_FILE as NOTIFY_LOG_FILE } from '../src/notify/ntfy.ts';
-import { baseTaskNames, offFeatureChecks, scheduledTaskNames } from '../src/setup/features.ts';
+import { ENTRY_POINTS, entryPath, entryText, LEGACY_SECRETARY_DIR_ENV, legacySecretaryLogDir, secretaryDirEnv, secretaryLogDir, scriptPath, type EntryName } from '../src/core/paths.ts';
+import { LOG_FILE as NOTIFY_LOG_FILE } from '../src/phone-push/ntfy.ts';
+import { baseTaskNames, offFeatureChecks, readFeatures, scheduledTaskNames } from '../src/setup/features.ts';
 import { usageHookState } from '../src/setup/check-items.ts';
-import { hookKind, ownerOf, scriptInCommand } from '../src/setup/other-copy.ts';
-import { ensureInstallId, INSTALL_ID_ALPHABET, INSTALL_ID_FILE, newInstallId, readInstallId, taskNameWith } from '../src/setup/install-id.ts';
-import { MODEL_FILES } from '../src/semantic/client.ts';
+import { hookKind, ownerOf, scriptInCommand } from '../src/setup/other-secretaries.ts';
+import { ensureSecretaryId, SECRETARY_ID_ALPHABET, SECRETARY_ID_FILE, newSecretaryId, readSecretaryId, taskNameWith } from '../src/setup/secretary-id.ts';
+import { MODEL_FILES } from '../src/semantic-search/client.ts';
 import { cutLink, fixSkillLinks } from '../src/setup/skill-links.ts';
 import {
   CHECKS,
@@ -36,11 +40,11 @@ import {
   type ProbeQuery,
   type Proc,
   type SetupOptions,
-} from '../src/setup/install-check.ts';
+} from '../src/setup/setup-check.ts';
 
 const PS = 'C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 
-/** The fixture copy's install id, and its task names (features.json name + id) and old names (before the id). */
+/** The fixture copy's secretary id, and its task names (features.json name + id) and old names (before the id). */
 const FIXTURE_ID = 'AB12';
 const OLD = baseTaskNames(PROJECT_ROOT);
 const SERVER_TASK = taskNameWith(OLD.server, FIXTURE_ID);
@@ -57,12 +61,12 @@ function serverProc(root: string, extra = '', pid = 100, script = scriptPath('re
 function fixture(probe?: Partial<Probe>) {
   const root = tempDir();
   fs.copyFileSync(path.join(PROJECT_ROOT, 'features.json'), path.join(root, 'features.json'));
-  write(path.join(root, INSTALL_ID_FILE), `${FIXTURE_ID}\n`);
+  write(path.join(root, SECRETARY_ID_FILE), `${FIXTURE_ID}\n`);
   write(path.join(root, 'package.json'), JSON.stringify({ dependencies: { alpha: '1', '@scope/beta': '1' } }));
   write(path.join(root, 'node_modules', 'alpha', 'package.json'), '{}');
   write(path.join(root, 'node_modules', '@scope', 'beta', 'package.json'), '{}');
   // A skill in .agents/skills and its one link .claude/skills (a junction).
-  write(path.join(root, '.agents', 'skills', 'delegate', 'SKILL.md'), '#');
+  write(path.join(root, '.agents', 'skills', 'delegate', 'SKILL.md'), '---\nname: delegate\ndescription: d\n---\n');
   fixSkillLinks(root);
   write(scriptPath('providers', root), JSON.stringify({ default: 'subscription' }));
   // The bin entries and the scripts they run; a config folder whose settings call them.
@@ -74,6 +78,11 @@ function fixture(probe?: Partial<Probe>) {
   write(path.join(configDir, 'settings.json'), JSON.stringify(usageSettings(root)));
   const modelPath = path.join(root, 'models', 'm');
   for (const f of MODEL_FILES) write(path.join(modelPath, f), 'x');
+  // The worker files and their folders (workspaces/_staff/memory-consolidation, situation-board) and run-job's home (in this test process's workspaces folder).
+  fs.cpSync(path.join(PROJECT_ROOT, 'src', 'staff'), path.join(root, 'src', 'staff'), { recursive: true });
+  fixAuxFolders(root, path.join(root, 'no.db'), () => {});
+  // The workspaces folder is this process's, shared by the fixtures: its _run-job-home link is set to this root.
+  writeLink(path.join(workspaceRootOf(root), RUN_JOB_HOME), root);
   const dbPath = path.join(root, 'test.db');
   write(dbPath);
   const queries: ProbeQuery[] = [];
@@ -83,7 +92,7 @@ function fixture(probe?: Partial<Probe>) {
     modelPath,
     keysDir: path.join(root, 'keys'),
     platform: 'win32',
-    cacheFile: `${dbPath}.setup.json`,
+    cacheFile: `${dbPath}.setup-check.json`,
     configDirs: [configDir],
     probe: async (q) => {
       queries.push(q);
@@ -109,7 +118,7 @@ test('a complete install passes every item and injects nothing', async () => {
   const report = await checkSetup(opts);
   assert.ok(report.results.every((r) => r.status === 'ok'), JSON.stringify(report.results));
   assert.equal(setupNotice(report.results), '');
-  // Tasks and processes come from one probe call: each task by its name with the install id, and by its old name.
+  // Tasks and processes come from one probe call: each task by its name with the secretary id, and by its old name.
   assert.equal(queries.length, 1);
   assert.deepEqual(queries[0].tasks.sort(), [BACKUP_TASK, IDLE_TASK, SERVER_TASK, OLD.backup, OLD['idle-jobs'], OLD.server].sort());
   assert.equal(SERVER_TASK, 'Secretary Remote Control (AB12)');
@@ -126,9 +135,9 @@ test('missing tasks raise the notice: items, fixes, the opening line and what th
   const notice = setupNotice(report.results);
   assert.match(notice, /^<secretary-setup>/);
   assert.match(notice, /<\/secretary-setup>$/);
-  assert.match(notice, /\[server-task\] 비서 서버 자동 시작 예약 작업 → .*install-tasks\.ps1 -Task server/);
-  assert.match(notice, /\[backup-task\] 매일 DB 백업 예약 작업 → .*install-tasks\.ps1 -Task backup/);
-  assert.match(notice, /\[idle-jobs-task\] 쉬는 시간 작업 예약 작업[^\n]*→ .*install-tasks\.ps1 -Task idle-jobs/);
+  assert.match(notice, /\[server-task\] 비서 서버 자동 시작 예약 작업 → .*install-scheduled-tasks\.ps1 -Task server/);
+  assert.match(notice, /\[backup-task\] 매일 DB 백업 예약 작업 → .*install-scheduled-tasks\.ps1 -Task backup/);
+  assert.match(notice, /\[idle-jobs-task\] 쉬는 시간 작업 예약 작업[^\n]*→ .*install-scheduled-tasks\.ps1 -Task idle-jobs/);
   assert.match(notice, /비서 할 일: 매 답 맨 위에 한 줄로 '아직 설치가 덜 됐어요: 비서 서버 자동 시작 예약 작업, 매일 DB 백업 예약 작업, 쉬는 시간 작업 예약 작업\(상황판 미리 갱신, 기억 정리\)\. "설치 이어서 해 줘"라고 하시면 도와드릴게요'/);
   assert.match(notice, /setup-check/);
   // The prompt hook's reminder reuses the kept check: one short line.
@@ -145,8 +154,9 @@ test('only the main account server window counts as the server', () => {
   assert.equal(serverWindow([serverProc('C:\\other-copy')], root), undefined);
   // Case and quoting as Windows reports them.
   assert.ok(serverWindow([{ ...serverProc(root), cmd: serverProc(root).cmd!.toUpperCase() }], root));
-  // A window started before the script moved to scripts\server\ still counts; one deeper or in another copy does not.
+  // A window started from an old place (scripts\, scripts\server\) still counts; one deeper or in another copy does not.
   assert.ok(serverWindow([serverProc(root, '', 100, path.win32.join(root, 'scripts', 'remote-server.ps1'))], root));
+  assert.ok(serverWindow([serverProc(root, '', 100, path.win32.join(root, 'scripts', 'server', 'remote-server.ps1'))], root));
   assert.equal(serverWindow([serverProc(root, '', 100, path.win32.join(root, 'scripts', 'a', 'b', 'remote-server.ps1'))], root), undefined);
   assert.equal(serverWindow([serverProc(root, '', 100, path.win32.join(root, 'scripts', 'server', 'remote-server.ps1.bak'))], root), undefined);
 });
@@ -168,7 +178,7 @@ test('failed queries leave items unknown: quiet alone, listed next to a missing 
   assert.equal(status(thrown)['backup-task'], 'unknown');
   fs.rmSync(path.join(opts.root!, 'node_modules', 'alpha'), { recursive: true });
   const withMissing = setupNotice((await checkSetup({ ...opts })).results);
-  assert.match(withMissing, /\[packages\] 패키지\(npm install\) \(alpha\)/);
+  assert.match(withMissing, /\[npm-packages\] 패키지\(npm install\) \(alpha\)/);
   assert.match(withMissing, /확인 못 함: 비서 서버 자동 시작 예약 작업\(예약 작업 조회 실패\)/);
 });
 
@@ -184,13 +194,13 @@ test('the reminder looks at files again, so a mid-session fix stops it at once',
 test('a file item that no longer applies drops out of the reminder', async () => {
   const { opts } = fixture();
   fs.rmSync(path.join(opts.modelPath!, 'config.json'));
-  const embed = process.env.SECRETARY_EMBED;
-  delete process.env.SECRETARY_EMBED;
+  const embed = process.env.SECRETARY_SEMANTIC_SEARCH;
+  delete process.env.SECRETARY_SEMANTIC_SEARCH;
   try {
     saveReport(await checkSetup(opts), opts.cacheFile!);
     assert.match(setupReminder(opts), /의미 검색 모델 파일/);
   } finally {
-    process.env.SECRETARY_EMBED = embed;
+    process.env.SECRETARY_SEMANTIC_SEARCH = embed;
   }
   assert.equal(setupReminder(opts), '');
 });
@@ -206,10 +216,10 @@ test('no check kept yet means no reminder; a turned-off check says nothing', asy
   }
   const { notice } = await sessionSetup(opts);
   assert.match(notice, /server-task/);
-  // Every item but the model (semantic search is off in tests) and the provider key (feature 'providers' ships off).
+  // Every item but the model (semantic search is off in tests) and the provider key (feature 'external-providers' ships off).
   assert.deepEqual(
     readCache(opts.cacheFile!)?.results.map((r) => r.id),
-    ['features', 'db', 'packages', 'skills', 'entry-points', 'secretary-dir', 'workspace-links', 'server-task', 'server-running', 'backup-task', 'idle-jobs-task', 'usage-hooks'],
+    ['features', 'db', 'npm-packages', 'skills', 'entry-points', 'renamed-local-files', 'secretary-dir-env', 'workspace-links', 'workspace-aux-folders', 'server-task', 'server-running', 'backup-task', 'idle-jobs-task', 'usage-hooks'],
   );
 });
 
@@ -223,6 +233,10 @@ test('items the user goes without are left out and stay out across checks', asyn
   assert.deepEqual(readCache(opts.cacheFile!)?.skip, ['backup-task']);
   assert.deepEqual(setSkip(opts.cacheFile!, ['all'], true), []);
   assert.match((await sessionSetup(opts)).notice, /backup-task/);
+  // 없으면 놓치는 실수: 이름이 바뀐 항목(model·packages·secretary-dir·notify)을 옛 이름으로 빼 둔 사용자에게 그 항목 알림이 다시 뜬다.
+  const cache = JSON.parse(fs.readFileSync(opts.cacheFile!, 'utf8'));
+  fs.writeFileSync(opts.cacheFile!, JSON.stringify({ ...cache, skip: ['model', 'notify', 'secretary-dir', 'packages', 'backup-task', 'semantic-search-model', 'workspace-folders'] }));
+  assert.deepEqual(readCache(opts.cacheFile!)?.skip, ['semantic-search-model', 'phone-push', 'secretary-dir-env', 'npm-packages', 'backup-task', 'workspace-aux-folders']);
 });
 
 test('off Windows the task and process items do not apply and nothing is probed', async () => {
@@ -231,7 +245,7 @@ test('off Windows the task and process items do not apply and nothing is probed'
   assert.equal(queries.length, 0);
   const ids = report.results.map((r) => r.id);
   for (const id of ['server-task', 'server-running', 'backup-task', 'idle-jobs-task']) assert.ok(!ids.includes(id));
-  assert.ok(ids.includes('packages'));
+  assert.ok(ids.includes('npm-packages'));
 });
 
 test('a database the hook had to create is told once; the next prompt sees it there', async () => {
@@ -272,14 +286,21 @@ test('skills: real folders in .agents/skills, .claude/skills one link to it, the
   const item = async () => (await checkSetup(opts)).results.find((r) => r.id === 'skills')!;
   assert.equal((await item()).status, 'ok');
   cutLink(path.join(root, '.claude', 'skills'));
-  write(path.join(root, 'skills', 'handoff', 'SKILL.md'), '#');
+  const handoff = '---\nname: handoff\ndescription: d\n---\n';
+  write(path.join(root, 'skills', 'handoff', 'SKILL.md'), handoff);
   let r = await item();
   assert.equal(r.status, 'missing');
   assert.equal(r.detail, '연결 없음: .claude/skills / 옛 자리에서 옮길 것: skills/handoff');
   assert.match(r.fix!, /^비서 폴더에서 `node src\/cli\.ts skill-links` \(먼저 보기만: `--dry-run`\)/);
   fixSkillLinks(root);
   assert.equal((await item()).status, 'ok');
-  assert.equal(fs.readFileSync(path.join(root, '.claude', 'skills', 'handoff', 'SKILL.md'), 'utf8'), '#');
+  assert.equal(fs.readFileSync(path.join(root, '.claude', 'skills', 'handoff', 'SKILL.md'), 'utf8'), handoff);
+  // A skill against the format (agentskills.io, setup/skill-spec.ts): no command fixes it, the fix says how.
+  write(path.join(root, '.agents', 'skills', 'handoff', 'notes.md'), 'x');
+  r = await item();
+  assert.match(r.detail!, /^비서 스킬 사양\(agentskills\.io\)과 다름: handoff\(SKILL\.md 옆에 scripts\/·references\/·assets\/ 밖의 것: notes\.md\)$/);
+  assert.match(r.fix!, /references\/로 옮기고/);
+  fs.rmSync(path.join(root, '.agents', 'skills', 'handoff', 'notes.md'));
   // A real folder whose name is taken (the user's edit of an old copy): the command leaves it, the fix asks the user first.
   write(path.join(root, 'skills', 'delegate', 'SKILL.md'), '# mine');
   fixSkillLinks(root);
@@ -292,22 +313,22 @@ test('skills: real folders in .agents/skills, .claude/skills one link to it, the
 test('model files are checked by name; the first automatic download is enough', async () => {
   const { opts } = fixture();
   fs.rmSync(path.join(opts.modelPath!, 'onnx'), { recursive: true });
-  const embed = process.env.SECRETARY_EMBED;
-  delete process.env.SECRETARY_EMBED;
+  const embed = process.env.SECRETARY_SEMANTIC_SEARCH;
+  delete process.env.SECRETARY_SEMANTIC_SEARCH;
   try {
     const report = await checkSetup(opts);
-    const model = report.results.find((r) => r.id === 'model')!;
+    const model = report.results.find((r) => r.id === 'semantic-search-model')!;
     assert.equal(model.status, 'missing');
     assert.equal(model.detail, 'onnx/model_quantized.onnx');
     // The first automatic download leaves out special_tokens_map.json; loading works without it.
     write(path.join(opts.modelPath!, 'onnx', 'model_quantized.onnx'), 'x');
     fs.rmSync(path.join(opts.modelPath!, 'special_tokens_map.json'));
-    assert.equal((await checkSetup(opts)).results.find((r) => r.id === 'model')!.status, 'ok');
+    assert.equal((await checkSetup(opts)).results.find((r) => r.id === 'semantic-search-model')!.status, 'ok');
   } finally {
-    process.env.SECRETARY_EMBED = embed;
+    process.env.SECRETARY_SEMANTIC_SEARCH = embed;
   }
   // Semantic search turned off: the model is not needed.
-  assert.ok(!(await checkSetup(opts)).results.some((r) => r.id === 'model'));
+  assert.ok(!(await checkSetup(opts)).results.some((r) => r.id === 'semantic-search-model'));
 });
 
 test('a PowerShell window whose command line could not be read leaves the server unknown, not missing', async () => {
@@ -323,7 +344,7 @@ test('feature providers turned on: the default provider needs its key file', asy
   const { opts, root } = fixture();
   const file = path.join(root, 'features.json');
   const list = JSON.parse(fs.readFileSync(file, 'utf8'));
-  for (const f of list.features) if (f.id === 'providers') f.enabled = true;
+  for (const f of list.features) if (f.id === 'external-providers') f.enabled = true;
   fs.writeFileSync(file, JSON.stringify(list));
   assert.equal(status(await checkSetup(opts))['provider-key'], 'ok', 'the subscription needs no key');
   write(scriptPath('providers', root), JSON.stringify({ default: 'subscription-b' }));
@@ -399,21 +420,23 @@ test('an item is original-only when its feature says so in features.json; ids ar
 
 test('a direct setup-check names the features turned off whose items it left out; the session notice does not', async () => {
   const { opts, root } = fixture({ tasks: { [SERVER_TASK]: false } });
-  // As shipped, of the features turned off only 'providers' and 'notify' have an install check item.
-  assert.deepEqual(offFeatureChecks(root), [{ id: 'providers', checks: ['provider-key'] }, { id: 'notify', checks: ['notify'] }]);
+  // As shipped, of the features turned off only 'external-providers' and 'phone-push' have an install check item.
+  // 없으면 놓치는 실수: 사용자가 기능을 켜거나 끈 폴더(올린 뒤의 npm test)에서 배포판이 낸 켜짐·꺼짐을 기대해 실패한다.
+  const shippedList = readReleaseFiles(PROJECT_ROOT);
+  if (!shippedList || !changedReleaseFiles(PROJECT_ROOT, shippedList).includes('features.json')) assert.deepEqual(offFeatureChecks(root), [{ id: 'external-providers', checks: ['provider-key'] }, { id: 'phone-push', checks: ['phone-push'] }]);
   const file = path.join(root, 'features.json');
   const list = JSON.parse(fs.readFileSync(file, 'utf8'));
-  for (const f of list.features) if (['providers', 'notify'].includes(f.id)) f.enabled = true;
+  for (const f of list.features) if (!f.core) f.enabled = true;
   fs.writeFileSync(file, JSON.stringify(list));
   assert.doesNotMatch(formatReport(await checkSetup(opts), [], offFeatureChecks(root)), /꺼진 기능/);
-  // Two features with an item each (idle-jobs, providers) and one without any (notes, not named).
-  for (const f of list.features) if (['idle-jobs', 'providers', 'notes'].includes(f.id)) f.enabled = false;
+  // Two features with an item each (idle-jobs, external-providers) and one without any (notes, not named).
+  for (const f of list.features) if (['idle-jobs', 'external-providers', 'notes'].includes(f.id)) f.enabled = false;
   fs.writeFileSync(file, JSON.stringify(list));
   const off = offFeatureChecks(root);
-  assert.deepEqual(off, [{ id: 'idle-jobs', checks: ['idle-jobs-task'] }, { id: 'providers', checks: ['provider-key'] }]);
+  assert.deepEqual(off, [{ id: 'idle-jobs', checks: ['idle-jobs-task'] }, { id: 'external-providers', checks: ['provider-key'] }]);
   const report = await checkSetup(opts);
   const out = formatReport(report, [], off).split('\n');
-  assert.equal(out.at(-1), '꺼진 기능: idle-jobs(점검 안 한 항목: idle-jobs-task), providers(점검 안 한 항목: provider-key) (켜려면 features.json에서 enabled를 true로)');
+  assert.equal(out.at(-1), '꺼진 기능: idle-jobs(점검 안 한 항목: idle-jobs-task), external-providers(점검 안 한 항목: provider-key) (켜려면 features.json에서 enabled를 true로)');
   assert.ok(!report.results.some((r) => r.id === 'idle-jobs-task' || r.id === 'provider-key'), 'their items were not checked');
   // The session-start notice (server task missing) says nothing about it.
   const { notice } = await sessionSetup(opts);
@@ -432,7 +455,7 @@ test('SECRETARY_<id>_DIR: registered for this folder is ok; unset or another fol
       ...(value === undefined ? {} : { env: { [SECRETARY_DIR_ENV]: value, [LEGACY_SECRETARY_DIR_ENV]: legacy } }),
     }),
   });
-  const item = async (value: string | null | undefined, legacy?: string) => (await checkSetup(withEnv(value, legacy))).results.find((r) => r.id === 'secretary-dir')!;
+  const item = async (value: string | null | undefined, legacy?: string) => (await checkSetup(withEnv(value, legacy))).results.find((r) => r.id === 'secretary-dir-env')!;
   assert.deepEqual([(await item(root)).status, (await item(root)).detail], ['ok', undefined]);
   // Same folder written another way (case, a trailing backslash) still counts.
   assert.equal((await item(root.toUpperCase() + '\\')).status, 'ok');
@@ -441,8 +464,8 @@ test('SECRETARY_<id>_DIR: registered for this folder is ok; unset or another fol
   assert.equal((await item(null)).status, 'unknown');
   assert.equal((await item(undefined)).status, 'unknown');
   const notice = setupNotice((await checkSetup(withEnv(''))).results);
-  assert.match(notice, /\[secretary-dir\] 비서 폴더 환경변수\(SECRETARY_<번호>_DIR\) \(SECRETARY_AB12_DIR 등록 안 됨\) → .*SetEnvironmentVariable\('SECRETARY_AB12_DIR', \(Get-Location\)\.Path, 'User'\)/);
-  // The old name (before install ids) pointing here: the new one is still to register; once it is, the old one is a note.
+  assert.match(notice, /\[secretary-dir-env\] 비서 폴더 환경변수\(SECRETARY_<번호>_DIR\) \(SECRETARY_AB12_DIR 등록 안 됨\) → .*SetEnvironmentVariable\('SECRETARY_AB12_DIR', \(Get-Location\)\.Path, 'User'\)/);
+  // The old name (before secretary ids) pointing here: the new one is still to register; once it is, the old one is a note.
   const onlyOld = await item('', root);
   assert.deepEqual([onlyOld.status, onlyOld.detail], ['missing', 'SECRETARY_AB12_DIR 등록 안 됨, 옛 이름 SECRETARY_DIR만 이 비서를 가리킴']);
   assert.match(onlyOld.fix!, /옛 이름 `SECRETARY_DIR`도 이 비서를 가리킨다: 그 이름을 읽는 바깥 도구를 새 이름으로 옮긴 뒤/);
@@ -455,7 +478,7 @@ test('SECRETARY_<id>_DIR: registered for this folder is ok; unset or another fol
   await checkSetup({ ...opts, probe: async (q) => (asked.push(q), { tasks: {}, procs: [] }) });
   assert.deepEqual(asked[0].env, [SECRETARY_DIR_ENV, LEGACY_SECRETARY_DIR_ENV]);
   // Off Windows it is not asked for.
-  assert.ok(!(await checkSetup({ ...opts, platform: 'linux' })).results.some((r) => r.id === 'secretary-dir'));
+  assert.ok(!(await checkSetup({ ...opts, platform: 'linux' })).results.some((r) => r.id === 'secretary-dir-env'));
 });
 
 test('reg query output: the value, %VARS% expanded for REG_EXPAND_SZ, empty when absent', () => {
@@ -523,7 +546,7 @@ test('the file a scheduled task runs, read from its XML', () => {
   const xml = (command: string, args?: string, dir?: string) =>
     `<?xml version="1.0" encoding="UTF-16"?>\r\n<Task><Actions Context="Author"><Exec><Command>${command}</Command>` +
     `${args === undefined ? '' : `<Arguments>${args}</Arguments>`}${dir ? `<WorkingDirectory>${dir}</WorkingDirectory>` : ''}</Exec></Actions></Task>`;
-  // As install-tasks.ps1 registers them: behind conhost --headless, or powershell itself; a Korean folder stays whole.
+  // As install-scheduled-tasks.ps1 registers them: behind conhost --headless, or powershell itself; a Korean folder stays whole.
   assert.equal(
     taskTargetFile(xml('conhost.exe', '--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\홍길동\\비서\\bin\\idle-jobs.ps1"')),
     'C:\\Users\\홍길동\\비서\\bin\\idle-jobs.ps1',
@@ -555,11 +578,11 @@ test('a task registered but pointing at a file that is gone is missing, with the
   assert.equal(item.detail, `등록됐지만 가리키는 파일 없음: ${gone}`);
   assert.match(setupNotice(report.results), /\[backup-task\][^\n]*-Task backup/);
 });
-/** Another secretary on this PC: a folder whose package.json is named "secretary", with its bin entries (and an install id when given). */
+/** Another secretary on this PC: a folder whose package.json is named "secretary", with its bin entries (and an secretary id when given). */
 function otherSecretary(id?: string): string {
   const other = tempDir();
   write(path.join(other, 'package.json'), JSON.stringify({ name: 'secretary' }));
-  if (id) write(path.join(other, INSTALL_ID_FILE), `${id}\n`);
+  if (id) write(path.join(other, SECRETARY_ID_FILE), `${id}\n`);
   for (const name of ['usage-guard.mjs', 'usage-statusline.mjs', 'backup-db.ps1'] as EntryName[]) write(entryPath(name, other), entryText(name));
   return other;
 }
@@ -622,12 +645,12 @@ test('each secretary has its own SECRETARY_<id>_DIR: another secretary\'s variab
   const asked: ProbeQuery[] = [];
   const report = await checkSetup({ ...withEnv({}), probe: async (q) => (asked.push(q), withEnv({ [SECRETARY_DIR_ENV]: root, SECRETARY_CD34_DIR: other, [LEGACY_SECRETARY_DIR_ENV]: other }).probe!(q)) });
   assert.ok(!asked[0].env!.includes('SECRETARY_CD34_DIR'));
-  const item = report.results.find((r) => r.id === 'secretary-dir')!;
+  const item = report.results.find((r) => r.id === 'secretary-dir-env')!;
   assert.deepEqual([item.status, item.detail], ['ok', undefined]);
   assert.equal(setupNotice(report.results), '', 'nothing to fix: no notice');
-  // The same secretary's left-behind copy (same install id): an old path of this copy, to point here.
+  // The same secretary's left-behind copy (same secretary id): an old path of this copy, to point here.
   const copy = otherSecretary(FIXTURE_ID);
-  const old = (await checkSetup(withEnv({ [SECRETARY_DIR_ENV]: copy }))).results.find((r) => r.id === 'secretary-dir')!;
+  const old = (await checkSetup(withEnv({ [SECRETARY_DIR_ENV]: copy }))).results.find((r) => r.id === 'secretary-dir-env')!;
   assert.deepEqual([old.status, old.detail], ['missing', `SECRETARY_AB12_DIR이 이 비서의 옛 사본(같은 고유 번호)을 가리킴: ${copy}`]);
   assert.match(old.fix!, /SetEnvironmentVariable\('SECRETARY_AB12_DIR'/);
 });
@@ -660,16 +683,16 @@ test('a task under this copy\'s name (with its id) that runs another secretary\'
   assert.match(item.fix!, /-Task backup/);
 });
 
-test('install-tasks.ps1 judges a registered task the same way (common.ps1 Get-OtherSecretary, Get-TaskTargetFile), install ids included', { skip: process.platform !== 'win32' }, () => {
+test('install-scheduled-tasks.ps1 judges a registered task the same way (common.ps1 Get-OtherSecretary, Get-TaskTargetFile), secretary ids included', { skip: process.platform !== 'win32' }, () => {
   const root = tempDir();
   const other = otherSecretary();
   const common = path.join(PROJECT_ROOT, 'scripts', 'lib', 'common.ps1');
   const action = (file: string) => `[pscustomobject]@{ Execute = 'conhost.exe'; Arguments = '--headless powershell.exe -NoProfile -File "${file}"'; WorkingDirectory = '${root}' }`;
   const judge = (file: string, r = root) => `(Get-OtherSecretary (Get-TaskTargetFile (${action(file)})) '${r}')`;
-  // With install ids: the same id is this copy's left-behind copy, another id another secretary. A file in lower case
+  // With secretary ids: the same id is this copy's left-behind copy, another id another secretary. A file in lower case
   // (an earlier build) is the same id.
   const idRoot = tempDir();
-  write(path.join(idRoot, INSTALL_ID_FILE), 'zz99\n');
+  write(path.join(idRoot, SECRETARY_ID_FILE), 'zz99\n');
   const sameId = otherSecretary('ZZ99');
   const otherId = otherSecretary('YY88');
   const lines = [
@@ -689,35 +712,43 @@ test('install-tasks.ps1 judges a registered task the same way (common.ps1 Get-Ot
   assert.deepEqual(out, [`1=${other}`, `2=${other}`, '3=', '4=', '5=C:\\s\\bin\\x.ps1', '6=', `7=${otherId}`, `8=${other}`, `9=${sameId}`]);
 });
 
-test('install id: made once (4 letters, no look-alikes), kept, read back; a broken file is replaced; task names carry it', () => {
+test('secretary id: made once (4 letters, no look-alikes), kept, read back; a broken file is replaced; task names carry it', () => {
   const root = tempDir();
-  assert.equal(readInstallId(root), null);
-  const first = ensureInstallId(root);
+  assert.equal(readSecretaryId(root), null);
+  const first = ensureSecretaryId(root);
   assert.equal(first.created, true);
   assert.match(first.id!, /^[A-Z0-9]{4}$/);
-  for (const ch of first.id!) assert.ok(INSTALL_ID_ALPHABET.includes(ch));
-  assert.deepEqual(ensureInstallId(root), { id: first.id, created: false }, 'kept from then on');
-  assert.equal(readInstallId(root), first.id);
-  assert.equal(fs.readFileSync(path.join(root, INSTALL_ID_FILE), 'utf8'), `${first.id}\n`);
+  for (const ch of first.id!) assert.ok(SECRETARY_ID_ALPHABET.includes(ch));
+  // 없으면 놓치는 실수: 새 번호가 모음으로 낱말(KEYS, USAGE…)을 이뤄 ~/.secretary에 함께 쓰는 이름과 겹치거나, 모음 든 옛 번호를 못 읽는다.
+  assert.ok(![...SECRETARY_ID_ALPHABET].some((ch) => 'AEIOUY01L'.includes(ch)), 'no vowels, no look-alikes');
+  for (let k = 0; k < 24; k++) assert.doesNotMatch(newSecretaryId(), /[AEIOUY]/);
+  assert.ok(fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'lib', 'common.ps1'), 'utf8').includes(`$SecretaryIdAlphabet = '${SECRETARY_ID_ALPHABET}'`), 'the PowerShell side makes ids from the same letters');
+  const old = tempDir();
+  write(path.join(old, SECRETARY_ID_FILE), 'A3F9\n');
+  assert.equal(readSecretaryId(old), 'A3F9', 'an id made before, with vowels, still reads');
+  assert.deepEqual(ensureSecretaryId(old), { id: 'A3F9', created: false });
+  assert.deepEqual(ensureSecretaryId(root), { id: first.id, created: false }, 'kept from then on');
+  assert.equal(readSecretaryId(root), first.id);
+  assert.equal(fs.readFileSync(path.join(root, SECRETARY_ID_FILE), 'utf8'), `${first.id}\n`);
   // One shape everywhere: upper case. A hand-written or older one (lower case, BOM, CRLF) reads in upper case without
   // writing; making sure of the id writes it again as `<ID>\n`. One that is not an id is replaced.
-  write(path.join(root, INSTALL_ID_FILE), '\uFEFFmy01\r\n');
-  assert.equal(readInstallId(root), 'MY01');
-  assert.equal(fs.readFileSync(path.join(root, INSTALL_ID_FILE), 'utf8'), '\uFEFFmy01\r\n', 'reading does not write');
-  assert.deepEqual(ensureInstallId(root), { id: 'MY01', created: false });
-  assert.equal(fs.readFileSync(path.join(root, INSTALL_ID_FILE), 'utf8'), 'MY01\n');
-  write(path.join(root, INSTALL_ID_FILE), 'Not An Id!');
-  assert.equal(readInstallId(root), null);
-  assert.equal(ensureInstallId(root).created, true);
+  write(path.join(root, SECRETARY_ID_FILE), '\uFEFFmy01\r\n');
+  assert.equal(readSecretaryId(root), 'MY01');
+  assert.equal(fs.readFileSync(path.join(root, SECRETARY_ID_FILE), 'utf8'), '\uFEFFmy01\r\n', 'reading does not write');
+  assert.deepEqual(ensureSecretaryId(root), { id: 'MY01', created: false });
+  assert.equal(fs.readFileSync(path.join(root, SECRETARY_ID_FILE), 'utf8'), 'MY01\n');
+  write(path.join(root, SECRETARY_ID_FILE), 'Not An Id!');
+  assert.equal(readSecretaryId(root), null);
+  assert.equal(ensureSecretaryId(root).created, true);
   // Ids differ from install to install (24 draws, all the same would be a broken generator).
-  assert.ok(new Set(Array.from({ length: 24 }, newInstallId)).size > 1);
+  assert.ok(new Set(Array.from({ length: 24 }, newSecretaryId)).size > 1);
   // Task names: the features.json name and the id; the name alone without an id.
   assert.equal(taskNameWith('Secretary Idle Jobs', 'A3F9'), 'Secretary Idle Jobs (A3F9)');
   assert.equal(taskNameWith('Secretary Idle Jobs', 'a3f9'), 'Secretary Idle Jobs (A3F9)');
   assert.equal(taskNameWith('Secretary Idle Jobs', null), 'Secretary Idle Jobs');
   fs.copyFileSync(path.join(PROJECT_ROOT, 'features.json'), path.join(root, 'features.json'));
   // A lower-case file (an earlier build) gives the same upper-case names.
-  write(path.join(root, INSTALL_ID_FILE), 'a3f9\n');
+  write(path.join(root, SECRETARY_ID_FILE), 'a3f9\n');
   const names = scheduledTaskNames(root);
   assert.equal(names.server, 'Secretary Remote Control (A3F9)');
   assert.equal(names.backup, 'Secretary DB Backup (A3F9)');
@@ -727,48 +758,52 @@ test('install id: made once (4 letters, no look-alikes), kept, read back; a brok
 });
 
 // Without it: two secretaries on one PC append to one server, idle-job, end-notice and judge-call log and their lines mix.
-test('each secretary logs under its own id (~/.secretary/logs/<id>, logs/ without one), the same on the PowerShell side', { skip: process.platform !== 'win32' }, () => {
+test('each secretary logs under its own id (~/.secretary/<id>/logs, logs/ without one), the same on the PowerShell side', { skip: process.platform !== 'win32' }, () => {
   const root = tempDir();
   const home = tempDir();
   assert.equal(secretaryLogDir(root, home), path.join(home, 'logs'), 'no id yet: logs/ as before');
-  write(path.join(root, INSTALL_ID_FILE), 'ab12\n');
-  assert.equal(secretaryLogDir(root, home), path.join(home, 'logs', 'AB12'));
+  write(path.join(root, SECRETARY_ID_FILE), 'ab12\n');
+  assert.equal(secretaryLogDir(root, home), path.join(home, 'AB12', 'logs'));
+  assert.equal(legacySecretaryLogDir(root, home), path.join(home, 'logs', 'AB12'), 'until 2026-11-09');
   assert.equal(NOTIFY_LOG_FILE, path.join(secretaryLogDir(), 'notify.log'));
   const profile = tempDir();
   const lib = (name: string) => path.join(PROJECT_ROOT, 'scripts', ...name.split('/'));
   const lines = [
     `. '${lib('lib/common.ps1')}'`,
-    `. '${lib('server/server-lib.ps1')}'`,
+    `. '${lib('remote-server/server-lib.ps1')}'`,
     `"1=" + (Get-SecretaryLogDir '${root}')`,
     `"2=" + ((Get-ServerLogDir 'subscription-b') -eq (Join-Path (Get-SecretaryLogDir) 'server-b'))`,
     `"3=" + (Get-LegacyServerLogDir '')`,
+    // 없으면 놓치는 실수: 2026-11-09 전 이 비서 번호 폴더(logs\\<번호>\\server-a)의 서버 기록을 서버를 다시 켜기 전까지 못 본다.
+    `New-Item -ItemType Directory -Force (Join-Path (Get-SecretaryHome) 'logs\\AB12\\server-a') | Out-Null; $SecretaryRoot = '${root}'; "4=" + (Get-LegacyServerLogDir '')`,
   ];
   const out = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', lines.join('; ')], {
     encoding: 'utf8',
     env: { ...process.env, USERPROFILE: profile },
   });
   assert.deepEqual(out.trim().split(/\r?\n/), [
-    `1=${path.join(profile, '.secretary', 'logs', 'AB12')}`,
+    `1=${path.join(profile, '.secretary', 'AB12', 'logs')}`,
     '2=True',
     `3=${path.join(profile, '.secretary', 'logs', 'server-a')}`,
+    `4=${path.join(profile, '.secretary', 'logs', 'AB12', 'server-a')}`,
   ]);
 });
 
 test('the install check makes the id on a first install and asks for the tasks by their new names', async () => {
   const { opts, root, queries } = fixture();
-  fs.rmSync(path.join(root, INSTALL_ID_FILE));
+  fs.rmSync(path.join(root, SECRETARY_ID_FILE));
   await checkSetup(opts);
-  const id = readInstallId(root);
+  const id = readSecretaryId(root);
   assert.ok(id, 'made by the check');
   assert.ok(queries[0].tasks.includes(`Secretary DB Backup (${id})`));
   // The next check keeps it.
   await checkSetup(opts);
-  assert.equal(readInstallId(root), id);
+  assert.equal(readSecretaryId(root), id);
 });
 
-test('whose a path is with install ids: same id is this copy\'s left-behind copy; another id or none on one side is another secretary', () => {
+test('whose a path is with secretary ids: same id is this copy\'s left-behind copy; another id or none on one side is another secretary', () => {
   const root = tempDir();
-  write(path.join(root, INSTALL_ID_FILE), 'AB12\n');
+  write(path.join(root, SECRETARY_ID_FILE), 'AB12\n');
   const copy = otherSecretary('AB12');
   const other = otherSecretary('CD34');
   const noId = otherSecretary();
@@ -779,7 +814,7 @@ test('whose a path is with install ids: same id is this copy\'s left-behind copy
   assert.deepEqual(ownerOf(entryPath('usage-guard.mjs', copy), tempDir()), { whose: 'other', folder: copy });
   // A folder known only by its id file is a secretary folder too (in lower case, from an earlier build: the same id).
   const idOnly = tempDir();
-  write(path.join(idOnly, INSTALL_ID_FILE), 'ab12\n');
+  write(path.join(idOnly, SECRETARY_ID_FILE), 'ab12\n');
   assert.deepEqual(ownerOf(path.join(idOnly, 'bin', 'x.ps1'), root), { whose: 'old', copy: idOnly });
   // Usage hooks of the left-behind copy are this copy's old path (install-usage-guard.mjs points them here).
   assert.equal(hookKind(`node "${entryPath('usage-guard.mjs', copy)}"`, 'usage-guard.mjs', root).kind, 'old');
@@ -798,7 +833,7 @@ test('a task under its old name (before the id) that runs this copy is to move; 
   assert.equal(backup.status, 'missing');
   assert.equal(backup.detail, `옛 이름 'Secretary DB Backup'으로 등록됨: ${mine}`);
   assert.match(backup.fix!, /'Secretary DB Backup' → 'Secretary DB Backup \(AB12\)'/);
-  assert.match(backup.fix!, /install-tasks\.ps1 -Task backup`가 새 이름으로 등록하고 이 비서의 옛 이름 작업을 지운다/);
+  assert.match(backup.fix!, /install-scheduled-tasks\.ps1 -Task backup`가 새 이름으로 등록하고 이 비서의 옛 이름 작업을 지운다/);
   // The server's move needs an administrator PowerShell; an old folder of this copy (gone) counts as this copy's too.
   const moved = path.join(tempDir(), 'moved-away', 'bin', 'server-control.ps1');
   const server = await item(withTasks({ [OLD.server]: true }, { [OLD.server]: moved }), 'server-task');
@@ -819,8 +854,8 @@ test('a task under its old name (before the id) that runs this copy is to move; 
   assert.equal(backup.status, 'ok');
 });
 
-test('install-tasks.ps1 names tasks with the install id, makes the id when there is none, and moves this copy\'s old-named tasks (dry run)', { skip: process.platform !== 'win32' }, () => {
-  const script = scriptPath('installTasks');
+test('install-scheduled-tasks.ps1 names tasks with the secretary id, makes the id when there is none, and moves this copy\'s old-named tasks (dry run)', { skip: process.platform !== 'win32' }, () => {
+  const script = scriptPath('installScheduledTasks');
   const dir = tempDir();
   const idFile = path.join(dir, 'id.txt');
   const tasksFile = path.join(dir, 'tasks.json');
@@ -865,6 +900,25 @@ test('install-tasks.ps1 names tasks with the install id, makes the id when there
   assert.equal(fs.readFileSync(idFile, 'utf8'), 'AB12\n');
   assert.match(out, /건너뜀: Secretary DB Backup \(AB12\) - 이 비서 이름\(번호 포함\)의 작업이 이 PC의 다른 비서/);
   assert.doesNotMatch(out, /새로 만들었어요/);
+  // 없으면 놓치는 실수: 이름이 바뀐 예약 작업(옮기기 표 scheduledTasks)의 옛 작업이 남아 같은 일이 두 번 돌거나(ntfy 서버 둘이 한 포트를 다툼),
+  // 다른 비서의 옛 이름 작업을 지우거나, 옮기면서 ntfy.exe·server.yml 자리를 기본값으로 바꾼다.
+  const moves = path.join(dir, 'moves.json');
+  fs.writeFileSync(moves, JSON.stringify({ scheduledTasks: { 'v0.10.0': { 'Secretary Old Backup': 'Secretary DB Backup', 'Secretary ntfy': 'Secretary ntfy Server' } } }));
+  const allOn = path.join(dir, 'features.json');
+  fs.writeFileSync(allOn, JSON.stringify({ features: readFeatures(PROJECT_ROOT)!.map((f) => (f.core ? f : { ...f, enabled: true })) }));
+  out = run({ 'Secretary Old Backup (AB12)': old('backup-db.ps1') }, '-Task', 'backup', '-MovesFile', moves);
+  assert.ok(out.includes("옮김(예정): 'Secretary Old Backup (AB12)' → 'Secretary DB Backup (AB12)' (옛 작업은 지움)"), out);
+  out = run({ 'Secretary Old Backup': old('backup-db.ps1') }, '-Task', 'backup', '-MovesFile', moves);
+  assert.ok(out.includes("옮김(예정): 'Secretary Old Backup' → 'Secretary DB Backup (AB12)'"), out);
+  out = run({ 'Secretary Old Backup (AB12)': { execute: 'powershell.exe', arguments: `-File "${entryPath('backup-db.ps1', other)}"`, workingDirectory: other } }, '-Task', 'backup', '-MovesFile', moves);
+  assert.doesNotMatch(out, /옮김/, "another secretary's file under an old name with this id is left alone");
+  const ntfy = { execute: 'conhost.exe', arguments: '--headless "D:\\n\\ntfy.exe" serve --config "D:\\n\\my.yml"', workingDirectory: 'D:\\n' };
+  out = run({ 'Secretary ntfy (AB12)': ntfy }, '-Task', 'ntfy', '-MovesFile', moves, '-FeaturesFile', allOn);
+  assert.ok(out.includes('[Secretary ntfy Server (AB12)] conhost.exe --headless "D:\\n\\ntfy.exe" serve --config "D:\\n\\my.yml"'), out);
+  assert.ok(out.includes("옮김(예정): 'Secretary ntfy (AB12)' → 'Secretary ntfy Server (AB12)'"), out);
+  // Without the moves file nothing is looked for under the renamed old name.
+  out = run({ 'Secretary Old Backup (AB12)': old('backup-db.ps1') }, '-Task', 'backup', '-MovesFile', path.join(dir, 'none.json'));
+  assert.doesNotMatch(out, /옮김/);
 });
 
 test('a release lists its files (release-files.json): one that is gone is missing; without the list the item does not apply', async () => {
@@ -883,4 +937,40 @@ test('a release lists its files (release-files.json): one that is gone is missin
   assert.equal(setupReminder(opts), '');
   write(path.join(root, 'release-files.json'), '{');
   assert.equal((await checkSetup(opts)).results.find((r) => r.id === 'release-files')!.status, 'unknown');
+});
+
+// Without it: a look-only command (a --dry-run, stats, board, a purge-log list) run where there is no secretary.db made an
+// empty one there (a worktree, a fresh copy), which then looked like a secretary with no memories.
+test('look-only commands never make a database: a missing one is said and skipped', () => {
+  const dir = tempDir();
+  const db = path.join(dir, 'secretary.db');
+  const env = { ...process.env, SECRETARY_DB: db, SECRETARY_WORKSPACE_ROOT: path.join(dir, 'workspaces') };
+  const cli = (...args: string[]) => {
+    try {
+      return execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'cli.ts'), ...args], { env, encoding: 'utf8', stdio: 'pipe' });
+    } catch (err) {
+      return String((err as { stdout?: string }).stdout ?? '') + String((err as { stderr?: string }).stderr ?? '');
+    }
+  };
+  const runs: [string[], RegExp][] = [
+    [['workspace-aux-folders', '--dry-run'], /DB가 없/],
+    [['workspace-links', '--dry-run'], /DB가 없/],
+    [['skill-links', '--dry-run'], /./],
+    [['memory-stats'], /DB가 없/],
+    [['situation-board-show'], /DB가 없/],
+    [['db-backup'], /DB가 없/],
+    [['purge-log', 'preview', '2턴'], /DB가 없/],
+    [['purge-log', '120'], /DB가 없/],
+    [['purge-log', 'restore', '120'], /DB가 없/],
+    [['rewind-clean', path.join(dir, 'none.jsonl'), '--dry-run'], /DB가 없/],
+    [['no-such-command'], /usage/],
+  ];
+  for (const [args, said] of runs) {
+    const out = cli(...args);
+    assert.ok(!fs.existsSync(db), `${args.join(' ')}: made ${db}`);
+    assert.match(out, said, args.join(' '));
+  }
+  // A command that writes still makes it (a fresh copy's first stats after a write sees the real database).
+  cli('purge-log', '120', '--confirm');
+  assert.ok(fs.existsSync(db), 'purge-log --confirm opens (and makes) the database as before');
 });

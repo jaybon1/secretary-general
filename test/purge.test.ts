@@ -206,7 +206,7 @@ test('the hook: the phrase gets only the preview order, the code deletes, and th
   assert.equal(purgeNotice(s), '');
 });
 
-test('a deletion by hand (purge-log --confirm) is told once on the next prompt, numbers only', () => {
+test('a deletion run directly (purge-log --confirm) is told once on the next prompt, numbers only', () => {
   const { s, id } = conversation();
   const [p3, a3] = [id('p3'), id('a3')];
   const doomed = s.remember({ kind: 'fact', content: '지울 턴의 기억', sourceLogId: p3 }).id;
@@ -398,7 +398,7 @@ test('cli: the phrase reaches the model with only the preview order, the preview
   s.db.close();
   fs.copyFileSync(source, db);
   // No real transcripts or keys: an empty home.
-  const env = { ...process.env, SECRETARY_DB: db, USERPROFILE: home, HOME: home, SECRETARY_KEYS_DIR: home, CLAUDE_CONFIG_DIR: '', SECRETARY_EMBED: 'off' };
+  const env = { ...process.env, SECRETARY_DB: db, USERPROFILE: home, HOME: home, SECRETARY_KEYS_DIR: home, CLAUDE_CONFIG_DIR: '', SECRETARY_SEMANTIC_SEARCH: 'off' };
   const cli = (args: string[], input = '') => execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'cli.ts'), ...args], { input, encoding: 'utf8', env });
   const run = (prompt: string) => cli(['hook', 'prompt'], JSON.stringify({ session_id: 's1', prompt, hook_event_name: 'UserPromptSubmit' }));
   const first = JSON.parse(run('비서 대화 삭제 1턴'));

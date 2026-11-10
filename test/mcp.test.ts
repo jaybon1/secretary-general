@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import fs from 'node:fs';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import type { Store } from '../src/store/store.ts';
-import { guardsOn } from '../src/guards/settings.ts';
+import { guardsOn } from '../src/mistake-guards/mistake-guard-settings.ts';
 import { MISTAKE_TOOLS } from '../src/mcp/mistake-tools.ts';
 import { tempDir, testStore } from './helpers.ts';
 
@@ -28,7 +28,7 @@ test('MCP server: remember → recall → supersede → stats over stdio', async
   );
   try {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-    // The mistake record's tools come with feature 'guards' (off in a copy that turned it off).
+    // The mistake record's tools come with feature 'mistake-guards' (off in a copy that turned it off).
     assert.deepEqual(tools, [
       'create_task', 'create_workspace', 'forget', 'get_profile', 'get_task', 'get_unconsolidated_log', 'list_big_work',
       'list_memories', 'list_tasks', 'list_topics', 'list_workspaces', 'mark_consolidated', 'recall', 'remember', 'search_log', 'set_big_work',
@@ -130,7 +130,7 @@ test('MCP server --readonly: only recall and search_log, and recalls write nothi
     new StdioClientTransport({
       command: process.execPath,
       args: [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts'), '--readonly'],
-      env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_EMBED: 'off' },
+      env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_SEMANTIC_SEARCH: 'off' },
     }),
   );
   try {
@@ -165,7 +165,7 @@ test('MCP server --readonly opens the DB read-only: an old one is not migrated, 
       new StdioClientTransport({
         command: process.execPath,
         args: [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts'), '--readonly'],
-        env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_EMBED: 'off' },
+        env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_SEMANTIC_SEARCH: 'off' },
       }),
     );
     try {
@@ -193,7 +193,7 @@ test('MCP server: get_unconsolidated_log hands out whole messages, a long one pa
     new StdioClientTransport({
       command: process.execPath,
       args: [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts')],
-      env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_EMBED: 'off' },
+      env: { ...(process.env as Record<string, string>), SECRETARY_DB: db, SECRETARY_SEMANTIC_SEARCH: 'off' },
     }),
   );
   const next = async () => text(await client.callTool({ name: 'get_unconsolidated_log', arguments: { budget_tokens: 20000 } }));

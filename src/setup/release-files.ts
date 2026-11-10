@@ -1,6 +1,6 @@
 /**
  * The release's file list: `release-files.json` at the top of a general release, written by the release builder
- * (scripts/dist/dist.mjs build) with every file it ships and a hash of its content. The original has none.
+ * (scripts/release-build/release-build.mjs build) with every file it ships and a hash of its content. The original has none.
  *
  * Who reads it:
  * - test/ps1-syntax.test.ts: a listed file is the secretary's own (its BOM or parse problem fails), any other is the
@@ -8,7 +8,7 @@
  * - scripts/update.mjs (release only): a file whose hash still matches the user's list was not changed by the user,
  *   even where the git tag of that version differs (it keeps its own copy of fileHash; a test compares them).
  * - the install check (setup/check-items.ts, item 'release-files'): listed files that are gone.
- * - node bin/dist.mjs check: the list matches the folder.
+ * - node bin/release-build.mjs check: the list matches the folder.
  *
  * The hash is SHA-256 of the content as an update compares it: a UTF-8 text without its BOM and with LF line ends
  * (editors and zip tools change those without changing the file); a binary file (one with a NUL byte) as it is.

@@ -6,8 +6,8 @@
 import fs from 'node:fs';
 import { cleanRewound } from './rewind.ts';
 import type { LogEntry, Store } from '../store/store.ts';
-import { redactSecrets } from '../core/secrets.ts';
-import { HOOK_FEEDBACK } from '../guards/turn.ts';
+import { redactSecrets } from '../core/secret-mask.ts';
+import { HOOK_FEEDBACK } from '../mistake-guards/last-turn.ts';
 
 type Entry = Omit<LogEntry, 'id'>;
 

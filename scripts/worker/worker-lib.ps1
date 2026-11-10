@@ -2,14 +2,14 @@
 #   start-worker.ps1 → Start-Worker, send-worker.ps1 → Send-Worker, worker-logs.ps1 → Show-WorkerLogs, worker-done.ps1 → Complete-Worker
 # 입구를 파일별로 남긴 것은 권한 허용 목록이 스크립트 이름으로 구분하기 때문이다(예: 시작은 허용, 끄기는 따로). 이름·인자·출력은 입구 머리말 그대로.
 # watch-worker.ps1(감시)도 여기의 Find-WorkerSession을 쓴다.
-# 재사용 상태: 이 비서의 기록 폴더(~/.secretary/state/<비서 번호>, common.ps1 Get-SecretaryStateDir)의 worker-sessions.json
+# 재사용 상태: 이 비서의 기록 폴더(~/.secretary/<비서 번호>/state, common.ps1 Get-SecretaryStateDir)의 worker-sessions.json
 # (bg id → 공간·공급자·설정 폴더·업무 끝난 시각), 판단 기록: 같은 폴더의 worker-reuse.jsonl.
 
 . "$PSScriptRoot\..\lib\common.ps1"
 . "$PSScriptRoot\..\lib\providers.ps1"
 . "$PSScriptRoot\..\lib\memory-mcp.ps1"
 
-# 업무 세션 훅(worker-guard.mjs)에 넘길 비서 폴더 인자: ' --secretary "<긴 이름>"'과, 다르면 ' --secretary "<8.3 짧은 이름>"'.
+# 업무 세션 훅(worker-folder-guard.mjs)에 넘길 비서 폴더 인자: ' --secretary "<긴 이름>"'과, 다르면 ' --secretary "<8.3 짧은 이름>"'.
 # 셸 명령이 이 비서 폴더를 어느 꼴로 적어도(8.3 짧은 이름 꼴 PROGRA~1 같은 것 포함) 훅이 알아본다. 짧은 이름을 못 구하면 긴 이름만.
 function Get-SecretaryGuardArgs([string]$Root = $SecretaryRoot) {
   $long = [IO.Path]::GetFullPath($Root).TrimEnd('\')
@@ -45,7 +45,7 @@ function Read-WorkerJob([string]$ConfigDir, [string]$Id) {
 # 업무 세션이 턴을 끝내고 쉬는지. $Alive는 claude agents 목록 항목, $Job은 Read-WorkerJob 결과. 일하는 중이면 $null,
 # 쉬면 @{ status; state; leftover = @(뒤에서 도는 명령 설명) }.
 # claude agents의 status는 턴이 끝나도 뒤에서 도는 명령(run_in_background, 2분을 넘겨 뒤로 넘어간 명령)이 남아 있으면 busy다.
-# 2026-11-05 업무 143은 끝난 명령이 멈춘 채 남아 status=busy로 50분 남았고 감시가 쉼을 놓쳤다. 그래서 status가 busy여도
+# 2026-11-05 한 업무는 끝난 명령이 멈춘 채 남아 status=busy로 50분 남았고 감시가 쉼을 놓쳤다. 그래서 status가 busy여도
 # 모델이 쉬고(tempo idle·blocked) 결과나 질문을 냈으면(state done·blocked) 쉼으로 본다. 뒤에서 도는 명령을 기다리며 쉬는
 # 세션(state working)은 그 명령이 끝나면 이어서 일하므로 일하는 중으로 둔다.
 function Get-WorkerRest($Alive, $Job) {
@@ -215,10 +215,10 @@ function Start-Worker([string]$Folder, [string]$Name, [string]$Prompt, [string]$
     @('--permission-mode', 'dontAsk')
   }
   # 공간 밖 쓰기, git push, 게시·업로드, 큰 삭제(-LockTests면 테스트 파일 수정도), 비서 폴더를 건드리는 셸 명령(bin\ 입구 부르기만 된다)을
-  # 훅으로 막는다(worker-guard.mjs). 비서 폴더는 긴 이름과 8.3 짧은 이름 꼴을 함께 넘긴다(Get-SecretaryGuardArgs).
-  $guard = "node `"$PSScriptRoot\worker-guard.mjs`" `"$folderFull`"" + $(if ($LockTests) { ' --lock-tests' } else { '' }) + (Get-SecretaryGuardArgs)
+  # 훅으로 막는다(worker-folder-guard.mjs). 비서 폴더는 긴 이름과 8.3 짧은 이름 꼴을 함께 넘긴다(Get-SecretaryGuardArgs).
+  $guard = "node `"$PSScriptRoot\worker-folder-guard.mjs`" `"$folderFull`"" + $(if ($LockTests) { ' --lock-tests' } else { '' }) + (Get-SecretaryGuardArgs)
   $guardHook = [pscustomobject]@{ matcher = 'Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell'; hooks = @([pscustomobject]@{ type = 'command'; command = $guard; timeout = 5 }) }
-  # 같은 종류 조작이 한 턴에 여러 번(기준 guards.local.json repeatLimit) 되풀이되면 막지 않고 도구·스크립트로 바꿀지 따져 보라고 알린다(src/guards/repeat-hook.ts).
+  # 같은 종류 조작이 한 턴에 여러 번(기준 this-secretary.local.json의 mistake-guards 칸 repeatLimit) 되풀이되면 막지 않고 도구·스크립트로 바꿀지 따져 보라고 알린다(src/mistake-guards/repeat-hook.ts).
   $workerSettings | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{ PreToolUse = @($guardHook); PostToolUse = @(Get-RepeatHook) }) -Force
   # 계정에 붙인 claude.ai 커넥터(예: Google Calendar)는 업무에 쓰지 않으므로 업무 세션에는 붙이지 않는다.
   # 업무 세션은 이미 떠 있는 백그라운드 서비스의 환경을 물려받으므로, 공간 도구가 비서 입구(bin\)를 찾는 비서 폴더 환경변수

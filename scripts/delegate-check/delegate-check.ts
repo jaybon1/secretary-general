@@ -1,4 +1,4 @@
-// 위임 앞뒤 대조(기능 'guards'). 비서 폴더 밖에서는 입구 bin/delegate-check.mjs로 부른다.
+// 위임 앞뒤 대조(기능 'mistake-guards'). 비서 폴더 밖에서는 입구 bin/delegate-check.mjs로 부른다.
 //   node bin/delegate-check.mjs brief <지시 파일> --tag <태그> [--tag <태그>]... [--query <말>] [--db <DB 파일>] [--memories <개수>] [--rules <줄 수>]
 //     지시서(TASK.md나 지시 파일)와 그 공간·업무 태그가 붙은 결정(decision) 기억을 대조해, 지시서에 안 들어간 듯한 결정 가운데
 //     지시서와 낱말이 겹치는(드문 낱말일수록 무겁게) 것을 관련 높은 순으로 위 몇 개(기본 10) 보여 주고, 들어간 듯한 결정을 잇는다.
@@ -15,7 +15,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH, PROJECT_ROOT } from '../../src/core/config.ts';
 import { formatLocal } from '../../src/core/kst-time.ts';
-import { queryTerms, searchTerms } from '../../src/memory/korean-terms.ts';
+import { queryTerms, searchTerms } from '../../src/memory/search-terms.ts';
 
 // ---- brief ----------------------------------------------------------------------------------------------------------
 
@@ -193,7 +193,7 @@ export function findSpaceRoot(briefFile: string): string | null {
   }
 }
 
-/** The space's own SKILL.md files and the common ones its common-skills.json names (workspaces/_skills/<name>), each once. */
+/** The space's own SKILL.md files and the common ones its common-skills.json names (workspaces/_skills/common-<name>), each once. */
 export function spaceSkillFiles(space: string): Array<{ skill: string; file: string }> {
   const out: Array<{ skill: string; file: string }> = [];
   const seen = new Set<string>();
@@ -213,8 +213,12 @@ export function spaceSkillFiles(space: string): Array<{ skill: string; file: str
     const j = JSON.parse(fs.readFileSync(path.join(space, 'common-skills.json'), 'utf8'));
     if (Array.isArray(j?.skills)) common = j.skills.filter((s: unknown): s is string => typeof s === 'string');
   } catch {}
+  // Listed with the common- prefix (folder name = skill name); an old list without it is read the same way.
   const commonDir = path.join(path.dirname(space), '_skills');
-  for (const name of common) add(`공통 ${name}`, path.join(commonDir, name, 'SKILL.md'));
+  for (const name of common) {
+    const full = name.startsWith('common-') ? name : `common-${name}`;
+    add(`공통 ${full.slice('common-'.length)}`, path.join(commonDir, full, 'SKILL.md'));
+  }
   const skillsDir = path.join(space, '.agents', 'skills');
   let names: string[] = [];
   try {

@@ -6,10 +6,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { BUDGET } from '../core/config.ts';
 import { transaction } from './schema.ts';
 import { assertNoThreat } from '../memory/injection-screen.ts';
-import { estimateTokens } from '../core/tokens.ts';
-import { ftsQuery, indexText, queryTerms } from '../memory/korean-terms.ts';
+import { userWords } from './user-title.ts';
+import { estimateTokens } from '../core/token-estimate.ts';
+import { ftsQuery, indexText, queryTerms } from '../memory/search-terms.ts';
 import { nowIso } from '../core/kst-time.ts';
-import { redactSecrets } from '../core/secrets.ts';
+import { redactSecrets } from '../core/secret-mask.ts';
 
 export const MEMORY_KINDS = ['fact', 'preference', 'decision', 'event', 'task', 'person', 'note', 'summary'] as const;
 
@@ -69,7 +70,7 @@ export class MemoryRaceError extends Error {}
 export function remember(db: DatabaseSync, input: NewMemory): { id: number; superseded: number[] } {
   const content = redactSecrets(input.content.trim());
   if (!content) throw new Error('content is empty');
-  assertNoThreat(content, '기억');
+  assertNoThreat(content, '기억', userWords(db));
   const tags = normalizeTags(input.tags);
   const now = nowIso();
   // Store every timestamp as UTC ISO so ordering and display stay consistent.
@@ -282,7 +283,7 @@ export function getProfile(db: DatabaseSync): Profile | undefined {
 
 export function updateProfile(db: DatabaseSync, content: string, reason: string): Profile {
   const text = content.trim();
-  assertNoThreat(text, '프로필');
+  assertNoThreat(text, '프로필', userWords(db));
   const tokens = estimateTokens(text);
   if (tokens > BUDGET.profileMax) {
     throw new Error(

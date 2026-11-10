@@ -1,4 +1,4 @@
-﻿# -Detach로 띄운 run-job(scripts/lib/bg-job.ps1)을 기다린다. AI를 부르지 않는 단순 확인이라 기다리는 동안 토큰이 들지 않는다.
+﻿# -Detach로 띄운 run-job(scripts/lib/detached-job.ps1)을 기다린다. AI를 부르지 않는 단순 확인이라 기다리는 동안 토큰이 들지 않는다.
 # 일이 끝나거나, 끝 기록 없이 프로세스가 사라지거나, -MaxMinutes(기본 55분, common.ps1의 $CacheWakeMinutes)가 지나면 끝나며 비서를 깨운다.
 # 55분인 까닭은 업무 세션 감시(watch-worker.ps1)와 같다: 구독 대화 캐시가 1시간이라, 그 안에 깨어 읽으면 캐시가 살아 있고 다시 1시간 늘어난다.
 # 비서는 이 명령을 백그라운드 명령(시간제한 3600000ms)으로 띄우고, "아직 도는 중"이 오면 알림 없이 같은 명령을 다시 띄운다.
@@ -13,7 +13,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch {}
-. "$PSScriptRoot\..\lib\bg-job.ps1"
+. "$PSScriptRoot\..\lib\detached-job.ps1"
 if (-not $MaxMinutes) { $MaxMinutes = $CacheWakeMinutes }
 $dir = Get-BgJobDir $Id
 $jobFile = Join-Path $dir 'job.json'

@@ -3,12 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { unseenReports, type ConsolidateReport } from '../src/memory/consolidate-notice.ts';
-import { consolidatePrompt, runConsolidate, runIdleJobs } from '../src/idle/idle-jobs.ts';
+import { runIdleJobs } from '../src/idle/idle-jobs.ts';
+import { claimConsolidate, consolidatePrompt, consolidateRunning, runConsolidate } from '../src/memory/consolidate-run.ts';
+import { readStaff, staffFolder } from '../src/staff/staff.ts';
 import { lastActivityMs } from '../src/log/catch-up.ts';
 import type { Store } from '../src/store/store.ts';
 import { talk, tempDir, tempStore } from './helpers.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { SECRETARY_SKILLS_DIR, skillFile } from '../src/core/paths.ts';
+import { frontMatter } from '../src/setup/skill-spec.ts';
 
 const MIN = 60_000;
 const okReport = (s: Store): Promise<ConsolidateReport> => Promise.resolve({ at: new Date().toISOString(), ok: true, text: '보고', fromLogId: 0, throughLogId: s.logAfter(0).at(-1)!.id });
@@ -58,32 +61,56 @@ test('consolidation: a run that moved the watermark is a report to confirm; one 
   talk(s, 3, Date.now());
   const last = s.logAfter(0).at(-1)!.id;
   let prompt = '';
-  const ok = await runConsolidate(s, async (file) => {
+  const ok = (await runConsolidate(s, 'idle', async (file) => {
     prompt = fs.readFileSync(file, 'utf8');
     s.markConsolidated(last);
     return '처리 범위 #1~#3, 새 기억 1개\n(새 세션) 세션: abc';
-  });
+  })).report!;
   assert.equal(ok.ok, true);
+  assert.equal(ok.by, 'idle');
   assert.equal(ok.text, '처리 범위 #1~#3, 새 기억 1개', 'run-job session line removed');
-  assert.match(prompt, /^이 일은 개인 비서의 쉬는 시간 기억 정리다\. 사람이 보고 있지 않으니 묻지 말고/);
+  assert.match(prompt, /^# 기억 정리 절차\n\n이 일은 개인 비서의 기억 정리다[^\n]*사람이 보고 있지 않으니 묻지 말고/);
   assert.match(prompt, /seen_id/);
   assert.match(prompt, /allow_similar/);
-  assert.match(prompt, /# 기억 정리/, 'the consolidate skill body follows');
-  assert.doesNotMatch(prompt, /^context: fork/m, 'skill frontmatter stripped');
   assert.match(consolidatePrompt(), /get_unconsolidated_log/);
 
   talk(s, 1, Date.now());
-  const stuck = await runConsolidate(s, async () => '도구를 못 찾았어요');
+  const stuck = (await runConsolidate(s, 'manual', async () => '도구를 못 찾았어요')).report!;
   assert.equal(stuck.ok, false);
+  assert.equal(stuck.by, 'manual');
   assert.match(stuck.text, /정리 위치가 그대로다\(#\d+\)[^\n]*도구를 못 찾았어요/);
-  const crashed = await runConsolidate(s, async () => {
+  const crashed = (await runConsolidate(s, 'manual', async () => {
     throw new Error('Not logged in');
-  });
+  })).report!;
   assert.equal(crashed.text, 'Not logged in');
   assert.deepEqual(unseenReports(s).map((r) => r.ok), [true, false, false], 'reports wait until confirmed');
   assert.equal(JSON.parse(s.getMeta('consolidate_job')!).ok, false);
+  // Each run leaves a line in the worker folder's run records (runs-<secretary tag>.jsonl).
+  const dir = staffFolder(readStaff('memory-consolidation'));
+  const runs = fs.readdirSync(dir).filter((n) => /^runs-.+\.jsonl$/.test(n));
+  assert.equal(runs.length, 1);
+  assert.deepEqual(fs.readFileSync(path.join(dir, runs[0]), 'utf8').trim().split('\n').map((l) => JSON.parse(l).by), ['idle', 'manual', 'manual']);
 });
 
+// Without it: a /consolidate the user runs while the idle one runs starts a second run on the same backlog.
+test('consolidation: never two at once, and a record whose process is gone does not hold the next one off', async () => {
+  const s = tempStore();
+  talk(s, 2, Date.now());
+  const first = claimConsolidate(s, 'idle', 4242, () => true);
+  assert.ok(first);
+  assert.equal(claimConsolidate(s, 'manual', 4343, () => true), null, 'a live run holds it');
+  let ran = false;
+  const r = await runConsolidate(s, 'manual', async () => ((ran = true), 'x'));
+  // The real check: is pid 4242 alive? Almost surely not, so the dead record does not hold it.
+  assert.equal(r.report === null, !ran);
+  s.setMeta('consolidate_job', JSON.stringify({ startedAt: new Date().toISOString(), pid: process.pid, by: 'idle' }));
+  const held = await runConsolidate(s, 'manual', async () => assert.fail('must not run'));
+  assert.equal(held.report, null);
+  assert.equal(held.running?.by, 'idle');
+  assert.equal(consolidateRunning(s, Date.now(), () => false), false, 'process gone: not running');
+  assert.equal(consolidateRunning(s, Date.now(), () => true), true);
+  assert.equal(consolidateRunning(s, Date.now() + 47 * MIN, () => true), false, 'past the time limit: dead');
+});
 test('idle tick housekeeping: marks of sessions quiet a week and read positions of deleted transcripts go, the rest stay', async () => {
   const s = tempStore();
   const now = Date.now();
@@ -113,11 +140,16 @@ test('idle tick housekeeping: marks of sessions quiet a week and read positions 
   assert.equal(s.markOnce('x', '2', (last) => Number(last) >= 2), false);
 });
 
-test('the consolidate skill is read from the secretary skills folder itself (a real folder, not a junction)', () => {
+// Without it: the skill keeps keys outside the agentskills.io format, or the steps drift from what the run reads.
+test('the consolidate skill is format keys and a short launch note; the steps the run reads are its references/procedure.md', () => {
   const file = skillFile('consolidate');
   assert.equal(file, path.join(PROJECT_ROOT, SECRETARY_SKILLS_DIR, 'consolidate', 'SKILL.md'));
-  // A real folder there (a fresh clone has no junctions), and its steps are what the unattended prompt carries.
   assert.ok(!fs.lstatSync(path.dirname(file)).isSymbolicLink(), 'a real folder');
-  const body = fs.readFileSync(file, 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
-  assert.ok(consolidatePrompt().endsWith(body));
+  const text = fs.readFileSync(file, 'utf8');
+  assert.deepEqual([...frontMatter(text)!.keys()].sort(), ['description', 'name']);
+  assert.match(text, /cli.ts memory-consolidation --detach/);
+  assert.match(text, /기억 정리 확인/);
+  const w = readStaff('memory-consolidation');
+  assert.equal(w.instructions, '.agents/skills/consolidate/references/procedure.md');
+  assert.equal(consolidatePrompt(), fs.readFileSync(path.join(PROJECT_ROOT, ...w.instructions!.split('/')), 'utf8').replace(/\r\n/g, '\n').trim());
 });

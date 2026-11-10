@@ -5,7 +5,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './schema.ts';
 import { getMeta, setMeta } from './meta-usage.ts';
-import { ftsQuery, indexText, queryTerms } from '../memory/korean-terms.ts';
+import { ftsQuery, indexText, queryTerms } from '../memory/search-terms.ts';
 
 export interface LogEntry {
   id: number;

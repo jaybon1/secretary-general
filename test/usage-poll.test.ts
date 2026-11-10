@@ -1,5 +1,5 @@
 // The usage reader (feature usage-poll, src/usage/usage-poller.ts) and the choice of providers it reads and the dashboard
-// shows (src/usage/usage-settings.ts, scripts/usage.local.json).
+// shows (src/usage/usage-settings.ts, this-secretary.local.json usage-poll).
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,8 +7,8 @@ import { test } from 'node:test';
 import { tempDir, write } from './helpers.ts';
 import { BUSY_MS, claimLock, lockFile, POLL_MS, pollOn, refreshMark, releaseLock, runUsagePoll, runUsageScript, UsagePoller } from '../src/usage/usage-poller.ts';
 import { readUsageChoice, saveUsageChoice, usageSettingsView } from '../src/usage/usage-settings.ts';
-import type { ProviderInfo } from '../src/usage/providers.ts';
-import { failFile, failureWaitMs, readFailure, recordFailure } from '../src/usage/files.ts';
+import type { ProviderInfo } from '../src/usage/provider-usage.ts';
+import { failFile, failureWaitMs, readFailure, recordFailure } from '../src/usage/usage-files.ts';
 import { limitsFor } from '../src/dashboard/collect.ts';
 
 const PROVIDERS: ProviderInfo[] = [
@@ -20,18 +20,18 @@ const PROVIDERS: ProviderInfo[] = [
 
 test('usage settings: without the file what is readable and set up here; saved names only known ones, no BOM; bad input refused', () => {
   const dir = tempDir();
-  const file = path.join(dir, 'scripts', 'usage.local.json');
+  const file = path.join(dir, 'this-secretary.local.json');
   const deps = { keysDir: path.join(dir, 'keys'), home: path.join(dir, 'home'), localAppData: path.join(dir, 'local') };
   write(path.join(dir, 'home', '.claude', 'x'), '');
   write(path.join(dir, 'keys', 'subscription-b.env'), 'X=1\n');
   write(path.join(dir, 'keys', 'key.env'), 'X=1\n');
-  let c = readUsageChoice(PROVIDERS, file, deps);
+  let c = readUsageChoice(PROVIDERS, dir, deps);
   assert.deepEqual(c, { checked: ['subscription', 'subscription-b'], saved: false, problem: null }, 'agy not installed, key not readable');
-  assert.deepEqual(saveUsageChoice({ providers: ['key', 'nope', 'subscription'] }, PROVIDERS, file), ['subscription', 'key']);
+  assert.deepEqual(saveUsageChoice({ providers: ['key', 'nope', 'subscription'] }, PROVIDERS, dir), ['subscription', 'key']);
   const raw = fs.readFileSync(file, 'utf8');
   assert.ok(!raw.startsWith('﻿'));
-  assert.deepEqual(JSON.parse(raw), { providers: ['subscription', 'key'] });
-  c = readUsageChoice(PROVIDERS, file, deps);
+  assert.deepEqual(JSON.parse(raw), { 'usage-poll': { providers: ['subscription', 'key'] } });
+  c = readUsageChoice(PROVIDERS, dir, deps);
   assert.deepEqual(c, { checked: ['subscription', 'key'], saved: true, problem: null });
   const view = usageSettingsView(PROVIDERS, c, deps);
   assert.deepEqual(view.providers.map((p) => [p.name, p.readable, p.configured, p.checked]), [
@@ -42,12 +42,12 @@ test('usage settings: without the file what is readable and set up here; saved n
   ]);
   assert.equal(view.providers[3].methodText, '조회 안 됨');
   for (const bad of [null, [], { providers: 'subscription' }, { providers: [1] }, { providers: Array(101).fill('x') }]) {
-    assert.throws(() => saveUsageChoice(bad, PROVIDERS, file), TypeError, JSON.stringify(bad)?.slice(0, 40));
+    assert.throws(() => saveUsageChoice(bad, PROVIDERS, dir), TypeError, JSON.stringify(bad)?.slice(0, 40));
   }
-  assert.deepEqual(saveUsageChoice({ providers: [] }, PROVIDERS, file), [], 'none checked is a choice too');
-  assert.deepEqual(readUsageChoice(PROVIDERS, file, deps).checked, []);
+  assert.deepEqual(saveUsageChoice({ providers: [] }, PROVIDERS, dir), [], 'none checked is a choice too');
+  assert.deepEqual(readUsageChoice(PROVIDERS, dir, deps).checked, []);
   fs.writeFileSync(file, '{ nope');
-  assert.match(readUsageChoice(PROVIDERS, file, deps).problem!, /못 읽음/);
+  assert.match(readUsageChoice(PROVIDERS, dir, deps).problem!, /못 읽음/);
 });
 
 test('usage reader: one provider at a time, a reading under 150 s old (the guard\'s) skipped, its mark left for the guard, a failure logged', async () => {

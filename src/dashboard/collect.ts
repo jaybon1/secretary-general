@@ -1,9 +1,9 @@
 /**
  * The dashboard's data: usage limits, running work sessions and run-jobs, the task board, scheduled tasks. Read only:
  * the database is opened read-only with query_only (no lock or change on the secretary's WAL database), the usage
- * folder (~/.claude/usage, core/paths.ts USAGE_DIR: usage per account), this secretary's records folder
- * (~/.secretary/state/<id>, core/paths.ts secretaryStateDir: its work sessions and run-jobs) and the task scheduler are
- * only read (sys.ps1). The one change: a run-job-active file left by a run-job that certainly ended, or one left broken,
+ * folder (~/.secretary/usage, core/paths.ts USAGE_DIR: usage per account; ~/.claude/usage until 2026-11-09, read beside it),
+ * this secretary's records folder (~/.secretary/<id>/state, core/paths.ts secretaryStateDir: its work sessions and run-jobs) and the task scheduler are
+ * only read (running-jobs.ps1). The one change: a run-job-active file left by a run-job that certainly ended, or one left broken,
  * is deleted (runJobsActive).
  * Moved here from the dashboard workspace (2026-11-07); the server and the "상태" text both use it.
  */
@@ -13,11 +13,11 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { DB_PATH, PROJECT_ROOT } from '../core/config.ts';
-import { secretaryStateDir, USAGE_DIR } from '../core/paths.ts';
+import { LEGACY_USAGE_DIR, secretaryStateDir, USAGE_DIR } from '../core/paths.ts';
 import type { AccountDeps } from '../core/provider-accounts.ts';
-import { failureWaitMs, readFailure, usageFile } from '../usage/files.ts';
-import { labeler, providerLabel, readProviders, type ProviderInfo } from '../usage/providers.ts';
-import { readUsageChoice, usageSettingsFile } from '../usage/usage-settings.ts';
+import { failureWaitMs, readFailure, usageFile } from '../usage/usage-files.ts';
+import { labeler, providerLabel, readProviders, type ProviderInfo } from '../usage/provider-usage.ts';
+import { readUsageChoice } from '../usage/usage-settings.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // review: waits for the user's own look at the result (the user's turn), so it stands next to running.
@@ -28,10 +28,10 @@ const STALE_MIN = 30;
 const BROKEN_RUNJOB_MIN = 10;
 
 export interface CollectOptions {
-  /** The secretary folder (providers.json, scripts/usage.local.json); default this copy. */
+  /** The secretary folder (providers.json, this-secretary.local.json); default this copy. */
   root?: string;
   dbPath?: string;
-  /** Usage per account (~/.claude/usage). */
+  /** Usage per account (~/.secretary/usage). */
   usageDir?: string;
   /** This secretary's work-session and run-job records (core/paths.ts secretaryStateDir of root). */
   stateDir?: string;
@@ -70,7 +70,7 @@ export function resultText(code: number): string {
   if (code === 267008 || code === 267010) return '대기 중';
   return `실패 또는 중단(코드 ${code})`;
 }
-/** A provider's display name without reading providers.json (collect passes the one that reads it: usage/providers.ts). */
+/** A provider's display name without reading providers.json (collect passes the one that reads it: usage/provider-usage.ts). */
 export const accountName = (p?: string | null): string => providerLabel(p);
 type Namer = (p?: string | null) => string;
 const tail2 = (p?: string | null) => (p ? p.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : '');
@@ -109,12 +109,24 @@ export type Limit =
   | { name: string; provider: string; none: true };
 
 /**
- * One provider's usage file (~/.claude/usage/subscription-<account>.json, usage/files.ts usageFile) as meters: a
+ * One provider's usage file (~/.secretary/usage/subscription-<account>.json, usage/usage-files.ts usageFile; beside the real
+ * folder also the one in ~/.claude/usage that an older copy may still write, the newer of the two) as meters: a
  * subscription's 5-hour and weekly windows (usage-query.ps1 source usage-command), or each model group of agy's weekly one
  * (source agy-usage).
  */
-export function limitOf(name: string, provider: string, usageDir = USAGE_DIR, now = Date.now(), d: AccountDeps = {}): Limit {
-  const j = readJsonIn(usageDir, path.basename(usageFile(provider, usageDir, d)));
+export function limitOf(name: string, provider: string, usageDir = USAGE_DIR, now = Date.now(), d: AccountDeps = {}, legacyDir: string | null = usageDir === USAGE_DIR ? LEGACY_USAGE_DIR : null): Limit {
+  const file = path.basename(usageFile(provider, usageDir, d));
+  let j: ReturnType<typeof readJsonIn> = null;
+  let failed: unknown = null;
+  for (const dir of legacyDir ? [usageDir, legacyDir] : [usageDir]) { // legacy-name: usage-dir
+    try {
+      const x = readJsonIn(dir, file);
+      if (!j || (Date.parse(x.updated_at) || 0) > (Date.parse(j.updated_at) || 0)) j = x;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') failed ??= e;
+    }
+  }
+  if (!j) throw failed ?? Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' });
   const meter = (label: string, pct: unknown, resetsAt: unknown): Meter[] =>
     typeof pct === 'number'
       ? [{ label, pct, resetsAt: typeof resetsAt === 'string' ? kst(resetsAt) : null, left: typeof resetsAt === 'string' ? untilText(resetsAt, now) : null, passed: typeof resetsAt === 'string' && Date.parse(resetsAt) <= now }]
@@ -186,7 +198,7 @@ export function kanban(dbPath = DB_PATH, recentDone = 8) {
   }
 }
 
-/** PowerShell processes (the hosts run-job.ps1 runs in) with their start times, listed at `at` (sys.ps1). */
+/** PowerShell processes (the hosts run-job.ps1 runs in) with their start times, listed at `at` (running-jobs.ps1). */
 export interface Procs {
   at: string;
   list: { pid: number; started: string | null }[];
@@ -203,7 +215,7 @@ function sysInfo(): Promise<SysInfo> {
   sysCache.p = new Promise((res, rej) =>
     execFile(
       'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(HERE, 'sys.ps1')],
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(HERE, 'running-jobs.ps1')],
       { timeout: 20000, windowsHide: true, maxBuffer: 1 << 20 },
       (e, out) => {
         if (e) {
@@ -257,10 +269,10 @@ type RunJobItem = { pid: number; account: string; model: string; folder: string;
  * Whether the run-job that wrote a run-job-active file still runs: 'running', 'gone' (certainly ended: the file is
  * deleted) or 'hidden' (looks ended but not certain: hidden, kept). run-job.ps1 deletes its file only in `finally`, so a
  * killed run (window closed, PC shut down) leaves it, and Windows soon gives its pid to another process.
- * With the process list (`procs`, sys.ps1): running while a PowerShell process with that pid started no later than the
+ * With the process list (`procs`, running-jobs.ps1): running while a PowerShell process with that pid started no later than the
  * file's started_at (run-job.ps1 writes the file after its own start; a process that took the pid after the run ended
  * started later). A file started after the list was taken may not be on it yet: running until the next list.
- * Without the list (sys.ps1 failed): only whether the pid exists, and nothing is deleted.
+ * Without the list (running-jobs.ps1 failed): only whether the pid exists, and nothing is deleted.
  */
 export function runJobState(j: { pid?: unknown; started_at?: unknown }, procs: Procs | null): 'running' | 'gone' | 'hidden' {
   const pid = Number(j.pid);
@@ -381,7 +393,7 @@ export async function collect(o: CollectOptions) {
   return {
     generatedAt: kst(new Date().toISOString()),
     refreshSec: o.refreshSec,
-    limits: await part(() => limitsFor(providers, readUsageChoice(providers, usageSettingsFile(root)).checked, usageDir, Date.now(), { root })),
+    limits: await part(() => limitsFor(providers, readUsageChoice(providers, root).checked, usageDir, Date.now(), { root })),
     workers: sys.error !== undefined ? { error: sys.error } : await part(() => workers(live, stateDir, name)),
     runJobsActive: await part(() => runJobsActive(stateDir, name, sys.data?.procs ?? null)),
     runJobsRecent: await part(() => recentRunJobs(10, stateDir, name)),

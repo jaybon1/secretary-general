@@ -1,12 +1,12 @@
 /**
- * 비서 MCP 서버의 실수 기록 도구(기능 'guards'): record_mistake(한 건 적기), update_mistake(옮긴 장치·평가 장면·재발 채우기),
+ * 비서 MCP 서버의 실수 기록 도구(기능 'mistake-guards'): record_mistake(한 건 적기), update_mistake(옮긴 장치·평가 장면·재발 채우기),
  * list_mistakes(목록과 묶음별 수). 같은 실수를 장치로 옮기고 평가 세트로 재는 데 쓰는 기록이라, 답할 때 자동으로 읽히지 않는다.
  */
 import { z } from 'zod';
 import { formatLocal } from '../core/kst-time.ts';
-import { guardsOn } from '../guards/settings.ts';
+import { guardsOn } from '../mistake-guards/mistake-guard-settings.ts';
 import { MISTAKE_CAUSES, MISTAKE_FINDERS, type Mistake } from '../store/store.ts';
-import { fail, ok, type ToolContext } from './common.ts';
+import { fail, ok, type ToolContext } from './tool-common.ts';
 
 export const MISTAKE_TOOLS = ['record_mistake', 'update_mistake', 'list_mistakes'] as const;
 

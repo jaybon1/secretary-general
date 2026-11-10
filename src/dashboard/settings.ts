@@ -1,8 +1,9 @@
 /**
- * The dashboard's settings: defaults here, this PC's own values in scripts/dashboard.local.json (not committed, made by
- * hand when the defaults don't fit). The secretary folder is not a setting: the dashboard runs from it (PROJECT_ROOT).
+ * The dashboard's settings: defaults here, this PC's own values in the dashboard section of this-secretary.local.json (not
+ * committed, written when the defaults don't fit; core/this-secretary.ts). The secretary folder is not a setting: the dashboard
+ * runs from it (PROJECT_ROOT).
  *
- * scripts/dashboard.local.json (every field optional):
+ * this-secretary.local.json "dashboard" (every field optional):
  *   hosts      addresses to listen on besides 127.0.0.1, which is always there (Tailscale Serve forwards to it), e.g. this
  *              PC's tailnet address "100.x.x.x" for the plain http address on other devices
  *   port       default 8790
@@ -15,11 +16,11 @@
  */
 import path from 'node:path';
 import { PROJECT_ROOT } from '../core/config.ts';
-import { readLocalJson } from '../core/local-file.ts';
-import { scriptPath } from '../core/paths.ts';
+import { readThisSecretary, THIS_SECRETARY_FILE } from '../core/this-secretary.ts';
 import { featureOn, readFeatures } from '../setup/features.ts';
+import { FEATURE } from '../core/names.ts';
 
-export const FEATURE_ID = 'dashboard';
+export const FEATURE_ID = FEATURE.dashboard;
 export const DEFAULT_PORT = 8790;
 export const LOOPBACK = '127.0.0.1';
 
@@ -41,14 +42,12 @@ export function defaultShare(root = PROJECT_ROOT): Record<string, string> {
   return { 'ai-agent': parent };
 }
 
-export const settingsFile = (root = PROJECT_ROOT) => scriptPath('dashboardLocal', root);
-
-/** Defaults with the local file over them; problem says what in the file was not taken (the rest still is). */
-export function readSettings(root = PROJECT_ROOT, file = settingsFile(root)): { settings: DashboardSettings; problem: string | null } {
+/** Defaults with this PC's section over them; problem says what in it was not taken (the rest still is). */
+export function readSettings(root = PROJECT_ROOT): { settings: DashboardSettings; problem: string | null } {
   const problems: string[] = [];
-  const r = readLocalJson<Record<string, unknown>>(file);
-  const local: Record<string, unknown> = r.ok && r.value && typeof r.value === 'object' ? r.value : {};
-  if (!r.ok && !r.missing) problems.push(`${path.basename(file)}을 못 읽음(${r.error.slice(0, 80)})`);
+  const r = readThisSecretary<Record<string, unknown>>(FEATURE_ID, { root });
+  const local: Record<string, unknown> = r.ok && r.value && typeof r.value === 'object' && !Array.isArray(r.value) ? r.value : {};
+  if (!r.ok && !r.missing) problems.push(`${THIS_SECRETARY_FILE}을 못 읽음(${r.error.slice(0, 80)})`);
   const int = (k: string, def: number, min: number, max: number) => {
     const v = local[k];
     if (v === undefined) return def;

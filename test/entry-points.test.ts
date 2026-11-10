@@ -7,8 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { tempDir, write } from './helpers.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { ENTRY_DIR, ENTRY_POINTS, entryPath, entryText, secretaryDirEnv, scriptPath, SCRIPTS, type EntryName } from '../src/core/paths.ts';
-import { readInstallId } from '../src/setup/install-id.ts';
-import { usageHookProblems } from '../src/setup/install-check.ts';
+import { readSecretaryId } from '../src/setup/secretary-id.ts';
+import { usageHookProblems } from '../src/setup/setup-check.ts';
 import { renderCharter, renderFindSecretary } from '../src/workspace/rules-text.ts';
 
 const names = Object.keys(ENTRY_POINTS) as EntryName[];
@@ -45,16 +45,17 @@ test('ego-grab through bin/ exports the real grab', async () => {
 test('workspace rules name ego-grab by its bin entry and say how to reach the secretary’s scripts', () => {
   const charter = renderCharter({ kind: 'solo', name: 'ext', title: '확장', purpose: '크롬 확장' });
   assert.ok(charter.includes(`\`${entryPath('ego-grab.mjs').replace(/\\/g, '/')}\``));
-  // The entrance folder: the workspace's secretary.json first, then bin under this secretary's own variable (its install
-  // id in the name), then under the old SECRETARY_DIR. Nothing else of the secretary folder.
+  // The entrance folder: the workspace's secretary-link.local.json first, then bin under this secretary's own variable (its install
+  // id in the name); not the old SECRETARY_DIR any more. Nothing else of the secretary folder.
   assert.ok(charter.includes(`비서 스크립트는 비서의 입구 폴더(\`${ENTRY_DIR}\`)에 있는 이름으로만 부르고, 비서 폴더의 다른 파일은 열거나 실행하지 않는다`));
-  assert.ok(charter.includes('입구 폴더는 이 공간 맨 위 `secretary.json`의 `bin`이다'));
+  assert.ok(charter.includes('입구 폴더는 이 공간 맨 위 `secretary-link.local.json`의 `bin`이다'));
   assert.ok(charter.includes(renderFindSecretary().join('\n')), 'the charter carries this copy\'s lines');
-  // The variable comes from the install id; with none yet, only the old name.
-  const linesFor = (root: string) => renderFindSecretary(secretaryDirEnv(readInstallId(root))).join('\n');
+  // The variable comes from the secretary id; with none yet, only the old name.
+  const linesFor = (root: string) => renderFindSecretary(secretaryDirEnv(readSecretaryId(root))).join('\n');
   const withId = tempDir();
   write(path.join(withId, '.secretary-id'), 'A3F9\n');
-  assert.ok(linesFor(withId).includes('환경변수 `SECRETARY_A3F9_DIR` 아래 `bin`, 그다음 환경변수 `SECRETARY_DIR` 아래 `bin`을 쓴다'));
+  assert.ok(linesFor(withId).includes('그 파일이 없으면 환경변수 `SECRETARY_A3F9_DIR` 아래 `bin`을 쓴다'));
+  assert.ok(!linesFor(withId).includes('SECRETARY_DIR'), 'the old name is not in the charter');
   assert.ok(linesFor(tempDir()).includes('환경변수 `SECRETARY_DIR` 아래 `bin`을 쓴다'));
   assert.equal(secretaryDirEnv('a3f9'), 'SECRETARY_A3F9_DIR');
   assert.equal(secretaryDirEnv('A3F9'), 'SECRETARY_A3F9_DIR');
@@ -116,7 +117,7 @@ test('the PowerShell scripts set SECRETARY_DIR to their own folder, and the work
   assert.deepEqual(out, [PROJECT_ROOT, '0', 'True']);
 });
 
-test('the folder variables the scripts hand down: SECRETARY_<id>_DIR of the install id, and the old SECRETARY_DIR while tools move', { skip: !win }, () => {
+test('the folder variables the scripts hand down: SECRETARY_<id>_DIR of the secretary id, and the old SECRETARY_DIR while tools move', { skip: !win }, () => {
   const common = path.join(PROJECT_ROOT, 'scripts', 'lib', 'common.ps1');
   const withId = tempDir();
   write(path.join(withId, '.secretary-id'), 'a3f9\n');

@@ -97,14 +97,14 @@ test('every .ps1 under bin/ and scripts/ parses in Windows PowerShell 5.1, and o
 test('a .ps1 no feature lists (the user wrote it) only warns; a listed one with the same problem fails', { skip: process.platform !== 'win32' }, () => {
   const root = tempDir();
   const korean = '# 한글 메모\nWrite-Output "안녕"\n';
-  fs.mkdirSync(path.join(root, 'scripts', 'server'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'scripts', 'remote-server'), { recursive: true });
   fs.writeFileSync(path.join(root, 'scripts', 'listed.ps1'), korean, 'utf8');
-  fs.writeFileSync(path.join(root, 'scripts', 'server', 'in-folder.ps1'), korean, 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'remote-server', 'in-folder.ps1'), korean, 'utf8');
   fs.writeFileSync(path.join(root, 'scripts', 'my-tool.ps1'), korean, 'utf8');
   fs.writeFileSync(path.join(root, 'scripts', 'fine.ps1'), 'Write-Output "ok"\n', 'utf8');
-  fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features: [{ id: 'x', core: true, files: ['scripts/listed.ps1', 'scripts/server/', 'scripts/fine.ps1'], checks: [], notices: [], tasks: [], rules: [] }] }));
+  fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features: [{ id: 'x', core: true, files: ['scripts/listed.ps1', 'scripts/remote-server/', 'scripts/fine.ps1'], checks: [], notices: [], tasks: [], rules: [] }] }));
   const { failures, warnings } = ps1Problems(root);
-  assert.deepEqual(failures.map((f) => f.split(':')[0]), ['scripts/listed.ps1', 'scripts/server/in-folder.ps1']);
+  assert.deepEqual(failures.map((f) => f.split(':')[0]), ['scripts/listed.ps1', 'scripts/remote-server/in-folder.ps1']);
   assert.deepEqual(warnings.map((f) => f.split(':')[0]), ['scripts/my-tool.ps1']);
   // Without features.json every file is the secretary's.
   fs.rmSync(path.join(root, 'features.json'));
@@ -114,14 +114,14 @@ test('a .ps1 no feature lists (the user wrote it) only warns; a listed one with 
 test('in a release the file list decides: a script the user put in a listed folder only warns', { skip: process.platform !== 'win32' }, () => {
   const root = tempDir();
   const korean = '# 한글 메모\nWrite-Output "안녕"\n';
-  fs.mkdirSync(path.join(root, 'scripts', 'server'), { recursive: true });
-  for (const f of ['scripts/server/shipped.ps1', 'scripts/server/mine.ps1']) fs.writeFileSync(path.join(root, f), korean, 'utf8');
+  fs.mkdirSync(path.join(root, 'scripts', 'remote-server'), { recursive: true });
+  for (const f of ['scripts/remote-server/shipped.ps1', 'scripts/remote-server/mine.ps1']) fs.writeFileSync(path.join(root, f), korean, 'utf8');
   // features.json names the whole folder; the release's list names the one file it shipped.
-  fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features: [{ id: 'x', core: true, files: ['scripts/server/'], checks: [], notices: [], tasks: [], rules: [] }] }));
-  fs.writeFileSync(path.join(root, RELEASE_FILES), JSON.stringify({ version: 'v8', files: { 'scripts/server/shipped.ps1': 'x', 'features.json': 'y' } }));
+  fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features: [{ id: 'x', core: true, files: ['scripts/remote-server/'], checks: [], notices: [], tasks: [], rules: [] }] }));
+  fs.writeFileSync(path.join(root, RELEASE_FILES), JSON.stringify({ version: 'v8', files: { 'scripts/remote-server/shipped.ps1': 'x', 'features.json': 'y' } }));
   const { failures, warnings } = ps1Problems(root);
-  assert.deepEqual(failures.map((f) => f.split(':')[0]), ['scripts/server/shipped.ps1']);
-  assert.deepEqual(warnings.map((f) => f.split(':')[0]), ['scripts/server/mine.ps1']);
+  assert.deepEqual(failures.map((f) => f.split(':')[0]), ['scripts/remote-server/shipped.ps1']);
+  assert.deepEqual(warnings.map((f) => f.split(':')[0]), ['scripts/remote-server/mine.ps1']);
   // A list that does not read: back to features.json.
   fs.writeFileSync(path.join(root, RELEASE_FILES), '{');
   assert.equal(ps1Problems(root).failures.length, 2);

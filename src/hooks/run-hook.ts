@@ -1,25 +1,26 @@
 /**
  * The three Claude Code hooks (`node src/cli.ts hook session-start|prompt|stop`, JSON on stdin):
  *   - session-start: log what a previous session's Stop hook missed, bring this secretary's old records into its own
- *     folder once (core/state-dir.ts), inject the profile and status (session-start.ts) and the install check's notice
- *     (setup/install-check.ts).
+ *     folder once (core/state-dir-migrate.ts), move this PC's renamed files once (core/local-settings.ts), inject the profile and status (session-start.ts) and the install check's notice
+ *     (setup/setup-check.ts).
  *   - prompt: "비서 대화 삭제" and its approval code (log/purge.ts) first; otherwise every notice (prompt-notices.ts).
  *   - stop: check the answer (guards/stop-guard.ts: sent back once with the reason, to be written again whole or, when only
  *     lines are missing, to have them added after it; or let end), then log the turn (an answer with added lines as one row), link
  *     the memories it saved, read the open questions from the answer, record what the checks caught (mistakes), send the answer's first line to the phone
- *     (notify/ntfy.ts, only when the turn really ends).
+ *     (phone-push/ntfy.ts, only when the turn really ends).
  */
 import fs from 'node:fs';
-import { updateOpenQuestions } from '../board/open-questions.ts';
-import { DB_PATH } from '../core/config.ts';
-import { ensureStateDir } from '../core/state-dir.ts';
-import { estimateTokens } from '../core/tokens.ts';
-import { recordGuardMistakes, stopGuard, type StopVerdict } from '../guards/stop-guard.ts';
+import { updateOpenQuestions } from '../session-continuity/open-questions.ts';
+import { DB_PATH, PROJECT_ROOT } from '../core/config.ts';
+import { moveRenamedLocalFiles } from '../core/local-settings.ts';
+import { ensureStateDir } from '../core/state-dir-migrate.ts';
+import { estimateTokens } from '../core/token-estimate.ts';
+import { recordGuardMistakes, stopGuard, type StopVerdict } from '../mistake-guards/stop-guard.ts';
 import { catchUpTranscripts } from '../log/catch-up.ts';
 import { ingestTranscript } from '../log/ingest-transcript.ts';
 import { purgeHook } from '../log/purge.ts';
-import { notifyAfterStop } from '../notify/ntfy.ts';
-import { sessionSetup } from '../setup/install-check.ts';
+import { notifyAfterStop } from '../phone-push/ntfy.ts';
+import { sessionSetup } from '../setup/setup-check.ts';
 import { openDb } from '../store/schema.ts';
 import { Store } from '../store/store.ts';
 import { promptNotices } from './prompt-notices.ts';
@@ -71,8 +72,11 @@ export async function runHook(name: string): Promise<void> {
         // Catch up on anything a previous session's Stop hook missed (crash, kill).
         if (input.transcript_path && fs.existsSync(input.transcript_path)) ingestTranscript(store, input.transcript_path);
         catchUpTranscripts(store, input.transcript_path);
-        // The first session after the records moved to ~/.secretary/state/<id>: this secretary's share of the old ones comes along.
+        // The first session after the records moved to ~/.secretary/<id>/state: this secretary's old ones come along
+        // (~/.secretary/state/<id>, and its share of ~/.claude/usage).
         ensureStateDir();
+        // This PC's own files under names changed since (core/local-settings.ts): moved once, before anything reads them.
+        moveRenamedLocalFiles(PROJECT_ROOT, DB_PATH);
         const context = sessionStartContext(store, input.session_id, input.source);
         const { notice, report } = await setup!;
         if (report) {
@@ -105,7 +109,7 @@ export async function runHook(name: string): Promise<void> {
           process.stdout.write(JSON.stringify({ decision: 'block', reason: verdict.block }));
           break;
         }
-        // The answer's first line to the phone (feature 'notify'), first: a detached sender posts it, nothing waits here.
+        // The answer's first line to the phone (feature 'phone-push'), first: a detached sender posts it, nothing waits here.
         notifyAfterStop(input, verdict);
         // Lines added after an answer sent back for missing lines: the answer's row holds both (the open questions and the
         // mistakes record read it).

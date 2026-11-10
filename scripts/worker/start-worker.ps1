@@ -5,7 +5,7 @@
 # 출력 끝의 "backgrounded · <짧은 id> · <이름>"에서 id를 session_ref로 기록한다. 출력 보기: worker-logs.ps1
 # 재사용: 같은 공간·공급자의 업무 세션이 업무를 끝낸 지(worker-done.ps1) 55분 안이고 마지막 문맥이 20만 토큰 미만이며
 # 모델·생각 깊이·-Chrome·-LockTests가 같으면, 새 세션 대신 그 세션에 새 업무를 보내고 "재사용: <id> · <이름>"을 낸다.
-# 조건이 안 맞으면 그 세션을 끄고 새로 띄운다. -New면 무조건 새로 시작. 판단은 이 비서의 기록 폴더(~/.secretary/state/<비서 번호>)의 worker-reuse.jsonl에 쌓는다.
+# 조건이 안 맞으면 그 세션을 끄고 새로 띄운다. -New면 무조건 새로 시작. 판단은 이 비서의 기록 폴더(~/.secretary/<비서 번호>/state)의 worker-reuse.jsonl에 쌓는다.
 #
 # 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/worker/start-worker.ps1 -Folder <공간 폴더> -Name <업무이름> -Prompt <지시> [-Provider <이름>] [-Effort <low|medium|high|xhigh|max>] [-Chrome] [-LockTests] [-New]
 # -Effort: 생각 깊이. 안 주면 공간 .claude/settings.json의 effortLevel, 그다음 공급자의 effort, 없으면 Claude Code 기본값.

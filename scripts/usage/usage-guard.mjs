@@ -1,38 +1,40 @@
-// PreToolUse 훅: 5시간 또는 주간 사용량이 기준(USAGE_PAUSE_PCT, 기본 90%) 이상이면 마무리용 도구(읽기·쓰기·기억 저장)만 허용하고
+// PreToolUse 훅: 5시간 또는 주간 사용량이 기준(SECRETARY_USAGE_GUARD_PCT, 기본 90%) 이상이면 마무리용 도구(읽기·쓰기·기억 저장)만 허용하고
 // 나머지는 막아, 하던 단계를 정리하고 멈추게 한다. 초기화 시각이 지나거나 기록이 30분 넘게 오래되면 막지 않는다.
 // 사용량은 이 세션 공급자·계정의 파일(usage-file.mjs, subscription-<계정>.json)에서 읽는다. 기록이 5분 넘게 오래되면 usage-query.ps1(/usage, 토큰 0)을
 // 뒤에서 띄워 갱신하고, 이번 판정은 있는 기록으로 한다. 원격·백그라운드 세션은 상태줄이 돌지 않아 이 갱신에 기댄다.
 // 기능 usage-poll(비서 서버와 같이 뜨는 조회기)이 켜져 있으면 그쪽이 5분마다 조회하며 같은 이름의 .refresh 표시를 남기므로, 이 갱신은 그때 예비다.
-// 끄기: ~/.claude/usage-guard-off 파일을 만든다.
+// 끄기: ~/.secretary/usage-guard-off 파일을 만든다(2026-11-10 전 자리 ~/.claude/usage-guard-off도 한동안 읽는다, usage-files.ts guardOff).
 // 구독 한도만 다루므로, 다른 공급자(Bedrock, Vertex, API 키, 게이트웨이)로 도는 세션은 막지 않는다. 기록이 없으면(조회가 안 되는 로그인 포함) 막지 않는다.
-// 조회가 거듭 실패하면(/usage가 사용량을 주지 않는 API 키 로그인 등, <같은 이름>.fail) 다음 갱신을 5분부터 두 배씩 최대 6시간 미룬다(files.ts failureWait).
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+// 조회가 거듭 실패하면(/usage가 사용량을 주지 않는 API 키 로그인 등, <같은 이름>.fail) 다음 갱신을 5분부터 두 배씩 최대 6시간 미룬다(usage-files.ts failureWait).
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { usageDir, usageFile, refreshFile, failureWait, currentProvider, onSubscription, overrideFile } from './usage-file.mjs';
+import { usageDir, readUsage, refreshFile, failureWait, currentProvider, onSubscription, readOverrideUntil, guardOff } from './usage-file.mjs';
 
-const limit = Number(process.env.USAGE_PAUSE_PCT ?? 90);
+// 기준 SECRETARY_USAGE_GUARD_PCT(2026-11-09부터, 옛 이름 USAGE_PAUSE_PCT도 한동안 읽는다).
+const limit = Number(process.env.SECRETARY_USAGE_GUARD_PCT ?? process.env.USAGE_PAUSE_PCT ?? 90); // legacy-name: env-usage-guard-pct
 const REFRESH_AFTER = 5 * 60 * 1000;
 const WRAP_UP_TOOLS = /^(Read|Write|Edit|Glob|Grep|SendMessage|mcp__secretary__(remember|update_task|get_task|set_big_work))$/;
 
 let input = {}, state = null;
 try { input = JSON.parse(readFileSync(0, 'utf8')); } catch {}
-try { state = JSON.parse(readFileSync(usageFile(), 'utf8').replace(/^﻿/, '')); } catch {}
+// 새 폴더(~/.secretary/usage)와 옛 폴더(~/.claude/usage, 옛 사본이 아직 쓰는 동안) 가운데 새 기록.
+try { state = readUsage(currentProvider()); } catch {}
 
 const now = Date.now();
 const subscribed = onSubscription();
 if (subscribed) refreshIfStale();
 
-// 사용자가 "90퍼센트를 초과하더라도 진행"이라고 하면 프롬프트 훅(src/usage/guard-override.ts)이 문구에 적힌 계정(없으면 이 대화의 계정)만 초기화 시각까지 풀어 둔다
-// (guard-override-subscription-<계정>.json). 계정 칸이 없던 옛 guard-override.json은 모든 계정을 함께 풀었으므로 읽지 않는다.
+// 사용자가 "90퍼센트를 초과하더라도 진행"이라고 하면 프롬프트 훅(src/usage/usage-guard-override.ts)이 문구에 적힌 계정(없으면 이 대화의 계정)만 초기화 시각까지 풀어 둔다
+// (usage-guard-override-subscription-<계정>.json, 2026-11-09까지는 옛 폴더의 guard-override-…json도 초기화 시각까지 읽고 지난 것은 지운다).
+// 계정 칸이 없던 옛 guard-override.json은 모든 계정을 함께 풀었으므로 읽지 않는다.
 let overrideUntil = 0;
-try { overrideUntil = Date.parse(JSON.parse(readFileSync(overrideFile(), 'utf8').replace(/^﻿/, '')).until); } catch {}
+try { overrideUntil = readOverrideUntil(currentProvider(), usageDir, {}, now); } catch {}
 
 // 주간 한도도 같은 기준으로 본다. 풀어 두기(override)는 어느 쪽으로 걸렸든 5시간 창 초기화까지만 간다.
 const over = (pct, resetsAt) => pct >= limit && !(resetsAt && now >= Date.parse(resetsAt));
-const hit = !subscribed ||!state || existsSync(join(homedir(), '.claude', 'usage-guard-off'))
+const hit = !subscribed || !state || guardOff()
   || now < overrideUntil || now - Date.parse(state.updated_at) >= 30 * 60 * 1000 ? null
   : over(state.week_pct ?? 0, state.week_resets_at) ? { label: '주간', pct: state.week_pct, resetsAt: state.week_resets_at }
   : over(state.five_hour_pct, state.resets_at) ? { label: '5시간', pct: state.five_hour_pct, resetsAt: state.resets_at }

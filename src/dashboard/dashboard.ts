@@ -4,11 +4,11 @@
  *   node bin/dashboard.mjs status --text | --json                          the "상태" text (works with the server off)
  *   node bin/dashboard.mjs urls                                            the addresses to open
  *
- * serve follows the helper rules of the secretary server (scripts/server/remote-server.ps1): with --parent it ends when
+ * serve follows the rules of the secretary server's companions (scripts/remote-server/remote-server.ps1): with --parent it ends when
  * that process (the server window) does, it ends quietly when the port is taken (it runs already), it writes no log
  * file. With the feature turned off in features.json it ends at once (--force runs it anyway).
- * Settings: src/dashboard/settings.ts (this PC's own in scripts/dashboard.local.json).
- * Its /settings page chooses whose usage is read and shown (scripts/usage.local.json, usage/usage-settings.ts); the
+ * Settings: src/dashboard/settings.ts (this PC's own in the dashboard section of this-secretary.local.json).
+ * Its /settings page chooses whose usage is read and shown (this-secretary.local.json usage-poll, usage/usage-settings.ts); the
  * reading itself is the feature usage-poll (usage/usage-poller.ts), which the secretary server starts on its own.
  */
 import path from 'node:path';
@@ -20,7 +20,7 @@ import { dashboardOn, dashboardUrls, readSettings } from './settings.ts';
 import { Share } from './share.ts';
 import { statusText } from './status-text.ts';
 import { readUsageChoice, saveUsageChoice, usageSettingsView } from '../usage/usage-settings.ts';
-import { readProviders } from '../usage/providers.ts';
+import { readProviders } from '../usage/provider-usage.ts';
 
 export const USAGE = [
   '사용:',

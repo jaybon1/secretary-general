@@ -31,7 +31,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "node \"$CLAUDE_PROJECT_DIR/src/guards/pre-tool-hook.ts\"",
+            "command": "node \"$CLAUDE_PROJECT_DIR/src/mistake-guards/pre-tool-hook.ts\"",
             "timeout": 10
           }
         ]
@@ -44,7 +44,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "node \"$CLAUDE_PROJECT_DIR/src/guards/repeat-hook.ts\"",
+            "command": "node \"$CLAUDE_PROJECT_DIR/src/mistake-guards/repeat-hook.ts\"",
             "timeout": 10
           }
         ]

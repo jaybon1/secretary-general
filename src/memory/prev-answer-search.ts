@@ -9,7 +9,7 @@
 import { tailLines } from '../hooks/context-size-nudge.ts';
 import { parseTranscriptLine } from '../log/ingest-transcript.ts';
 import { SEM_POOL } from './recall.ts';
-import { semanticClient, type SemanticHits, type SemanticSearch } from '../semantic/client.ts';
+import { semanticClient, type SemanticHits, type SemanticSearch } from '../semantic-search/client.ts';
 
 /** The second search drifts more than the question alone, so its lead counts this much less. */
 export const PREV_PENALTY = 0.02;
@@ -121,7 +121,7 @@ export function prevAnswerSearch(
 ): SemanticSearch {
   return async (query, opts) => {
     if (!compressed) return quick(query, opts);
-    // The question goes first: the helper answers one search at a time.
+    // The question goes first: the server answers one search at a time.
     const q = quick(query, opts);
     const p = slow(`${query}\n${compressed}`, opts);
     const [a, b] = await Promise.all([q, p]);

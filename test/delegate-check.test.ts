@@ -103,7 +103,8 @@ test('brief: the space skill rules sharing words with the brief, the backup rule
     ].join('\n'),
     '.agents/skills/voice/SKILL.md': '# 목소리\n- 새 목소리 견본은 목소리 모음에 넣는다.',
   });
-  writeFiles(path.join(root, 'workspaces', '_skills'), { 'youtube-ops/SKILL.md': '# 유튜브\n- 업로드는 비공개로 하고 영어 자막을 함께 올린다.\n- 쇼츠 관련 동영상은 사람이 지정한다.' });
+  // The list says youtube-ops (old form, no common- prefix); the skill is in its common- folder.
+  writeFiles(path.join(root, 'workspaces', '_skills'), { 'common-youtube-ops/SKILL.md': '# 유튜브\n- 업로드는 비공개로 하고 영어 자막을 함께 올린다.\n- 쇼츠 관련 동영상은 사람이 지정한다.' });
   const task = path.join(space, 'output', 'records', 'ep02-upload', 'TASK.md');
   write(task, '# 2편 업로드\n1단계: 영상을 비공개로 업로드하고 영어 자막을 올린다.\n2단계: 올린 뒤 바로 렌더본으로 NAS에 백업한다(backup.py).');
   assert.equal(findSpaceRoot(task), space);

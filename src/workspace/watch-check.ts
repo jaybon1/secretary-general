@@ -2,16 +2,20 @@
 // The watcher is the only thing that wakes the secretary when a worker on another config dir
 // stops, and it ends every time the worker ends a turn, so forgetting to relaunch it means a
 // finished task goes unnoticed. The watcher writes its PID to watch/<id>.pid in this secretary's records folder
-// (~/.secretary/state/<id>, core/paths.ts secretaryStateDir).
+// (~/.secretary/<id>/state, core/paths.ts secretaryStateDir).
 import fs from 'node:fs';
 import path from 'node:path';
-import { SCRIPTS, secretaryStateDir, USAGE_DIR } from '../core/paths.ts';
+import { LEGACY_USAGE_DIR, legacySecretaryStateDir, SCRIPTS, secretaryStateDir } from '../core/paths.ts';
 import type { Store } from '../store/store.ts';
-import { listProcessesSync, pidAlive } from '../core/process.ts';
+import { listProcessesSync, pidAlive } from '../core/windows-process.ts';
+import { TAG } from '../core/names.ts';
 
 export const WATCH_DIR = path.join(secretaryStateDir(), 'watch');
-/** Where watchers started before the records moved to the secretary's own folder wrote their pid: read when WATCH_DIR has none. */
-export const OLD_WATCH_DIR = path.join(USAGE_DIR, 'watch');
+/**
+ * Where watchers started before the records folder moved wrote their pid (~/.secretary/state/<id>/watch until 2026-11-09;
+ * ~/.claude/usage/watch in a copy without an id): read when WATCH_DIR has none.
+ */
+export const OLD_WATCH_DIR = path.join(legacySecretaryStateDir() ?? LEGACY_USAGE_DIR, 'watch'); // legacy-name: state-dir
 
 /** The pid file's text: in `dir`, else (a watcher started before the move) in `old`. Throws when neither has it. */
 function readPidFile(id: string, dir: string, old: string): string {
@@ -103,7 +107,7 @@ export function watchNotice(store: Store): string {
   const off = unwatchedTasks(rows);
   if (!off.length) return '';
   const lines = off.map((t) => `업무${t.id}(${t.title.slice(0, 20)}): ${SCRIPTS.watchWorker} -Id ${t.bg}`);
-  return `<secretary-watch>돌고 있는 업무의 감시가 꺼져 있다. 업무 세션이 이미 쉬고 있을 수 있으니 worker-logs로 확인하고, 계속 도는 업무면 이 답의 도구 호출에서 감시를 백그라운드 명령(시간제한 ${WATCH_TIMEOUT_MS}ms)으로 다시 띄운다. 끝난 업무면 delegate 스킬대로 마무리한다.\n${lines.join('\n')}</secretary-watch>`;
+  return `<${TAG.watch}>돌고 있는 업무의 감시가 꺼져 있다. 업무 세션이 이미 쉬고 있을 수 있으니 worker-logs로 확인하고, 계속 도는 업무면 이 답의 도구 호출에서 감시를 백그라운드 명령(시간제한 ${WATCH_TIMEOUT_MS}ms)으로 다시 띄운다. 끝난 업무면 delegate 스킬대로 마무리한다.\n${lines.join('\n')}</${TAG.watch}>`;
 }
 
 /** How many running tasks a new session is told about (there are rarely more than a few). */

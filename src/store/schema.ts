@@ -124,7 +124,7 @@ const MIGRATIONS: string[] = [
   CREATE INDEX tasks_status ON tasks (status, updated_at);
   CREATE INDEX tasks_workspace ON tasks (workspace_id, id);
   `,
-  // Embeddings for semantic search, written by the helper process (semantic/client.ts).
+  // Embeddings for semantic search, written by the server process (semantic-search/client.ts).
   // Keyed by model so switching models re-embeds instead of mixing vector spaces.
   `
   CREATE TABLE memory_vectors (
@@ -162,7 +162,8 @@ const MIGRATIONS: string[] = [
   CREATE INDEX memories_valid ON memories (valid_to, kind);
   `,
   // The big-work board, out of the profile: one row per change, the latest row per name is its state.
-  // Append-only, so every change keeps its history.
+  // Append-only, so every change keeps its history. The user's-turn state was once named after the user; migration 15
+  // renames it in a DB made before, so this one (run only by a DB older than 10) already takes today's name.
   `
   CREATE TABLE big_work (
     id            INTEGER PRIMARY KEY,
@@ -211,8 +212,8 @@ const MIGRATIONS: string[] = [
     coalesce((SELECT CASE WHEN json_valid(value) THEN CAST(json_extract(value, '$.lastLogId') AS INTEGER) END FROM meta WHERE key = 'open_questions'), 0)
   );
   `,
-  // Mistake guards (feature 'guards', src/guards/): the tools each turn called and what the Stop hook's checks found
-  // (one row per turn, written when the turn really ends), and the mistakes record the secretary keeps by hand
+  // Mistake guards (feature 'mistake-guards', src/mistake-guards/): the tools each turn called and what the Stop hook's checks found
+  // (one row per turn, written when the turn really ends), and the mistakes record the secretary writes itself
   // (record_mistake). Both are for measuring mistakes and grading the eval set; nothing reads them to answer.
   `
   CREATE TABLE turn_tools (
@@ -270,13 +271,39 @@ const MIGRATIONS: string[] = [
   CREATE INDEX tasks_status ON tasks (status, updated_at);
   CREATE INDEX tasks_workspace ON tasks (workspace_id, id);
   `,
+  // The meta key of the weekly tool version notice (an original-only feature) takes its tool's name (2026-11-10): the old
+  // key's value moves over, so a report already shown is not shown again (nothing to move elsewhere). legacy-name: meta-tool-update-seen
+  `
+  INSERT OR IGNORE INTO meta (key, value) SELECT 'tool_update_check_seen', value FROM meta WHERE key = 'tool_versions_seen';
+  DELETE FROM meta WHERE key = 'tool_versions_seen';
+  `,
+  // The big-work state "the user's turn" is '사용자 차례' (2026-11-10): it used to carry the user's own name, which belongs
+  // in the profile, not in the code. SQLite can't alter a CHECK, so the table is rebuilt keeping ids and history. Any state
+  // outside the other five is the old CHECK's user's-turn value, whichever name it had (a release DB already has
+  // '사용자 차례' and keeps it), so the old name is never written here.
+  `
+  CREATE TABLE big_work_v15 (
+    id            INTEGER PRIMARY KEY,
+    name          TEXT NOT NULL,
+    state         TEXT NOT NULL CHECK (state IN ('진행 중', '사용자 차례', '보류', '운영 중', '끝남', '지움')),
+    note          TEXT NOT NULL DEFAULT '',
+    source_log_id INTEGER REFERENCES raw_log (id),
+    created_at    TEXT NOT NULL
+  );
+  INSERT INTO big_work_v15 (id, name, state, note, source_log_id, created_at)
+    SELECT id, name, CASE WHEN state IN ('진행 중', '보류', '운영 중', '끝남', '지움') THEN state ELSE '사용자 차례' END, note, source_log_id, created_at
+    FROM big_work ORDER BY id;
+  DROP TABLE big_work;
+  ALTER TABLE big_work_v15 RENAME TO big_work;
+  CREATE INDEX big_work_name ON big_work (name, id);
+  `,
 ];
 
 /** The schema a fully migrated DB has (its PRAGMA user_version). */
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
 /** Migrations (their 1-based number) that rebuild a table holding records: an existing DB is backed up just before them. */
-const BACKUP_BEFORE = [11, 13];
+const BACKUP_BEFORE = [11, 13, 15];
 
 /** `upTo` stops at an older schema (tests of a migration); everything else takes them all. */
 export function openDb(file: string = DB_PATH, upTo: number = MIGRATIONS.length): DatabaseSync {
@@ -303,7 +330,7 @@ function userVersion(db: DatabaseSync): number {
 
 /**
  * The DB as a daily backup names it (secretary-YYYYMMDD-HHMM.db, local time) in `dir`, by default backups/ beside
- * the DB, so scripts/tasks/backup-db.ps1 rotates it and sends it to the main PC like the others. VACUUM INTO reads one
+ * the DB, so scripts/scheduled/backup-db.ps1 rotates it and sends it to the main PC like the others. VACUUM INTO reads one
  * consistent snapshot without blocking other connections. With `reuse`, a file of the same minute counts as done.
  */
 export function backupDb(db: DatabaseSync, dir?: string, reuse = false): string {
