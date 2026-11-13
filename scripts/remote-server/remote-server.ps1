@@ -153,10 +153,10 @@ while ($true) {
   # 이미 떠 있으면 의미 검색 서버가 알아서 그냥 끝나므로 매번 불러도 된다(의미 검색 서버가 죽었을 때 다시 살리는 역할).
   Start-Process (Get-Command node).Source -ArgumentList 'src/cli.ts', 'semantic-search-server', '--parent', $PID -WindowStyle Hidden
   # 대시보드(기능 dashboard: 상태 화면과 결과물 읽기 전용 보기)도 같은 규칙으로 계정 a 서버 창에 묶는다. 기능이 꺼져 있거나 이미 떠 있으면 스스로 바로 끝난다.
-  # 주소·포트는 이 비서 설정 this-secretary.local.json의 dashboard 칸(src/dashboard/settings.ts).
+  # 주소·포트는 이 비서 설정 this-secretary.local.json의 dashboard 키(src/dashboard/settings.ts).
   if (-not $Provider) { Start-Process (Get-Command node).Source -ArgumentList '--no-warnings', 'bin/dashboard.mjs', 'serve', '--parent', $PID -WindowStyle Hidden }
   # 사용량 조회기(기능 usage-poll: 고른 공급자 사용량을 5분마다, 토큰 0)도 같은 규칙으로 계정 a 서버 창에 묶는다. 기능이 꺼져 있거나 이 PC에서 이미 돌고 있으면 스스로 바로 끝난다.
-  # 고를 공급자는 this-secretary.local.json의 usage-poll 칸(src/usage/usage-settings.ts).
+  # 고를 공급자는 this-secretary.local.json의 usage-poll 키(src/usage/usage-settings.ts).
   if (-not $Provider) { Start-Process (Get-Command node).Source -ArgumentList '--no-warnings', 'src/cli.ts', 'usage-poll', '--parent', $PID -WindowStyle Hidden }
   # 기록은 최근 14일 치만 둔다.
   Get-ChildItem $logDir -Filter *.log | Sort-Object Name -Descending | Select-Object -Skip 14 | Remove-Item -ErrorAction SilentlyContinue

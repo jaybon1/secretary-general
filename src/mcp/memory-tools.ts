@@ -7,7 +7,8 @@ import { BUDGET } from '../core/config.ts';
 import { checkDuplicates, duplicateMessage } from '../memory/duplicate-check.ts';
 import { clip, fail, formatLog, logHead, ok, type ToolContext } from './tool-common.ts';
 import { formatMemory, recall } from '../memory/recall.ts';
-import { semanticClient } from '../semantic-search/client.ts';
+import { findQuote, quoteNote, QUOTE_DESCRIBE, QUOTE_MISSING, quoteFormProblem, saveQuote } from '../memory/source-quote.ts';
+import { missLogFile, SEARCH_TIMEOUT_MS, semanticClient, START_WAIT_MS } from '../semantic-search/client.ts';
 import { MEMORY_KINDS, MemoryRaceError, SUMMARY_MIN_MEMORIES, SUMMARY_SKIP_TOPICS } from '../store/store.ts';
 import { estimateTokens } from '../core/token-estimate.ts';
 import { formatLocal } from '../core/kst-time.ts';
@@ -18,35 +19,56 @@ const LOG_PART_CHARS = 20_000;
 let logPart: { id: number; next: number } | null = null;
 
 /** remember, recall, forget, list_memories, list_topics, get_profile, update_profile. */
-export function registerMemoryTools({ server, store, readonly: READONLY }: ToolContext): void {
+/** The consolidation's own server (ToolContext.candidates): memories other than topic summaries go through propose_memory → judge_memory. */
+const STAFF_REMEMBER = '정리 담당 서버에서는 kind=summary(주제 요약)만 받는다. 다른 기억은 propose_memory → judge_memory로 저장한다(가까운 기억마다 판정을 받아 코드가 저장·대체한다).';
+
+export function registerMemoryTools({ server, store, readonly: READONLY, tally, candidates }: ToolContext): void {
   server.registerTool(
     'remember',
     {
       description:
+        (candidates ? `${STAFF_REMEMBER} ` : '') +
         '사용자에 대한 오래 남길 정보를 기억에 저장한다. 한 기억에는 하나의 사실만, 나중에 혼자 읽어도 이해되는 완결된 문장으로 쓴다. ' +
-        '기존 기억이 바뀐 경우(이사, 취향 변화, 결정 번복)엔 supersedes에 옛 기억 id를 넣는다 — 옛 기억은 삭제되지 않고 무효 처리된다.',
+        '기존 기억이 바뀐 경우(이사, 취향 변화, 결정 번복)엔 supersedes에 옛 기억 id를 넣는다 — 옛 기억은 삭제되지 않고 무효 처리된다. ' +
+        'decision에는 사용자가 고르거나 말한 것만 넣고, 비서의 추천·제안은 "비서가 ~를 권함"으로 적어 note로 둔다(추천을 결정으로 적으면 나중에 사용자가 정한 것으로 읽힌다).',
       inputSchema: {
-        kind: z.enum(MEMORY_KINDS).describe('fact 사실 · preference 선호 · decision 결정 · event 일어난 일 · task 할 일 · person 인물 · note 기타 · summary 주제 요약(/consolidate 전용)'),
+        kind: z.enum(MEMORY_KINDS).describe('fact 사실 · preference 선호 · decision 결정 · event 일어난 일 · action 할 일(약속·해야 할 일) · person 인물 · note 기타 · summary 주제 요약(/consolidate 전용)'),
         content: z.string().min(1).describe('기억할 내용 (한두 문장)'),
         importance: z.number().int().min(1).max(5).optional().describe('1 사소함 ~ 5 매우 중요 (기본 3)'),
-        tags: z.array(z.string()).optional().describe('검색용 키워드: 주제 1개(프로젝트명, 사람 이름 등) + 세부 1~2개. 넓은 단어는 피하고, content에는 태그를 쓰지 않는다'),
+        tags: z.array(z.string()).optional().describe('검색용 키워드: 주제 1개(프로젝트명, 사람 이름 등) + 세부 1~2개. 넓은 단어는 피하고, 태그는 이 칸에만 넣는다'),
         supersedes: z.array(z.number().int()).optional().describe('이 기억으로 대체되는 옛 기억 id 목록'),
         valid_from: z.string().optional().describe('사실이 유효해진 시점. 한국시간이면 오프셋 포함 (예: 2026-10-16T20:05+09:00). 기본: 지금'),
         source_log_id: z.number().int().optional().describe('근거가 된 대화 로그 id (/consolidate에서 넣는다). 대화 중 저장은 비워 두면 그 턴에 자동 연결된다'),
-        allow_similar: z.boolean().optional().describe('최근 기억과 뜻이 비슷해 저장을 멈췄을 때, 정말 다른 사실이면 true로 다시 저장한다. 처음부터 넣지 않는다'),
+        allow_similar: z.boolean().optional().describe('최근 기억과 뜻이 비슷해 저장이 멈춘 뒤 정말 다른 사실일 때만 true로 다시 저장한다'),
+        quote: z.string().optional().describe(QUOTE_DESCRIBE),
       },
     },
-    async ({ kind, content, importance, tags, supersedes, valid_from, source_log_id, allow_similar }) => {
+    async ({ kind, content, importance, tags, supersedes, valid_from, source_log_id, allow_similar, quote }) => {
+      if (candidates && kind !== 'summary') return fail(STAFF_REMEMBER);
+      // A decision carries the user's own words (memory/source-quote.ts). With its row given they are looked up now and
+      // refused when missing; saved during a chat, the Stop hook checks them once the turn is logged and linked.
+      let found: ReturnType<typeof findQuote> | 'pending' = 'pending';
+      if (kind === 'decision') {
+        const problem = quoteFormProblem(quote);
+        if (problem) return fail(problem);
+        if (source_log_id !== undefined) {
+          found = findQuote(store, source_log_id, quote!);
+          if (!found) return fail(QUOTE_MISSING(quote!, `대화 #${source_log_id}와 그 앞`));
+        }
+      }
       const input = { kind, content, importance, tags, supersedes, validFrom: valid_from, sourceLogId: source_log_id };
       // Summaries replace the topic's old summary and are left out of the check; allow_similar skips it.
       const check = kind !== 'summary' && !allow_similar;
+      let missed = '';
       for (let attempt = 1; ; attempt++) {
-        const dup = check ? await checkDuplicates(store, semanticClient(5000), { content, tags, supersedes }) : null;
+        const dup = check ? await checkDuplicates(store, semanticClient(SEARCH_TIMEOUT_MS, 'remember 중복 확인', (why) => (missed = why), { waitMs: START_WAIT_MS }), { content, tags, supersedes }) : null;
         if (dup?.similar.length) return fail(duplicateMessage(dup.similar, (iso) => formatLocal(iso, true)));
         try {
           // After two races in a row, save anyway rather than loop.
           const r = store.remember({ ...input, expectMaxId: dup && !dup.skipped && attempt < 3 ? dup.maxId : undefined });
-          const note = dup?.skipped ? ' (의미 검색 서버가 응답하지 않아 중복 확인은 못 함)' : '';
+          tally?.({ [kind === 'summary' ? 'summaries' : 'memories']: [r.id], superseded: r.superseded });
+          if (kind === 'decision') saveQuote(store, r.id, quote!, found);
+          const note = dup?.skipped ? ` (의미 검색 서버가 응답하지 않아 중복 확인은 못 함: ${missed || '이유 모름'}, 기록 ${missLogFile()})` : '';
           return ok(`기억 #${r.id} 저장${r.superseded.length ? ` · 무효 처리: ${r.superseded.map((i) => `#${i}`).join(', ')}` : ''}${note}`);
         } catch (err) {
           if (!(err instanceof MemoryRaceError)) throw err;
@@ -63,7 +85,7 @@ export function registerMemoryTools({ server, store, readonly: READONLY }: ToolC
         '결과는 토큰 예산 안에서 관련도 순으로 잘린다.',
       inputSchema: {
         query: z.string().min(1).optional().describe('찾을 내용 (자연어 또는 키워드)'),
-        ids: z.array(z.number().int()).min(1).max(20).optional().describe('번호로 바로 펼칠 기억 (자동 주입의 "생략:" 목록 등). query 대신 쓴다'),
+        ids: z.array(z.number().int()).min(1).max(20).optional().describe('번호로 바로 조회할 기억 (자동 주입의 "생략:" 목록 등). query 대신 쓴다'),
         budget_tokens: z.number().int().min(100).max(BUDGET.recallMax).optional().describe(`결과 토큰 예산 (기본 ${BUDGET.recall})`),
         include_invalid: z.boolean().optional().describe('무효 처리된 옛 기억도 포함 (이력 확인용)'),
       },
@@ -71,7 +93,7 @@ export function registerMemoryTools({ server, store, readonly: READONLY }: ToolC
     async ({ query, ids, budget_tokens, include_invalid }) => {
       if (ids) {
         const found = ids.map((id) => store.getMemory(id)).filter((m) => m !== undefined);
-        const text = found.map(formatMemory).join('\n');
+        const text = found.map((m) => [formatMemory(m), m.kind === 'decision' ? quoteNote(store, m.id) : ''].filter(Boolean).join('\n')).join('\n');
         if (!READONLY) {
           store.touch(found.map((m) => m.id));
           store.logUsage('recall', estimateTokens(text), { ids: found.map((m) => m.id) });
@@ -81,16 +103,19 @@ export function registerMemoryTools({ server, store, readonly: READONLY }: ToolC
       }
       if (!query) return fail('query나 ids 중 하나가 필요해요.');
       const budget = budget_tokens ?? BUDGET.recall;
-      // An explicit recall can wait a little longer for the semantic-search server than the per-prompt hook.
-      const r = await recall(store, query, { budgetTokens: budget, includeInvalid: include_invalid, semantic: semanticClient(5000) });
+      // Waits for the semantic-search server like every feature: 30 s for an answer, 90 s for a server coming up.
+      let missed = '';
+      const r = await recall(store, query, { budgetTokens: budget, includeInvalid: include_invalid, semantic: semanticClient(SEARCH_TIMEOUT_MS, 'recall 도구', (why) => (missed = why), { waitMs: START_WAIT_MS }) });
+      // The secretary sees that this answer is word search alone, and why (the record says when and how often).
+      const semanticNote = missed ? `\n(의미 검색 안 됨: ${missed}. 단어 검색 결과만이라 뜻이 같고 글자가 다른 기억은 빠졌을 수 있음. 기록: ${missLogFile()})` : '';
       // Only explicit recalls count as use; auto-injection would let a memory keep promoting itself.
       if (!READONLY) {
         store.touch(r.items.map((i) => i.memory.id));
         store.logUsage('recall', r.tokens, { query, ids: r.items.map((i) => i.memory.id) });
       }
-      if (r.items.length === 0) return ok('관련 기억 없음. 원본 대화에서 찾으려면 search_log를 쓰세요.');
+      if (r.items.length === 0) return ok(`관련 기억 없음. 원본 대화에서 찾으려면 search_log를 쓰세요.${semanticNote}`);
       const tail = r.droppedForBudget ? `\n(예산 ${budget}토큰 초과로 ${r.droppedForBudget}개 생략)` : '';
-      return ok(`${r.text}${tail}`);
+      return ok(`${r.text}${tail}${semanticNote}`);
     },
   );
 
@@ -103,8 +128,13 @@ export function registerMemoryTools({ server, store, readonly: READONLY }: ToolC
         reason: z.string().min(1).describe('무효 처리 이유'),
       },
     },
-    async ({ id, reason }) =>
-      store.forget(id, reason) ? ok(`#${id} 무효 처리됨`) : fail(`#${id}: 없거나 이미 무효 처리된 기억`),
+    async ({ id, reason }) => {
+      // The consolidation ends an old memory with a judged candidate (judge_memory "ends"), so the reason is a memory.
+      if (candidates) return fail('정리 담당 서버에서는 forget을 쓰지 않는다. 옛 기억이 끝났으면 그 일을 후보로 내고(propose_memory) judge_memory에서 ends로 판정한다.');
+      if (!store.forget(id, reason)) return fail(`#${id}: 없거나 이미 무효 처리된 기억`);
+      tally?.({ forgotten: [id] });
+      return ok(`#${id} 무효 처리됨`);
+    },
   );
 
   server.registerTool(
@@ -156,7 +186,7 @@ export function registerMemoryTools({ server, store, readonly: READONLY }: ToolC
     'update_profile',
     {
       description:
-        `핵심 프로필을 새 버전으로 교체한다. 매 세션 항상 로드되므로 모든 대화에 필요한 것만 담는다: 사용자가 누구인지, 핵심 선호, 운영 원칙. 큰 일 상태는 넣지 않는다(set_big_work). ` +
+        `핵심 프로필을 새 버전으로 교체한다. 매 세션 항상 로드되므로 모든 대화에 필요한 것만 담는다: 사용자가 누구인지, 핵심 선호, 운영 원칙. 안건 상태는 프로필이 아니라 주요 현안(set_main_agenda)에 둔다. ` +
         `상한 ~${BUDGET.profileMax} 토큰. 세부 사항은 remember로 기억에 둔다. 전체 내용을 넘겨야 한다 (부분 수정 아님).`,
       inputSchema: {
         content: z.string().min(1).describe('새 프로필 전문 (마크다운)'),
@@ -165,23 +195,24 @@ export function registerMemoryTools({ server, store, readonly: READONLY }: ToolC
     },
     async ({ content, reason }) => {
       const p = store.updateProfile(content, reason);
+      tally?.({ profile: [p.version] });
       return ok(`프로필 v${p.version} 저장 (~${p.tokens}/${BUDGET.profileMax} tokens)`);
     },
   );
 }
 
 /** search_log, get_unconsolidated_log, mark_consolidated. */
-export function registerLogTools({ server, store }: ToolContext): void {
+export function registerLogTools({ server, store, candidates }: ToolContext): void {
   server.registerTool(
     'search_log',
     {
       description:
         '원본 대화 아카이브를 검색한다. 기억에 없는 세부 사항이나 "그때 정확히 뭐라고 했는지" 근거가 필요할 때만 쓴다. ' +
-        'memory_id를 주면 그 기억이 나온 대화의 앞뒤를 펼친다 — 기억 문장만으로 답할 수 있으면 펼치지 않는다.',
+        'memory_id를 주면 그 기억이 나온 대화의 앞뒤를 조회한다 — 기억 문장만으로 모자랄 때만 조회한다.',
       inputSchema: {
         query: z.string().min(1).optional(),
-        memory_id: z.number().int().optional().describe('이 기억이 나온 대화 앞뒤를 펼침 (query 대신)'),
-        log_id: z.number().int().optional().describe('이 대화 번호(상황판의 #1234) 앞뒤를 펼침 (query 대신)'),
+        memory_id: z.number().int().optional().describe('이 기억이 나온 대화 앞뒤를 조회 (query 대신)'),
+        log_id: z.number().int().optional().describe('이 대화 번호(상황판의 #1234) 앞뒤를 조회 (query 대신)'),
         limit: z.number().int().min(1).max(30).optional(),
         session_id: z.string().optional().describe('이 세션(8자리 앞부분도 됨)만. query 없이 주면 그 세션의 마지막 대화를 보여 줌'),
       },
@@ -270,6 +301,11 @@ export function registerLogTools({ server, store }: ToolContext): void {
       inputSchema: { through_log_id: z.number().int().min(0) },
     },
     async ({ through_log_id }) => {
+      // A proposed candidate never judged would be lost without a word.
+      // The run stopped (the semantic-search server never answered): the batch stays for a later run.
+      if (candidates?.halted) return fail(`정리를 멈춰 정리 위치를 옮기지 않았다: ${candidates.halted}. 마지막 보고 첫 줄에 이 이유를 쓰고 끝낸다.`);
+      const open = candidates?.pending() ?? [];
+      if (open.length) return fail(`판정하지 않은 후보가 있어 정리 위치를 옮기지 않았다: ${open.join(', ')}. judge_memory로 판정하거나 withdraw_reason을 넣어 버린 뒤 다시 부른다.`);
       store.markConsolidated(through_log_id);
       return ok(`log #${through_log_id}까지 정리 완료로 기록`);
     },

@@ -9,7 +9,7 @@
  * written again in upper case the next time this copy makes sure of its id (ensureSecretaryId).
  *
  * What it is for:
- * - Scheduled task names end with it, e.g. 'Secretary Idle Jobs (A3F9)' (setup/features.ts scheduledTaskNames,
+ * - Scheduled task names end with it, e.g. 'Secretary Idle Jobs (A3F9)' (core/features.ts scheduledTaskNames,
  *   install-scheduled-tasks.ps1): two secretaries on one PC never share a task. A task under the old name without it is moved
  *   to the new name by install-scheduled-tasks.ps1 when it runs this copy's files. The task scheduler compares names in any case.
  * - Telling a left-behind copy from another secretary (setup/other-secretaries.ts): a secretary folder elsewhere with the same

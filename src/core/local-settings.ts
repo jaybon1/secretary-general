@@ -3,7 +3,7 @@
  * it was merged from; never committed): read and written through here, so a test run never takes this PC's values.
  * test/env.ts sets NO_LOCAL_ENV; then the copy's own files (the ones the
  * tests run from) read as missing and cannot be written, while the same names under any other folder (a test's temp
- * copy) work as always. Eval runs (a temp copy with its own local files) do not set it.
+ * copy) work as always.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,7 +36,7 @@ export function readLocalJson<T>(file: string): JsonRead<T> {
 
 /** Writes a local settings file as UTF-8 without a BOM; refused under the test mark for this copy's own. */
 export function writeLocalJson(file: string, value: unknown): void {
-  if (isShieldedLocal(file)) throw new Error(`시험 중에는 이 비서 설정 파일을 쓰지 않음: ${file}`);
+  if (isShieldedLocal(file)) throw new Error(`테스트 중에는 이 비서 설정 파일을 쓰지 않음: ${file}`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');

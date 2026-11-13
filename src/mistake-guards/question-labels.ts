@@ -31,7 +31,8 @@ export function startLabelsAfter(store: Store, sessionId: string, count: number)
 
 /**
  * Every label a turn's text asked a question with: the question lines ("X. …?", "X(note). …?", a carried one shown again as
- * "A(옛 G, #4508). …?"). The "남은 질문:" line is not read here: its labels were asked on question lines before (or carried
+ * "A(옛 G, #1234). …?"). The remaining-questions list (the closing step "N. 남은 질문에 답해 주세요: …", before
+ * 2026-11-12 a "남은 질문:" line) is not read here: its labels were asked on question lines before (or carried
  * over, startLabelsAfter), and words on it ("F(새PC 단계)") once moved the next label far past them.
  */
 export function usedLabels(text: string): string[] {
@@ -49,5 +50,5 @@ export function noteAnswerLabels(store: Store, sessionId: string, answer: string
 
 /** Prompt hook: one line with the next label. */
 export function labelNotice(store: Store, sessionId: string): string {
-  return `<${TAG.questionLabel}>이 세션의 다음 질문 기호: ${nextLabel(store, sessionId)} (훅이 센다. 새로 묻는 질문은 이 기호부터 붙인다)</${TAG.questionLabel}>`;
+  return `<${TAG.questionLabel}>이 세션의 다음 질문 알파벳: ${nextLabel(store, sessionId)} (훅이 센다. 새로 묻는 질문은 이 알파벳부터 붙인다)</${TAG.questionLabel}>`;
 }

@@ -10,12 +10,13 @@
     "get_unconsolidated_log",
     "mark_consolidated",
     "recall",
+    "propose_memory",
+    "judge_memory",
     "remember",
-    "forget",
     "get_profile",
     "update_profile",
-    "list_big_work",
-    "set_big_work",
+    "list_main_agenda",
+    "set_main_agenda",
     "list_memories",
     "list_topics"
   ],
@@ -29,7 +30,7 @@
     "개인 비서의 기억 정리 담당이 도는 빈 폴더다. 할 일과 절차는 실행할 때 지시로 받는다.",
     "",
     "- 사람이 보고 있지 않으니 묻지 말고 받은 절차를 끝까지 한다.",
-    "- 도구는 비서 기억 도구(secretary)만 쓴다. 이 폴더에 파일을 만들지 않는다.",
+    "- 도구는 비서 기억 도구(secretary)만 쓴다. 정리 결과는 기억과 마지막 답에만 남긴다(이 폴더에는 비서가 남기는 실행 기록만 둔다).",
     "- 마지막 답은 절차에 적힌 형식의 보고만 쓴다(비서가 나중에 사용자와 함께 읽는다).",
     "- 이 폴더의 runs-<비서 번호>.jsonl은 비서가 남기는 실행 기록이다."
   ]

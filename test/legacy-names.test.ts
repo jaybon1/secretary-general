@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { dueLegacyNames, LEGACY_KINDS, LEGACY_NAMES, removeWhen, todayKst, type LegacyName } from '../src/core/legacy-names.ts';
-import { readFeatures } from '../src/setup/features.ts';
+import { readFeatures } from '../src/core/features.ts';
 
 const MARK = /legacy-name: ([a-z0-9-]+)/g;
 
@@ -42,7 +42,7 @@ test('legacy names: every mark in the code has a row, every row has a mark (wher
   for (const r of LEGACY_NAMES) assert.ok(found.has(r.id), `${r.id}: no "legacy-name: ${r.id}" mark in the code (the reading is gone: take the row out)`);
 });
 
-// 없으면 놓치는 실수: 지울 날이 지난 옛 이름 읽기를 아무도 다시 보지 않는다(시험을 실패시키지는 않고 알리기만 한다).
+// 없으면 놓치는 실수: 지울 날이 지난 옛 이름 읽기를 아무도 다시 보지 않는다(테스트를 실패시키지는 않고 알리기만 한다).
 test('legacy names: rows whose day has come are said (a notice, not a failure)', (t) => {
   const rows: LegacyName[] = [
     { id: 'a', old: 'o', now: 'n', kind: 'pc-only', alsoWhen: 'w', checkBy: '2026-12-10', feature: 'f' },

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -8,7 +8,7 @@ import { tempDir } from './helpers.ts';
 // @ts-expect-error plain .mjs script without types
 import { FEATURE_ID_MOVES, ID_ALPHABET, ID_FILE, LIST_FILE, PROTECTED, baseFor, carryFeatureStates, ensureId, moveLocalFiles, classify, classifyMoved, compareVersions, fileHash, findTag, movesBetween, normalize, parseVersion, recommend, removeFile, restyle, sortTags, versionLabel } from '../scripts/update.mjs';
 import { fileHash as releaseHash } from '../src/setup/release-files.ts';
-import { readFeatures } from '../src/setup/features.ts';
+import { readFeatures } from '../src/core/features.ts';
 import { mergeThisSecretaryFiles } from '../src/core/this-secretary.ts';
 
 test('each file is sorted by who changed it since the installed version', () => {
@@ -367,7 +367,7 @@ test('the secretary id is kept: an update never replaces it, and one in lower ca
   assert.equal(read(ID_FILE), 'MY01\n');
   assert.match(out, /비서 고유 번호: MY01 \(그대로, \.secretary-id\)/);
   assert.deepEqual(ensureId(user), { id: 'MY01', created: false });
-  // Same letters as src/setup/secretary-id.ts (the secretary makes the same kind of id).
+  // Same letters as src/core/secretary-id.ts (the secretary makes the same kind of id).
   assert.equal(ID_ALPHABET, 'BCDFGHJKMNPQRSTVWXZ23456789');
 });
 
@@ -545,7 +545,7 @@ test('from v7 the skills move to .agents/skills/ (the user’s edits and skills 
   assert.ok(!fs.existsSync(path.join(work2, 'files', '.claude', 'skills', 'update')), 'the folder copy does not go through links');
   const again = run('apply', '--user', user, '--repo', repo, '--base', 'v9', '--work', work2);
   assert.doesNotMatch(again, /스킬 자리:/);
-  assert.match(again, /스킬 연결: 모두 맞음/);
+  assert.match(again, /스킬 링크: 모두 맞음/);
 });
 
 test('from v8 the per-skill links go and skills/ moves to .agents/skills/, Ego Lite’s link with it', () => {
@@ -737,4 +737,62 @@ test('renamed features keep what the user set, and this PC\'s renamed files foll
   assert.ok(!fs.existsSync(path.join(user, 'scripts', 'phone-push.local.json')) && !fs.existsSync(path.join(user, 'scripts', 'mistake-guards.local.json')), 'the old files moved to backups/this-secretary-merge/');
   assert.deepEqual(mergeThisSecretaryFiles(user, { features: readFeatures(PROJECT_ROOT) }).left, [], 'again: nothing more');
   assert.deepEqual(Object.keys(FEATURE_ID_MOVES).sort(), ['account-handoff', 'backup', 'board', 'consolidate', 'guards', 'memory', 'notify', 'providers', 'update']);
+});
+
+// 없으면 놓치는 실수: features.json이 부딪혀 스크립트 추천(merge-new)대로 정하면 사용자가 켠 기능(phone-push)이 꺼진다(v0.11.0 준비 시험에서 나옴).
+// 또는 사용자가 손대지 않은 기능까지 옛 값으로 되돌려 새 버전이 바꾼 값을 막거나, 다른 기능의 예약 작업 id를 그 기능으로 잘못 읽는다.
+test('what the user turned on or off in features.json stays after any choice; a value left as shipped follows the new version', () => {
+  const user = tempDir();
+  const work = tempDir();
+  // memory-core's task id is "calendar" (an id of another feature before calendar's own entry).
+  const entry = (id: string, enabled: boolean | undefined, d = 'd', task = id) =>
+    `    {\n      "id": "${id}",\n      "description": "${d} (\\"id\\": \\"x\\" {)",\n${enabled === undefined ? '' : `      "enabled": ${enabled},\n`}      "files": [],\n      "scheduledTasks": [{ "id": "${task}", "name": "x" }]\n    }`;
+  const list = (...entries: string[]) => `{\n  "features": [\n${entries.join(',\n')}\n  ]\n}\n`;
+  const core = (d = 'd') => entry('memory-core', undefined, d, 'calendar');
+  fs.mkdirSync(path.join(work, 'files'), { recursive: true });
+  fs.mkdirSync(path.join(work, 'base'), { recursive: true });
+  // Installed: phone-push off, calendar and idle-jobs on. The user turned phone-push on and calendar off, left idle-jobs.
+  fs.writeFileSync(path.join(work, 'base', 'features.json'), list(core(), entry('phone-push', false), entry('calendar', true), entry('idle-jobs', true)));
+  fs.writeFileSync(path.join(work, 'files', 'features.json'), list(core(), entry('phone-push', true), entry('calendar', false), entry('idle-jobs', true)));
+  // Settled with the new version's side (merge-new): new descriptions, the new version's values, idle-jobs now shipped off.
+  const settled = list(core('d2'), entry('phone-push', false, 'd2'), entry('calendar', true, 'd2'), entry('idle-jobs', false, 'd2'));
+  fs.writeFileSync(path.join(user, 'features.json'), settled);
+  assert.deepEqual(carryFeatureStates(user, work), ['phone-push: "enabled": true (사용자가 정해 둔 대로)', 'calendar: "enabled": false (사용자가 정해 둔 대로)']);
+  assert.equal(fs.readFileSync(path.join(user, 'features.json'), 'utf8'), list(core('d2'), entry('phone-push', true, 'd2'), entry('calendar', false, 'd2'), entry('idle-jobs', false, 'd2')));
+  assert.deepEqual(carryFeatureStates(user, work), [], 'nothing left to carry');
+  // Without the installed version's copy every value of the user's counts as the user's.
+  fs.rmSync(path.join(work, 'base'), { recursive: true });
+  fs.writeFileSync(path.join(user, 'features.json'), settled);
+  assert.deepEqual(carryFeatureStates(user, work).length, 3);
+  assert.match(fs.readFileSync(path.join(user, 'features.json'), 'utf8'), /"id": "idle-jobs",[^}]*"enabled": true/);
+});
+
+// 없으면 놓치는 실수: 올린 뒤 workspace-links와 personalDataAllowed 넣기를 사람이 따로 해야 하고, 빠뜨리면 공간 규칙이 옛 형식으로 남거나
+// 구독 공급자에 기억 도구가 붙지 않는다. 또는 게이트웨이처럼 구독이 아닌 공급자에 true를 넣어 개인정보가 나간다.
+test('finish: subscriptions get personalDataAllowed true; other providers and the workspaces workspace-links could not fix are left to ask', () => {
+  const user = tempDir();
+  fs.writeFileSync(path.join(user, 'package.json'), '{}');
+  const providers = path.join(user, 'scripts', 'lib', 'providers.json');
+  fs.mkdirSync(path.dirname(providers), { recursive: true });
+  fs.writeFileSync(providers, '{\n  "default": "subscription",\n  "providers": {\n    "subscription": {\n      "type": "claude-subscription",\n      "usage": "claude-usage"\n    },\n    "gw": { "type": "claude-gateway" },\n    "key": { "type": "claude-api-key", "personalDataAllowed": true }\n  }\n}\n');
+  // The user's own command (the new version's code in the user folder): one workspace fixed, one not.
+  fs.mkdirSync(path.join(user, 'src'));
+  const cli = (body: string) => fs.writeFileSync(path.join(user, 'src', 'cli.ts'), `if (process.argv[2] !== 'workspace-links') process.exit(3);\n${body}\n`);
+  cli("console.log('고침: C:\\\\w\\\\a (번호가 다름)');\nconsole.log('못 고침: C:\\\\w\\\\b (비슷하지만 다른 줄)');\nconsole.log('공간 2개 중 고친 것 1개 (x)');");
+  const finish = () => spawnSync(process.execPath, [path.join(PROJECT_ROOT, 'scripts', 'update.mjs'), 'finish', '--user', user], { encoding: 'utf8' });
+  let r = finish();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /구독 공급자에 "personalDataAllowed": true를 넣음: subscription\n/);
+  assert.match(r.stdout, /물어볼 공급자\(personalDataAllowed 없음[^)]*\): gw\(claude-gateway\)\n/);
+  assert.match(r.stdout, /작업 공간\(workspace-links\): 고침: C:\\w\\a/);
+  assert.match(r.stdout, /물어볼 공간\(workspace-links가 못 고침\): \n {2}- C:\\w\\b \(비슷하지만 다른 줄\)\n/);
+  assert.match(r.stdout, /ASK_PROVIDERS=1\nASK_WORKSPACES=1/);
+  const p = JSON.parse(fs.readFileSync(providers, 'utf8')).providers;
+  assert.deepEqual([p.subscription.personalDataAllowed, p.gw.personalDataAllowed, p.key.personalDataAllowed], [true, undefined, true]);
+  // Again: nothing more to fill; a failing command is told and the exit code says so.
+  cli("console.error('boom'); process.exit(1);");
+  r = finish();
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /넣을 구독 공급자 없음/);
+  assert.match(r.stdout, /작업 공간\(workspace-links\): 실패 — boom/);
 });

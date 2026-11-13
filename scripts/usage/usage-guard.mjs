@@ -15,7 +15,7 @@ import { usageDir, readUsage, refreshFile, failureWait, currentProvider, onSubsc
 // 기준 SECRETARY_USAGE_GUARD_PCT(2026-11-09부터, 옛 이름 USAGE_PAUSE_PCT도 한동안 읽는다).
 const limit = Number(process.env.SECRETARY_USAGE_GUARD_PCT ?? process.env.USAGE_PAUSE_PCT ?? 90); // legacy-name: env-usage-guard-pct
 const REFRESH_AFTER = 5 * 60 * 1000;
-const WRAP_UP_TOOLS = /^(Read|Write|Edit|Glob|Grep|SendMessage|mcp__secretary__(remember|update_task|get_task|set_big_work))$/;
+const WRAP_UP_TOOLS = /^(Read|Write|Edit|Glob|Grep|SendMessage|mcp__secretary__(remember|update_task|get_task|set_main_agenda))$/;
 
 let input = {}, state = null;
 try { input = JSON.parse(readFileSync(0, 'utf8')); } catch {}
@@ -28,7 +28,7 @@ if (subscribed) refreshIfStale();
 
 // 사용자가 "90퍼센트를 초과하더라도 진행"이라고 하면 프롬프트 훅(src/usage/usage-guard-override.ts)이 문구에 적힌 계정(없으면 이 대화의 계정)만 초기화 시각까지 풀어 둔다
 // (usage-guard-override-subscription-<계정>.json, 2026-11-09까지는 옛 폴더의 guard-override-…json도 초기화 시각까지 읽고 지난 것은 지운다).
-// 계정 칸이 없던 옛 guard-override.json은 모든 계정을 함께 풀었으므로 읽지 않는다.
+// 계정 키가 없던 옛 guard-override.json은 모든 계정을 함께 풀었으므로 읽지 않는다.
 let overrideUntil = 0;
 try { overrideUntil = readOverrideUntil(currentProvider(), usageDir, {}, now); } catch {}
 
@@ -45,7 +45,7 @@ if (hit && !WRAP_UP_TOOLS.test(input.tool_name ?? '')) {
     ? new Date(hit.resetsAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
     : '알 수 없음';
   const reason = `[사용량 일시 정지] ${hit.label} 사용량 ${Math.round(hit.pct)}% (기준 ${limit}%). `
-    + `새 작업을 시작하지 말고, 하던 단계만 마무리해 진행 상황(끝난 것·남은 것·다음 첫 단계)을 PROGRESS.md 등에 적은 뒤 턴을 끝내라. `
+    + `하던 단계만 마무리해 진행 상황(끝난 것·남은 것·다음 첫 단계)을 PROGRESS.md 등에 적은 뒤 턴을 끝내라(한도가 다 차서 마무리 못 하는 일을 막으려는 정지다). `
     + `초기화 시각(KST): ${reset}. 그 뒤에 이어서 한다. 읽기·쓰기·수정 도구는 쓸 수 있다.`;
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
@@ -61,7 +61,7 @@ function refreshIfStale() {
   try {
     mkdirSync(usageDir, { recursive: true });
     writeFileSync(mark, String(now));
-    // 시험(test/env.ts의 표시)에서는 표시만 남기고 띄우지 않는다: 따로 띄운 프로세스는 시험 환경을 물려받지 않아 진짜 조회를 한다.
+    // 테스트(test/env.ts의 표시)에서는 표시만 남기고 띄우지 않는다: 따로 띄운 프로세스는 테스트 환경을 물려받지 않아 진짜 조회를 한다.
     if (process.env.SECRETARY_NO_MODEL_CALLS) return;
     // 훅이 끝나면 Claude Code가 훅의 자식 프로세스까지 정리하므로, WMI로 부모와 상관없는 프로세스를 만든다.
     // -WindowStyle Hidden만으로는 창이 잠깐 떴다 사라지므로 conhost --headless로 창 없이 띄운다.

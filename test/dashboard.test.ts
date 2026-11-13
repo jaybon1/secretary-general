@@ -29,21 +29,21 @@ import {
 } from '../src/dashboard/collect.ts';
 import { listen, type Listening } from '../src/dashboard/server.ts';
 import { DEFAULT_PORT, dashboardOn, dashboardUrls, defaultShare, readSettings } from '../src/dashboard/settings.ts';
-import { gitIgnored, hiddenName, parseRange, parseSharePath, Share } from '../src/dashboard/share.ts';
+import { gitIgnored, parseRange, Share } from '../src/dashboard/share.ts';
 import { statusText } from '../src/dashboard/status-text.ts';
 import { readUsageChoice, saveUsageChoice, usageSettingsView } from '../src/usage/usage-settings.ts';
 import { labeler, type ProviderInfo } from '../src/usage/provider-usage.ts';
 
-test('the task board has a review column next to running, shown as the user\'s turn', () => {
+// 없으면 놓치는 실수: 없앤 검수 대기 칸이 업무 칸반에 다시 생기거나, 업무가 제 상태 칸에 들어가지 않는다.
+test('the task board has one column per task status, a checked task among the done', () => {
   const s = tempStore();
   const ws = s.createWorkspace({ kind: 'solo', name: 'video', title: '영상', purpose: '영상 제작', folder: 'C:/ws/video', agents: [] });
-  const t = s.createTask({ workspaceId: ws.id, name: 'cut', title: '쇼츠 편집', goal: 'g', outputDir: 'o', review: true });
-  s.updateTask(t.id, { status: 'review' });
+  const t = s.createTask({ workspaceId: ws.id, name: 'cut', title: '쇼츠 편집', goal: 'g', outputDir: 'o' });
+  s.updateTask(t.id, { status: 'done' });
   const cols = kanban(s.db.location()!);
-  assert.deepEqual(cols.map((c) => c.status), ['ready', 'running', 'review', 'failed', 'done', 'cancelled']);
-  const review = cols.find((c) => c.status === 'review')!;
-  assert.match(review.label, /검수 대기/);
-  assert.deepEqual(review.items.map((x) => x.title), ['쇼츠 편집']);
+  assert.deepEqual(cols.map((c) => c.status), ['ready', 'running', 'failed', 'done', 'cancelled']);
+  assert.deepEqual(cols.find((c) => c.status === 'done')!.items.map((x) => x.title), ['쇼츠 편집']);
+  assert.ok(cols.every((c) => !/검수/.test(c.label)));
 });
 
 test('kst: UTC to Korean time, 24-hour, across midnight', () => {
@@ -115,14 +115,6 @@ test('the feature switch: on without features.json or with it on, off when featu
   assert.equal(dashboardOn(root), false);
 });
 
-test('share paths: dot segments, encoded dots and slashes, backslashes, drive letters, colons and trailing dots are refused', () => {
-  assert.deepEqual(parseSharePath('ai-agent/ws/a%20b%20%ED%95%9C.md'), { name: 'ai-agent', segs: ['ws', 'a b 한.md'], dir: false });
-  assert.deepEqual(parseSharePath('ai-agent/ws/'), { name: 'ai-agent', segs: ['ws'], dir: true });
-  for (const bad of ['ai-agent/../x', 'ai-agent/%2e%2e/x', 'ai-agent/%2E%2e%2Fx', 'ai-agent/a%2fb', 'ai-agent/a%5cb', 'ai-agent/a\\b', 'ai-agent/C:/Windows', 'ai-agent/x//y', 'ai-agent/.env.', 'ai-agent/a ', 'ai-agent/f.txt:stream', 'ai-agent/a%00', 'ai-agent/%E0%A4%A', '']) {
-    assert.ok('bad' in parseSharePath(bad), bad);
-  }
-});
-
 test('ranges: a-b, a-, -n; past the end or empty is 416; no or several ranges is the whole file', () => {
   assert.deepEqual(parseRange('bytes=2-5', 10), { start: 2, end: 5 });
   assert.deepEqual(parseRange('bytes=7-', 10), { start: 7, end: 9 });
@@ -133,11 +125,6 @@ test('ranges: a-b, a-, -n; past the end or empty is 416; no or several ranges is
   assert.equal(parseRange('bytes=-0', 10), 'bad');
   assert.equal(parseRange(undefined, 10), null);
   assert.equal(parseRange('bytes=0-1,4-5', 10), null);
-});
-
-test('hidden names: .git, .env, *.env, key file names', () => {
-  for (const n of ['.git', '.GIT', '.env', '.env.local', 'naver.env', 'naver-apihub-api-key-someone-content-tool.txt', 'x-oauth-token-y', 'a.db', 'a.DB-wal', 'a.db-shm', 'x.sqlite', 'x.sqlite3-journal', 'c.pem', 'c.key', 'c.p12', 'c.pfx', 'v.kdbx']) assert.ok(hiddenName(n), n);
-  for (const n of ['env.md', 'report.md', 'environment.txt', 'token-usage.md', 'db.md', 'keynote.txt', 'key.md']) assert.ok(!hiddenName(n), n);
 });
 
 // ---- the server over HTTP -------------------------------------------------------------------------
@@ -360,6 +347,7 @@ test('video: Range gives 206 with the right bytes, HEAD only headers, an impossi
   assert.equal(no.headers['content-range'], 'bytes */64');
 });
 
+// [늘 남김] 없으면 놓치는 실수: 키·DB·백업·.env가 주소를 직접 치면 폰에서 열린다(개인정보, 2026-11-12 늘 남김으로 올림. 같은 막기를 함수 단위로 보던 테스트는 지움).
 test('hidden by direct address too (404): ignored in the secretary folder, backups, .git, .env, key names, the keys folder', async () => {
   for (const p of [
     '/share/ai-agent/secretary/secretary.db',
@@ -381,6 +369,7 @@ test('hidden by direct address too (404): ignored in the secretary folder, backu
   assert.equal((await req('/share/ai-agent/secretary/AGENTS.md')).status, 200, 'a tracked file is shown');
 });
 
+// [늘 남김] 없으면 놓치는 실수: ../·인코딩·역슬래시·드라이브 글자·정션으로 공유 폴더 밖 파일이 폰에서 열린다(개인정보, 2026-11-12 늘 남김으로 올림. 같은 막기를 함수 단위로 보던 테스트는 지움).
 test('never outside the share: dot segments and their encodings, backslashes and drive letters 400, a junction out 404', async () => {
   for (const p of [
     '/share/ai-agent/../outside/secret.txt',

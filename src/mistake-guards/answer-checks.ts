@@ -1,33 +1,22 @@
 /**
  * The Stop hook's checks on the answer a turn ends with (feature 'mistake-guards'). Each finds one kind of slip the rules forbid
- * and says how to fix it; settings.ts says which ones send the turn back (block) and which are only told (warn).
- *   english       the answer is written in English (Korean is the rule; code, commands and names aside)
- *   path-prose    a results-folder path inside a sentence (paths go on their own line in a code block; web addresses,
- *                 like the phone address's tap-to-open link under the path's code block, are not paths)
- *   path-preview  a local path (C:\…, X:\…, file:///…, \\host\…, the other PC's folder) with "?" after it: a local preview
- *                 or draft is given without a query string and its options are buttons on the page (https links keep theirs)
- *   path-pair     a code line with a result path on this PC (under an output folder, a report, a note; not the
- *                 secretary's own folder, code or settings files) lacks its other-PC code line
- *   path-link     such a result path lacks its tap-to-open link to the phone address ([주소](주소), outside the code
- *                 blocks; only when the dashboard gives a phone address)
- *   path-block    a path on this PC and one on the other PC share one code block (each path goes in a code block of its
- *                 own, so either copies alone)
- *   next-action   the answer has no "다음 행동 및 순서:" line (short answers aside)
- *   open-questions the answer asks labelled questions ("A. …?") without a "남은 질문:" line (short answers aside)
- *   recommend-basis an option marked "(추천)" has no "근거:" line right under it (short answers aside)
+ * and says how to fix it. What each check is, its level and how it is told: answer-check-table.ts, one row per check.
  */
 import path from 'node:path';
-import { LABEL_LINE, parseQuestions, parseRemaining } from '../session-continuity/open-questions.ts';
+import { BASIS_GUESS, BASIS_UNABLE } from '../core/basis-forms.ts';
+import { LABEL_LINE } from '../session-continuity/open-questions.ts';
+import type { CheckId } from './answer-check-table.ts';
 import type { GuardSettings } from './mistake-guard-settings.ts';
+import { readBasisSources, unopenedReportPaths, type Seen } from './seen-sources.ts';
 
 /** What the path checks need: the results folder, its other-PC and phone forms, and the secretary's own folder. */
 export type PathRoots = Pick<GuardSettings, 'aiRoot' | 'otherPcRoot' | 'phoneRoot'> & { secretaryDir?: string | null };
 
 export interface Finding {
-  check: string;
+  check: CheckId;
   reason: string;
   /**
-   * A catch of a check that is otherwise fixed by lines added after the answer (stop-guard.ts FILL_CHECKS) that this time
+   * A catch of a check that is otherwise fixed by lines added after the answer (answer-check-table.ts `fill`) that this time
    * cannot be: the answer is written again whole.
    */
   rewrite?: boolean;
@@ -49,7 +38,7 @@ export const SYSTEM_TEXTS: RegExp[] = [
 ];
 
 /** Lines every answer ends with in Korean, whatever the body: left out of the language count. */
-const TEMPLATE_LINE = /^\s*(?:[-*]\s*)?\**\s*(남은 질문|다음 행동)|^\s*>\s*(이어서|🎤)/;
+const TEMPLATE_LINE = /^\s*(?:[-*]\s*)?(?:\**\d{1,2}[.)]\**\s*)?\**\s*(남은 질문|다음 행동)|^\s*>\s*(이어서|🎤)/;
 
 /** The text a reader reads: without code blocks, inline code, addresses and paths. */
 export function proseOnly(text: string): string {
@@ -150,24 +139,8 @@ export function isResultPath(rel: string, secretaryName?: string | null): boolea
   return !CODE_FILE.test(parts.at(-1)!);
 }
 
-/** A local path as written: file:///…, a drive (C:\, X:/), a share (\\host\…). Up to whitespace or a quote. */
-const LOCAL_PATH = /file:\/\/\/?[^\s`'"<>]+|(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s`'"<>]*|\\\\[^\s\\`'"<>]+\\[^\s`'"<>]*/g;
 /** A web address up to whitespace or the ")" that closes a Markdown link. */
 const WEB_ADDRESS = /\bhttps?:\/\/[^\s)]+/gi;
-/** "?" with something after it (a query string, not a question mark ending a sentence). */
-const QUERY = /\?[^\s?)\]]/;
-
-/** The first line with a local path carrying a query string (web addresses left out), or null. */
-export function localQueryLine(text: string, otherPcRoot: string | null): string | null {
-  const other = otherPcRoot ? rootPattern(otherPcRoot) : null;
-  for (const l of text.split('\n')) {
-    const bare = l.replace(WEB_ADDRESS, ' ');
-    if ((bare.match(LOCAL_PATH) ?? []).some((p) => QUERY.test(p))) return l;
-    const m = other?.exec(bare);
-    if (m && /^[^\s`'"]*\?[^\s?)\]]/.test(bare.slice(m.index + m[0].length))) return l;
-  }
-  return null;
-}
 
 export function checkPaths(answer: string, s: PathRoots): Finding[] {
   const out: Finding[] = [];
@@ -185,30 +158,24 @@ export function checkPaths(answer: string, s: PathRoots): Finding[] {
   if (inProse) {
     out.push({
       check: 'path-prose',
-      reason: `본문 문장 속에 ${name} 폴더 경로가 있다("${inProse.trim().slice(0, 120)}"). 파일·폴더 경로는 문장에 섞지 않고 코드 블록(\`\`\`)에 한 줄씩 따로 쓴다. 그 경로를 코드 블록으로 다시 적어 답을 마무리한다.`,
+      reason: `본문 문장 속에 ${name} 폴더 경로가 있다("${inProse.trim().slice(0, 120)}"). 파일·폴더 경로는 복사하기 쉽게 경로 하나마다 코드 블록(\`\`\`) 하나에 따로 쓴다. 그 경로를 코드 블록으로 다시 적어 답을 마무리한다.`,
     });
   }
 
-  // 2. A local path with a query string: Chrome turns "?" into %3F in the drive form, and options belong on the page.
-  const bad = localQueryLine(answer, s.otherPcRoot);
-  if (bad) {
-    out.push({
-      check: 'path-preview',
-      reason: `로컬 경로 뒤에 ?(쿼리스트링)가 붙었다("${bad.trim().slice(0, 120)}"). 로컬 미리보기·시안은 쿼리스트링 없는 주소로 주고, 옵션(정지 화면, 장면 고르기 등)은 페이지 안 버튼으로 둔다. ? 없이 다시 적고, 옵션이 필요하면 페이지에 버튼을 넣게 한다(외부 https 링크의 쿼리스트링은 그대로 둬도 된다).`,
-    });
-  }
-
-  // 3. Each bare result path on this PC in a code line has its other-PC code line (path-pair) and, when the dashboard
+  // 2. Each bare result path on this PC in a code line has its other-PC code line (path-pair) and, when the dashboard
   //    gives a phone address, a tap-to-open link to it outside the code blocks (path-link): the three lines a result
   //    path is given in. Either may sit anywhere in the answer, in any code block (lines added after an answer sent back
-  //    for them count: stop-guard.ts 'fill'; both in one block is path-block's catch, not a missing pair). A phone
-  //    address on a code line (the older form) is let be: it neither counts nor is caught.
+  //    for them count: stop-guard.ts 'fill'). A phone address on a code line (the older form) is let be: it neither counts
+  //    nor is caught.
   if (s.otherPcRoot || s.phoneRoot) {
     const lines = code.map((l) => l.trim()).filter(Boolean);
     const otherRels = new Set(s.otherPcRoot ? lines.map((l) => relUnder(l, s.otherPcRoot!)).filter((r): r is string => r !== null).map(plainPath) : []);
-    const linkRels = new Set(s.phoneRoot ? phoneLinkRels(prose, s.phoneRoot) : []);
+    const links = s.phoneRoot ? phoneLinks(prose, s.phoneRoot) : [];
+    const linkRels = new Set(links.map((k) => k.rel));
+    const namedRels = new Set(links.filter((k) => k.named).map((k) => k.rel));
     const noPair: string[] = [];
     const noLink: string[] = [];
+    const misnamed: string[] = [];
     for (const l of lines) {
       if (!bareDrivePath(l)) continue;
       const rel = relUnder(l, s.aiRoot);
@@ -217,86 +184,56 @@ export function checkPaths(answer: string, s: PathRoots): Finding[] {
       if (!isResultPath(key, s.secretaryDir ? path.basename(s.secretaryDir) : null)) continue;
       if (s.otherPcRoot && !otherRels.has(plainPath(rel)) && !otherRels.has(key)) noPair.push(rel);
       if (s.phoneRoot && !linkRels.has(key)) noLink.push(rel);
+      else if (s.phoneRoot && !namedRels.has(key)) misnamed.push(rel);
     }
     const list = (xs: string[]) => `${xs.slice(0, 3).join(', ')}${xs.length > 3 ? ` 외 ${xs.length - 3}개` : ''}`;
     if (noPair.length) {
       out.push({
         check: 'path-pair',
-        reason: `${name} 안 결과물 경로에 다른 PC 경로 줄이 빠졌다: ${list(noPair)}. 이 PC 경로 코드 블록 아래에 다른 PC: ${s.otherPcRoot}\\<같은 경로> 줄을 자기 코드 블록으로 따로 붙인다(한 블록에 같이 넣지 않는다).`,
+        reason: `${name} 안 결과물 경로에 다른 PC 경로 줄이 빠졌다: ${list(noPair)}. 이 PC 경로 코드 블록 아래에 다른 PC: ${s.otherPcRoot}\\<같은 경로> 줄을 자기 코드 블록으로 따로 붙인다(경로 하나에 코드 블록 하나).`,
       });
     }
-    if (noLink.length) {
-      out.push({
-        check: 'path-link',
-        reason: `${name} 안 결과물 경로에 누르면 열리는 링크 줄이 빠졌다: ${list(noLink)}. 경로 코드 블록 바로 아래(블록 밖)에 [${s.phoneRoot}/<같은 경로>](같은 주소) 꼴로 주소 자체를 링크 이름으로 쓴 링크 한 줄을 붙인다(/ 로 잇고 공백은 %20, 주소 속 괄호는 %28·%29). 폰 주소를 코드 줄로 따로 쓰지 않는다.`,
-      });
-    }
-  }
-
-  // 4. Each path in a code block of its own: a block holding a path line on this PC and one on the other PC is caught
-  //    (copying one takes the other along). Unless each of its paths is written again further down in a block that does
-  //    not mix them (the blocks added after an answer sent back for it: stop-guard.ts 'fill').
-  if (s.otherPcRoot) {
-    const mixed = mixedPathBlocks(answer, s.aiRoot, s.otherPcRoot);
-    if (mixed.length) {
-      const list = `${mixed.slice(0, 3).join(', ')}${mixed.length > 3 ? ` 외 ${mixed.length - 3}개` : ''}`;
-      out.push({
-        check: 'path-block',
-        reason: `이 PC 경로와 다른 PC 경로를 코드 블록 하나에 같이 넣었다: ${list}. 경로 하나마다 자기 코드 블록을 따로 쓴다(이 PC 경로 블록, 다른 PC 경로 블록, 그 아래 블록 밖에 링크 줄 순서).`,
-      });
+    if (noLink.length || misnamed.length) {
+      const how = `경로 코드 블록 바로 아래(블록 밖)에 [${s.phoneRoot}/<같은 경로>](같은 주소) 형식으로 주소 자체를 링크 이름으로 쓴 링크 한 줄을 붙인다(/ 로 잇고 공백은 %20, 주소 속 괄호는 %28·%29). 폰 주소는 이 링크 줄로만 쓴다.`;
+      const what = [
+        ...(noLink.length ? [`${name} 안 결과물 경로에 누르면 열리는 링크 줄이 빠졌다: ${list(noLink)}.`] : []),
+        ...(misnamed.length
+          ? [`${name} 안 결과물 경로의 폰 링크 이름이 주소가 아니다: ${list(misnamed)}. 링크 이름은 "폰에서 열기" 같은 말이나 로컬 경로가 아니라 링크 주소를 그대로 쓴다([주소](주소)).`]
+          : []),
+      ];
+      out.push({ check: 'path-link', reason: `${what.join(' ')} ${how}` });
     }
   }
   return out;
 }
 
-/**
- * The paths (this PC's form, else the other PC's) of the code blocks that hold both a path line under aiRoot and one
- * under otherPcRoot, leaving out a block whose every path line is written again in a later block that mixes nothing.
- */
-export function mixedPathBlocks(text: string, aiRoot: string, otherPcRoot: string): string[] {
-  const blocks: { here: string[]; there: string[] }[] = [];
-  let fence: string | null = null;
-  let cur: { here: string[]; there: string[] } | null = null;
-  for (const line of text.split('\n')) {
-    const m = /^\s*(```|~~~)/.exec(line);
-    if (m) {
-      if (fence === null) {
-        fence = m[1];
-        cur = { here: [], there: [] };
-      } else if (fence === m[1]) {
-        fence = null;
-        if (cur) blocks.push(cur);
-        cur = null;
-      }
-      continue;
-    }
-    if (!cur) continue;
-    const l = line.trim();
-    if (!l || (l.match(/[A-Za-z]:[\\/]|\\\\/g) ?? []).length > 1) continue;
-    const here = relUnder(l, aiRoot);
-    const there = here === null ? relUnder(l, otherPcRoot) : null;
-    if (here !== null) cur.here.push(plainPath(here.split('?')[0]));
-    else if (there !== null) cur.there.push(plainPath(there.split('?')[0]));
-  }
-  const out: string[] = [];
-  blocks.forEach((b, i) => {
-    if (!b.here.length || !b.there.length) return;
-    const later = blocks.slice(i + 1).filter((x) => !x.here.length || !x.there.length);
-    const hereLater = new Set(later.flatMap((x) => x.here));
-    const thereLater = new Set(later.flatMap((x) => x.there));
-    if (b.here.every((r) => hereLater.has(r)) && b.there.every((r) => thereLater.has(r))) return;
-    out.push(...b.here.map((r) => r || '.'));
-  });
-  return [...new Set(out)];
-}
-
 /** The paths under phoneRoot (decoded, without a query string, as plainPath) that Markdown links outside code point to. */
 export function phoneLinkRels(prose: string[], phoneRoot: string): string[] {
+  return phoneLinks(prose, phoneRoot).map((l) => l.rel);
+}
+
+/** An address as read, for comparing a link's name with its target: %-escapes decoded, no trailing slash, lower case. */
+function readAddress(s: string): string {
+  let a = s.trim().replace(/^<|>$/g, '').replace(/%28/gi, '(').replace(/%29/gi, ')');
+  try {
+    a = decodeURIComponent(a);
+  } catch {
+    // left as written
+  }
+  return a.replace(/\/+$/, '').toLowerCase();
+}
+
+/**
+ * The Markdown links outside code to an address under phoneRoot: the path they point to (as phoneLinkRels gives it) and
+ * whether the link's name is that address itself ([주소](주소), decided 2026-11-07), written either escaped or decoded.
+ * A name other than the address ("폰에서 열기", a local path) hides where the link goes, so it does not count as the link.
+ */
+export function phoneLinks(prose: string[], phoneRoot: string): { rel: string; named: boolean }[] {
   const root = phoneRoot.replace(/\/+$/, '').toLowerCase();
-  const out: string[] = [];
+  const out: { rel: string; named: boolean }[] = [];
   for (const l of prose) {
-    for (const m of l.matchAll(LINK_TARGET)) {
-      const t = m[1];
+    for (const m of l.matchAll(LINK)) {
+      const t = m[2];
       if (!t.toLowerCase().startsWith(`${root}/`)) continue;
       let rel = t.slice(root.length + 1).split('?')[0].replace(/%28/gi, '(').replace(/%29/gi, ')');
       try {
@@ -304,47 +241,17 @@ export function phoneLinkRels(prose: string[], phoneRoot: string): string[] {
       } catch {
         // left as written
       }
-      out.push(plainPath(rel));
+      out.push({ rel: plainPath(rel), named: readAddress(m[1]) === readAddress(t) });
     }
   }
   return out;
 }
 
-/** A Markdown link's target, up to the ")" that closes it (a "(" inside is written %28). */
-const LINK_TARGET = /\]\(\s*<?(https?:\/\/[^\s)>]+)>?\s*\)/gi;
+/** A Markdown link: its name (no "]" inside) and its target, up to the ")" that closes it (a "(" inside is written %28). */
+const LINK = /\[([^\]\n]*)\]\(\s*<?(https?:\/\/[^\s)>]+)>?\s*\)/gi;
 
-// ---- the answer's closing lines ----------------------------------------------------------------------------------
-
-/** The closing line every answer ends with ("다음 행동 및 순서: …", also as a list item or in bold). */
-const NEXT_LINE = /^\s*(?:[-*>]\s*)?\**\s*다음 행동(?:\s*및\s*순서)?\s*\**\s*[:：]/m;
-
-/** An answer this short (non-empty lines) is a quick reply ("기다릴게요"): its closing lines are not asked for. */
+/** An answer this short (non-empty lines) is a quick reply ("기다릴게요"): the recommendation checks pass it by. */
 export const SHORT_ANSWER_LINES = 2;
-
-/**
- * The closing lines: "다음 행동 및 순서:" at the end of every answer (next-action), and "남은 질문:" under an answer that
- * asks labelled questions ("A. …?", open-questions). Code blocks are left out; a short answer is not checked (the rule's
- * own exceptions, like an explanation asked for, cannot be told apart by a script, so the short ones stand for them).
- */
-export function checkClosing(answer: string): Finding[] {
-  const prose = splitFences(answer).prose.join('\n');
-  if (prose.split('\n').filter((l) => l.trim()).length <= SHORT_ANSWER_LINES) return [];
-  const out: Finding[] = [];
-  const asked = Object.keys(parseQuestions(prose));
-  if (asked.length && parseRemaining(prose) === null) {
-    out.push({
-      check: 'open-questions',
-      reason: `질문(${asked.slice(0, 5).join(', ')})을 물었는데 "남은 질문:" 줄이 없다. 답 끝("다음 행동" 위)에 "남은 질문: ${asked.join(', ')}"처럼 아직 답을 못 받은 질문 기호를 한 줄로 붙인다.`,
-    });
-  }
-  if (!NEXT_LINE.test(prose)) {
-    out.push({
-      check: 'next-action',
-      reason: '답 끝에 "다음 행동 및 순서:" 줄이 없다. 사용자가 이 대화에서 지금 할 일을 순서대로 적고, 없으면 "다음 행동 및 순서: 없음"(백그라운드 일이 돌면 괄호에 기다리시면 된다는 말)을 붙인다.',
-    });
-  }
-  return out;
-}
 
 // ---- recommendations -------------------------------------------------------------------------------------------
 
@@ -362,11 +269,25 @@ export interface UnbackedPick {
 }
 
 /**
- * The options marked "(추천)" whose next line is not "근거: …" (the rule: the reason right under the pick it backs, what
- * was checked this turn or in this talk, or "근거: 확인 안 함(짐작)"). Code blocks and inline code are left out (a rule
+ * The options marked "(추천)" with no "근거: …" line right under them or right after their indented detail lines (backedAt; the rule: the reason right under the pick it backs, what
+ * was checked this turn or in this talk, or "근거: 확인할 자료 없음(짐작)"). Code blocks and inline code are left out (a rule
  * or an example quoted). A labelled question asked again further down counts by its last block only: the block written
  * again with its basis lines, after an answer sent back for them (stop-guard.ts 'fill'), replaces the first.
  */
+/**
+ * Whether the "(추천)" option at line i has its basis: the next line, or the first line after the option's own indented
+ * lines (its details, a sub-list) that is not one of them. The next option, a blank line or an unindented paragraph comes
+ * first: no basis.
+ */
+function backedAt(lines: string[], i: number): boolean {
+  for (let j = i + 1; j < lines.length; j++) {
+    const l = lines[j];
+    if (BASIS_LINE.test(l)) return true;
+    if (OPTION_LINE.test(l) || !/^\s+\S/.test(l)) return false;
+  }
+  return false;
+}
+
 export function unbackedPicks(answer: string): UnbackedPick[] {
   // Code lines blanked, not dropped, so that a line's neighbour stays its neighbour.
   let fence: string | null = null;
@@ -392,7 +313,7 @@ export function unbackedPicks(answer: string): UnbackedPick[] {
       continue;
     }
     if (OPTION_LINE.test(l)) {
-      if (RECOMMENDED.test(l) && !BASIS_LINE.test(lines[i + 1] ?? '')) {
+      if (RECOMMENDED.test(l) && !backedAt(lines, i)) {
         const pick = { label, option: l.trim() };
         if (label === null) unlabelled.push(pick);
         else byLabel.get(label)!.push(pick);
@@ -413,14 +334,269 @@ export function checkRecommendBasis(answer: string): Finding | null {
   const named = picks.slice(0, 3).map((p) => `${p.label ? `${p.label}의 ` : ''}"${p.option.slice(0, 60)}"`);
   return {
     check: 'recommend-basis',
-    reason: `"(추천)"을 단 선택지 바로 아래에 근거 줄이 없다: ${named.join(', ')}${picks.length > 3 ? ` 외 ${picks.length - 3}개` : ''}. 추천한 선택지 줄 바로 아래에 들여쓴 인용 줄 "> 근거:" 하나를 붙인다. 근거는 이 턴(또는 이 대화)에서 실제로 확인한 것(연 파일, 기록, 명령 출력, 숫자, 기억 번호)을 짧게 쓰고, 확인하지 못했으면 "근거: 확인 안 함(짐작)"으로 쓴다. 확인할 수 있으면 지금 확인하고 쓴다.`,
+    reason: `"(추천)"을 단 선택지 아래(바로 다음 줄, 또는 그 선택지에 들여쓴 세부 줄 바로 뒤)에 추천 근거("> 근거:" 줄)가 없다: ${named.join(', ')}${picks.length > 3 ? ` 외 ${picks.length - 3}개` : ''}. 추천한 선택지 줄 바로 아래에 들여쓴 인용 줄 "> 근거:" 하나를 붙인다. 선택지에 들여쓴 세부 줄(목록 등)이 딸려 있으면 그 줄들 바로 뒤, 다음 선택지 앞에 붙인다. 빈 줄이나 들여쓰지 않은 문단 뒤, 다음 선택지 뒤의 근거는 그 추천의 근거로 치지 않는다. 근거는 이 턴(또는 이 대화)에서 실제로 확인한 것(연 파일, 기록, 명령 출력, 숫자, 기억 번호)을 짧게 쓴다. 확인할 자료가 있으면 지금 열어 보고 쓰고(끝내 못 열었을 때만 "근거: ${BASIS_UNABLE}"), 확인할 자료가 원래 없는 짐작이면 "근거: ${BASIS_GUESS}"으로 쓴다.`,
     // Options under no labelled question cannot be written again as "that question's block": the whole answer is.
     ...(picks.some((p) => p.label === null) ? { rewrite: true } : {}),
   };
 }
 
+/** A basis that says it was not looked at. */
+const NOT_LOOKED = /확인\s*안\s*(?:함|했|됨)|안\s*(?:봄|봤|열었|열어\s*봄)|못\s*(?:봄|봤|열었|열어\s*봄)|미확인/;
+/**
+ * Something in a basis one could open this turn: inline code (a command, a path), a file name, a line number, a memory or
+ * log number, a path, a report, a record. The rule (AGENTS.md, decided 2026-11-10): with such a thing, open it and say what
+ * was seen; "근거: 확인할 자료 없음(짐작)" is for a guess no record can settle.
+ */
+const CHECKABLE: [string, RegExp][] = [
+  ['명령·경로', /`[^`\n]+`/],
+  ['파일 이름', /[\w가-힣.-]+\.(?:tsx?|mts|mjs|cjs|jsx?|jsonl?|md|ps1|py|sh|txt|ya?ml|toml|csv|html?|css|log|db|ini|env)\b/i],
+  ['줄 번호', /\d+\s*줄/],
+  ['기록 번호', /#\d+|기억\s*\d+/],
+  ['경로', /[A-Za-z]:[\\/]|[\w.-]+\/[\w.-]+/],
+  ['보고', /보고|서브에이전트|run-?job|업무 세션/],
+  // "기록" alone is left out: "기록에 없음" says there is nothing to open.
+  ['명령', /명령|출력|로그/],
+];
+
+/**
+ * Quoted words ("…", “…”, ‘…’, '…', 「…」, 『…』): what a rule or a record says, not what the basis says of itself. A basis
+ * quoting the rule's "확인 안 됨" was caught as not looked at (2026-11-10).
+ */
+const QUOTED = /"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|'[^'\n]*'|「[^」\n]*」|『[^』\n]*』/g;
+const INLINE_CODE = /`[^`\n]*`/g;
+/**
+ * "자료 있음, 못 봄(<무엇>, 이유: <못 연 이유>)": the form for something there that could not be opened this turn (AGENTS.md
+ * 추천 근거: only when it still could not be opened by the end of the turn). Not looking needs no reason, not being able to
+ * does (decided 2026-11-12), so the form counts only with a reason after "이유:". Group 1: what is in the parentheses.
+ */
+const UNABLE = /자료\s*있음\s*[,，·]?\s*못\s*봄\s*(?:\(((?:[^()\n]|\([^()\n]*\))*)\))?/dg;
+/** The reason in the form's parentheses: "이유:" with something after it. */
+const UNABLE_REASON = /이유\s*[:：]\s*[^\s,，.。)]/;
+const blank = (s: string, re: RegExp) => s.replace(re, (m) => ' '.repeat(m.length));
+
+export interface BasisRead {
+  line: string;
+  /** What it names that one could open and did not (basis-unopened). */
+  unopened: string[];
+  /** Uses "자료 있음, 못 봄" without the reason it could not be opened after "이유:" (basis-unopened). */
+  noReason: boolean;
+  /** Says it was not looked at and names nothing to open: the old form (basis-old-form). */
+  oldForm: boolean;
+}
+
+/**
+ * The basis lines (outside code blocks) that say something was not looked at, read in two parts. The form "자료 있음, 못
+ * 봄(<무엇>, 이유: <못 연 이유>)" is judged by its reason alone: with one it passes whatever it names (a file, a command,
+ * a line number); without it → unopened. The rest of the line, quotes and inline code aside, says "확인 안 함"/"안 봄"
+ * (the old "자료 있음, 안 봄(<무엇>)" too) or not: naming something to open → unopened ("근거: paths.ts 21줄(확인 안 함)");
+ * naming nothing → the old form ("근거: 확인 안 함(짐작)"). So a line is one of the two, never both, and a sentence after
+ * the form ("…못 봄(화면, 이유: …). 서브에이전트가 연 문서에는 …") is not caught by the form's "못 봄".
+ */
+export function readBases(answer: string): BasisRead[] {
+  const out: BasisRead[] = [];
+  for (const l of splitFences(answer).prose) {
+    if (!BASIS_LINE.test(l)) continue;
+    // Positions kept, so the form found outside quotes is cut from the line as written too, and its reason read there
+    // (a reason may quote what it could not open).
+    const unquoted = blank(l, QUOTED);
+    let noReason = false;
+    let rest = l;
+    let said = unquoted;
+    for (const m of unquoted.matchAll(UNABLE)) {
+      const at = m.indices?.[1];
+      const inside = at ? l.slice(at[0], at[1]) : '';
+      if (!UNABLE_REASON.test(inside)) noReason = true;
+      const cut = (s: string) => s.slice(0, m.index) + ' '.repeat(m[0].length) + s.slice(m.index + m[0].length);
+      rest = cut(rest);
+      said = cut(said);
+    }
+    const names = new Set<string>();
+    const notLooked = NOT_LOOKED.test(blank(said, INLINE_CODE));
+    if (notLooked) for (const [n, re] of CHECKABLE) if (re.test(rest)) names.add(n);
+    if (names.size || notLooked || noReason) out.push({ line: l.trim(), unopened: [...names], noReason, oldForm: notLooked && !names.size });
+  }
+  return out;
+}
+
+/** The basis lines that name something one could open and say it was not looked at, each with what it names. */
+export function unopenedBases(answer: string): { line: string; names: string[] }[] {
+  return readBases(answer)
+    .filter((b) => b.unopened.length)
+    .map((b) => ({ line: b.line, names: b.unopened }));
+}
+
+const listed = (lines: string[]) => `${lines.slice(0, 3).join(', ')}${lines.length > 3 ? ` 외 ${lines.length - 3}개` : ''}`;
+
+/** The two forms a basis is written in, said after a catch. */
+const BASIS_FORMS = `근거는 두 형식 중 하나로 쓴다: 확인할 자료가 있으면 열어 보고 본 것을 쓰고, 그 턴에 끝내 열지 못했을 때만 "근거: ${BASIS_UNABLE}"으로 못 연 까닭까지 쓴다. 확인할 자료가 원래 없는 짐작이면 "근거: ${BASIS_GUESS}"으로 쓴다.`;
+
+export function checkBasisUnopened(answer: string): Finding | null {
+  const bases = readBases(answer);
+  const found = bases.filter((b) => b.unopened.length);
+  const noReason = bases.filter((b) => b.noReason);
+  if (!found.length && !noReason.length) return null;
+  const what = [
+    ...(found.length
+      ? [`추천 근거에 확인할 수 있는 자료를 적고 "확인 안 함"·"안 봄"으로 넘겼다: ${listed(found.map((f) => `"${f.line.slice(0, 80)}"(${f.unopened.join('·')})`))}. 자료가 있으니 열어 확인하고 무엇을 봤는지 근거로 쓴다.`]
+      : []),
+    ...(noReason.length
+      ? [`추천 근거에 "자료 있음, 못 봄"을 쓰고 못 연 이유를 적지 않았다: ${listed(noReason.map((f) => `"${f.line.slice(0, 80)}"`))}. 열 수 있으면 지금 열어 보고 본 것을 쓰고, 끝내 못 열면 괄호 안에 "이유: <못 연 이유>"를 적는다.`]
+      : []),
+  ];
+  return { check: 'basis-unopened', reason: `${what.join(' ')} ${BASIS_FORMS}` };
+}
+
+export function checkBasisOldForm(answer: string): Finding | null {
+  const found = readBases(answer).filter((b) => b.oldForm);
+  if (!found.length) return null;
+  return {
+    check: 'basis-old-form',
+    reason: `추천 근거를 옛 형식("확인 안 함"·"안 봄" 계열)으로 썼다: ${listed(found.map((f) => `"${f.line.slice(0, 80)}"`))}. ${BASIS_FORMS} 짐작이면 규칙대로 그 아래 두 번째 의견 줄을 붙인다.`,
+  };
+}
+
+// ---- what the basis and the relayed report name was opened (seen-sources.ts) ---------------------------------------
+
+export function checkBasisSource(answer: string, seen: Seen | null | undefined): Finding | null {
+  if (!seen) return null;
+  const found = readBasisSources(answer, seen);
+  if (!found.length) return null;
+  const unopened = found.filter((f) => f.unopened.length);
+  const bare = found.filter((f) => f.reasoningOnly);
+  const what = [
+    ...(unopened.length
+      ? [`추천 근거에 적은 자료를 이 턴(과 앞 두 턴)의 도구 호출로 연 흔적이 없다: ${listed(unopened.map((f) => `"${f.line.slice(0, 70)}"(${f.unopened.map((r) => `${r.kind} ${r.shown}`).slice(0, 3).join(', ')})`))}. 그 자료를 지금 열어 보고, 본 것으로 근거와 추천을 다시 확인한다(열어 보니 달라지면 바로잡는다).`]
+      : []),
+    ...(bare.length
+      ? [`추천 근거에 출처(파일, 기억·대화 #번호, 커밋, 명령)가 없이 추론만 있다: ${listed(bare.map((f) => `"${f.line.slice(0, 70)}"`))}. 확인할 자료가 있으면 열어 보고 그 출처를 적는다.`]
+      : []),
+  ];
+  return { check: 'basis-source', reason: `${what.join(' ')} ${BASIS_FORMS}` };
+}
+
+export function checkReportRelay(answer: string, seen: Seen | null | undefined): Finding | null {
+  if (!seen) return null;
+  const paths = unopenedReportPaths(answer, seen);
+  if (!paths.length) return null;
+  return {
+    check: 'report-relay',
+    reason: `보고(서브에이전트·run-job·업무 세션)에 나온 경로를 열어 보지 않고 전했다: ${listed(paths)}. 보고가 가리키는 자리(파일·줄·기록)를 직접 열어 맞는지 보고, 많으면 몇 개만 보고 나머지에는 "확인 안 됨"을 붙여 전한다.`,
+  };
+}
+
+// ---- words the secretary made up (invented-words.json) ----------------------------------------------------------
+
+/** The lines a reader decides on: a labelled question, an option, a basis. */
+const DECIDING_LINE = (l: string) => LABEL_LINE.test(l) || OPTION_LINE.test(l) || BASIS_LINE.test(l);
+/** Endings a Korean noun takes (so "틀" is found in "틀을" but not in "틀린"). */
+const PARTICLE = '(?:은|는|이|가|을|를|에|에서|에는|에게|으로|로|으로는|로는|과|와|도|만|의|이나|나|처럼|마다|까지|부터|이라|라|이란|란|이고|이다|입니다|이에요|예요|하고)';
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The list words found unexplained in deciding lines (outside code and quotes): each word once, with its line. */
+export function inventedWordsIn(answer: string, words: readonly string[]): Array<{ word: string; line: string }> {
+  const out = new Map<string, string>();
+  const res = words
+    .map((w) => w.trim())
+    .filter(Boolean)
+    .map((w) => ({ w, re: new RegExp(`(?<![가-힣A-Za-z])${escapeRe(w).replace(/\s+/g, '\\s+')}(${PARTICLE})?(?![가-힣])(\\s*\\()?`, 'g') }));
+  for (const raw of splitFences(answer).prose) {
+    if (!DECIDING_LINE(raw)) continue;
+    const l = blank(blank(raw, INLINE_CODE), QUOTED);
+    for (const { w, re } of res) {
+      if (out.has(w)) continue;
+      for (const m of l.matchAll(re)) {
+        // "칸(컬럼)": explained right after it.
+        if (m[2]) continue;
+        out.set(w, raw.trim());
+        break;
+      }
+    }
+  }
+  return [...out].map(([word, line]) => ({ word, line }));
+}
+
+export function checkInventedWords(answer: string, words: readonly string[] | undefined): Finding | null {
+  if (!words?.length) return null;
+  const found = inventedWordsIn(answer, words);
+  if (!found.length) return null;
+  return {
+    check: 'invented-word',
+    reason: `질문·선택지·근거 줄에 비서가 지어내 사용자가 되물은 적 있는 낱말이 풀이 없이 나왔다: ${listed(found.map((f) => `"${f.word}"(${f.line.slice(0, 60)})`))}. 사람이 말로 쓰는 말이나 현업 용어로 바꿔 쓰거나, 꼭 써야 하면 바로 뒤 괄호에 뜻을 붙인다(예: 컬럼(column)).`,
+  };
+}
+
+// ---- a question that leans on another question's answer ------------------------------------------------------
+
+/** The labelled questions of an answer, each with its lines (question, options, details, basis) up to the next label. */
+export function questionBlocks(answer: string): Array<{ label: string; lines: string[] }> {
+  const out: Array<{ label: string; lines: string[] }> = [];
+  let cur: { label: string; lines: string[] } | null = null;
+  for (const l of splitFences(answer).prose) {
+    const q = LABEL_LINE.exec(l);
+    if (q) {
+      cur = { label: q[1], lines: [l] };
+      out.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    if (l.trim() && !OPTION_LINE.test(l) && !BASIS_LINE.test(l) && !/^\s+\S/.test(l)) {
+      cur = null;
+      continue;
+    }
+    cur.lines.push(l);
+  }
+  return out;
+}
+
+/** "SF1이면", "A를 고르면", "B2로 정하면", "C에 따라", "D의 답": a condition on another question's answer. */
+const leansOn = (label: string) =>
+  new RegExp(`(?<![A-Za-z])${label}(?:\\s?\\d{1,2})?(?:번)?\\s*(?:(?:을|를|으로|로)\\s*(?:고르|정하|하)[가-힣]*면|이면|면|이라면|라면|일\\s*때|일\\s*경우|에\\s*따라|의\\s*답|답에\\s*따라)`);
+
+export function dependentQuestions(answer: string): Array<{ label: string; on: string; line: string }> {
+  const blocks = questionBlocks(answer);
+  const labels = new Set(blocks.map((b) => b.label));
+  const out: Array<{ label: string; on: string; line: string }> = [];
+  for (const b of blocks) {
+    for (const other of labels) {
+      if (other === b.label) continue;
+      const re = leansOn(other);
+      const line = b.lines.find((l) => re.test(blank(l, INLINE_CODE)));
+      if (line) {
+        out.push({ label: b.label, on: other, line: line.trim() });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+export function checkDependentQuestions(answer: string): Finding | null {
+  const found = dependentQuestions(answer);
+  if (!found.length) return null;
+  return {
+    check: 'dependent-question',
+    reason: `한 답에서 다른 질문의 답에 기대는 질문을 같이 물었다: ${listed(found.map((f) => `${f.label}가 ${f.on}의 답에 기댐("${f.line.slice(0, 60)}")`))}. 그 질문은 앞 질문의 답을 받은 다음 턴에 묻는다. 이번에는 앞 질문만 남기고, 딸린 질문은 "다음 행동 및 순서"에 "${found[0].on}의 답을 받은 뒤 물을 것"으로 적어 둔다.`,
+  };
+}
+
+/** What the checks beyond the answer's own text read: the turn's tool calls, the made-up words list. */
+export interface CheckContext {
+  seen?: Seen | null;
+  inventedWords?: readonly string[];
+}
+
 /** Every check on one answer. */
-export function checkAnswer(answer: string, s: PathRoots): Finding[] {
+export function checkAnswer(answer: string, s: PathRoots, ctx: CheckContext = {}): Finding[] {
   if (!answer.trim()) return [];
-  return [checkEnglish(answer), ...checkPaths(answer, s), ...checkClosing(answer), checkRecommendBasis(answer)].filter((f): f is Finding => f !== null);
+  return [
+    checkEnglish(answer),
+    ...checkPaths(answer, s),
+    checkRecommendBasis(answer),
+    checkBasisUnopened(answer),
+    checkBasisOldForm(answer),
+    checkBasisSource(answer, ctx.seen),
+    checkReportRelay(answer, ctx.seen),
+    checkInventedWords(answer, ctx.inventedWords),
+    checkDependentQuestions(answer),
+  ].filter((f): f is Finding => f !== null);
 }

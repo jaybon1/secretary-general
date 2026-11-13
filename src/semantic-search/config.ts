@@ -22,6 +22,8 @@ export const MODEL_PATH = path.join(MODEL_DIR, ...EMBED_MODEL.split('/'));
 export const STATE_FILE = `${DB_PATH}.semantic-search-server.json`;
 export const DOWN_FILE = `${DB_PATH}.semantic-search-server-down.json`;
 export const FAILURE_LOG = `${DB_PATH}.semantic-search-server-failures.log`;
+/** The callers' miss streak (misses.ts): from the first search the server did not answer to the next it did. */
+export const MISS_STREAK_FILE = `${DB_PATH}.semantic-search-misses.json`;
 /** The failure log keeps this many last lines. */
 export const FAILURE_LOG_LINES = 500;
 /** The running server records its own peak memory here (recordPeak), as what a start needs. */

@@ -87,7 +87,7 @@ export function fixFeatureSkills(root: string, dryRun = false): { plan: FeatureS
 export function formatFeatureSkills(p: FeatureSkillPlan, done = false): string[] {
   return [
     ...p.move.map((m) => `기능 ${m.feature}이 ${m.to.startsWith(OFF_SKILLS_DIR) ? '꺼져' : '켜져'} 있어 스킬 폴더를 ${done ? '옮김' : '옮길 것'}: ${m.from} → ${m.to}`),
-    ...p.both.map((b) => `기능 ${b.feature}의 스킬 폴더가 두 곳에 다 있어 옮기지 않음(${b.at}이 맞는 자리, ${b.other}과 비교해 사용자에게 묻는다)`),
+    ...p.both.map((b) => `기능 ${b.feature}의 스킬 폴더가 두 곳에 다 있어 옮기지 않음(${b.at}이 맞는 위치, ${b.other}과 비교해 사용자에게 묻는다)`),
   ];
 }
 

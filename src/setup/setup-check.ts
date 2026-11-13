@@ -24,17 +24,17 @@
  * the session-start answer until `node src/cli.ts setup-check` checks again.
  *
  * The items are in setup/check-items.ts, the Windows queries in setup/windows-probe.ts. Items of a feature turned off
- * in features.json are not checked, and those of an original-only feature are marked "원본 전용" (setup/features.ts).
+ * in features.json are not checked, and those of an original-only feature are marked "원본 전용" (core/features.ts).
  */
 import fs from 'node:fs';
 import { DB_PATH, PROJECT_ROOT } from '../core/config.ts';
-import { originalOnlyChecks } from './features.ts';
+import { originalOnlyChecks } from '../core/features.ts';
 import { accountConfigDirs, keysDir } from '../core/provider-accounts.ts';
 import { MODEL_PATH } from '../semantic-search/client.ts';
 import { activeChecks, CHECKS } from './check-items.ts';
 import { probeWindows } from './windows-probe.ts';
 import { readJsonFile } from '../core/json-file.ts';
-import { ensureSecretaryId } from './secretary-id.ts';
+import { ensureSecretaryId } from '../core/secretary-id.ts';
 import { CHECK, CLI, TAG } from '../core/names.ts';
 
 export { activeChecks, CHECKS, LOADED_MODEL_FILES, serverWindow, taskNamesFor, usageHookProblems } from './check-items.ts';

@@ -1,5 +1,5 @@
 {
-  "about": "상황판 고쳐 쓰기 담당(쉬는 시간 작업과 새 세션 첫 질문 뒤에 src/session-continuity/situation-board.ts가 부른다). 실행 폴더는 workspaces/_staff/<이 파일 이름>이다. 값은 이 파일 한 곳에서만 정한다(src/staff/staff.ts가 읽고, run-job.ps1 -Staff situation-board도 이 파일을 읽는다). 지시는 코드가 직전 상황판과 그 뒤 대화로 그때그때 만든다(instructions 없음). timeoutMinutes는 한 묶음(대화 약 15만 자)마다다.",
+  "about": "상황판 고쳐 쓰기 담당(쉬는 시간 작업과 새 세션 첫 질문 뒤에 src/session-continuity/situation-board.ts가 부른다). 실행 폴더는 workspaces/_staff/<이 파일 이름>이다. 값은 이 파일 한 곳에서만 정한다(src/staff/staff.ts가 읽고, run-job.ps1 -Staff situation-board도 이 파일을 읽는다). 지시는 코드가 직전 상황판과 그 뒤 대화로 그때그때 만든다(instructions 없음). timeoutMinutes는 한 배치(대화 약 15만 자)마다다.",
   "provider": "subscription",
   "model": "haiku",
   "effort": "medium",
@@ -15,7 +15,7 @@
     "개인 비서의 상황판을 고쳐 쓰는 담당이 도는 빈 폴더다. 할 일과 형식은 실행할 때 지시로 받는다.",
     "",
     "- 사람이 보고 있지 않으니 묻지 말고 지시대로 상황판 글만 답한다.",
-    "- 도구를 쓰지 않는다. 이 폴더에 파일을 만들지 않는다.",
+    "- 상황판은 답 글로만 낸다(도구는 이 담당에게 꺼져 있다). 이 폴더에는 비서가 남기는 실행 기록만 둔다.",
     "- 이 폴더의 runs-<비서 번호>.jsonl은 비서가 남기는 실행 기록이다."
   ]
 }

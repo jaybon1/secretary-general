@@ -19,7 +19,7 @@ import path from 'node:path';
 import { PROJECT_ROOT } from './config.ts';
 import { pidAlive } from './windows-process.ts';
 import { LEGACY_USAGE_DIR, legacySecretaryStateDir, SECRETARY_HOME, secretaryStateDir, USAGE_DIR } from './paths.ts';
-import { readSecretaryId } from '../setup/secretary-id.ts';
+import { readSecretaryId } from './secretary-id.ts';
 
 /** In the secretary's folder once its old records are in. */
 export const STATE_MOVED_MARK = '.moved-from-usage';

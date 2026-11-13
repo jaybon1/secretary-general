@@ -6,7 +6,7 @@
  *
  * - inside this copy's folder → this copy's (an old layout: fix it);
  * - the nearest folder up from the path that is a secretary folder (package.json named "secretary", which every copy and
- *   release has, or an secretary id file) is its owner. When both folders have an secretary id (setup/secretary-id.ts), the
+ *   release has, or an secretary id file) is its owner. When both folders have an secretary id (core/secretary-id.ts), the
  *   same id → this copy's left-behind copy (this one was moved or copied from there): an old path of this copy (fix
  *   it); another id → another secretary's. Without an id on either side → another secretary's (the package.json name
  *   alone, as before). Another secretary's is left alone, even if its file is gone (that copy's own check and install
@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readJsonFile } from '../core/json-file.ts';
 import { entryPath, type EntryName } from '../core/paths.ts';
-import { secretaryIdPath, readSecretaryId } from './secretary-id.ts';
+import { secretaryIdPath, readSecretaryId } from '../core/secretary-id.ts';
 
 /** The package name every secretary folder carries (the original and each release). */
 export const SECRETARY_PACKAGE = 'secretary';

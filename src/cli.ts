@@ -2,14 +2,14 @@
  * Command-line entry point.
  *
  *   node src/cli.ts hook session-start|prompt|stop   (called by Claude Code hooks; JSON on stdin)
- *   node src/cli.ts situation-board-update | situation-board-show   (rewrite the situation board / print it)
+ *   node src/cli.ts situation-board-update [--detach] | situation-board-show   (rewrite the situation board, --detach: in the background after an update / print it)
  *   node src/cli.ts idle-jobs   (idle jobs: board rewrite and memory consolidation when talk has paused; Task Scheduler runs it every 5 min)
  *   node src/cli.ts memory-consolidation [--detach]   (one memory consolidation now by the staff member of that name, unless one is running; --detach: started apart, returns at once (/consolidate))
  *   node src/cli.ts workspace-aux-folders [--dry-run]   (the aux folders beside the workspaces: old names run-job-home and old (or _old) moved to _run-job-home and _archived with the database's workspaces under them, the staff folders made (old ones moved), _run-job-home made when missing; --dry-run only lists)
  *   node src/cli.ts session-handoff-wake <old session id>   (new session after a handoff: log the old one, rewrite and print the board)
  *   node src/cli.ts setup-check [--skip <id,…> | --unskip <id,…|all>]   (install check; what the session-start notice is built from)
  *   node src/cli.ts this-secretary-merge [--dry-run]   (this PC's separate settings files scripts/*.local.json into this-secretary.local.json, one section per feature; never overwrites, the old file goes to backups/this-secretary-merge/; --dry-run only lists; exit 1 while a file is left)
- *   node src/cli.ts workspace-links [--dry-run]   (write each workspace's secretary-link.local.json, where its tools find this secretary; --dry-run only lists)
+ *   node src/cli.ts workspace-links [--dry-run] [--add-missing <폴더 이름,…>]   (write each workspace's secretary-link.local.json, where its tools find this secretary, and keep its AGENTS.md secretary blocks to the template; --dry-run only lists; --add-missing: those workspaces' unmarked AGENTS.md also get the template sections they lack)
  *   node src/cli.ts skill-links [--dry-run]   (skills in .agents/skills, .claude/skills a link to it, common skills from common-skills.json; moves the old skills/ layout and an off feature's skill to .agents/skills-off (back when on); --dry-run only lists)
  *   node src/cli.ts memory-stats
  *   node src/cli.ts user-title [<호칭> | --clear]   (the name the user is called by, kept in the DB (meta user_title): shown, set, or cleared; store/user-title.ts)
@@ -20,7 +20,7 @@
  *   node src/cli.ts purge-log <2턴 | 120 | 120-135> [--session <id>] [--confirm]   (delete conversation rows; lists unless --confirm; rows kept in backups/error/)
  *   node src/cli.ts purge-log restore <120 | 120-135> [--confirm]   (put deleted rows back from that file)
  *   node src/cli.ts context-tokens <transcript.jsonl>   (last model call's context size from the last 4 MB; nothing printed if none)
- *   node src/cli.ts big-work-from-profile <plan.json> [--apply]   (once, updating from v7: profile's 큰 일 칸 → big-work board; first run writes the plan to check, --apply puts it in)
+ *   node src/cli.ts main-agenda-from-profile <plan.json> [--apply]   (once, updating from v7: profile's 큰 일 칸 → main-agenda board; first run writes the plan to check, --apply puts it in)
  *   node src/cli.ts semantic-search-server [--parent <pid>] [--refetch]   (the semantic-search server; lives as long as <pid>, else idles out; --refetch downloads the model first)
  *   node src/cli.ts usage-poll [--parent <pid>]   (usage reader, feature usage-poll: the checked providers every 5 minutes; one per PC; ends with <pid>, or at once when the feature is off)
  *   node src/cli.ts subscription-pick [--root <secretary folder>]   (the provider "auto" means now: the subscription with the most room, feature multi-subscription; Use-Provider in providers.ps1 runs it)
@@ -31,8 +31,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { sessionHandoffWake } from './session-continuity/session-handoff.ts';
-import { applyPlan, planFromProfile, planProblems, type MovePlan } from './upgrade/big-work-move.ts';
-import { readBoard, runBoardUpdate } from './session-continuity/situation-board.ts';
+import { applyPlan, planFromProfile, planProblems, type MovePlan } from './upgrade/main-agenda-move.ts';
+import { readBoard, runBoardUpdate, spawnBoardJobAfterUpdate } from './session-continuity/situation-board.ts';
 import { catchUpTranscripts } from './log/catch-up.ts';
 import { runHook } from './hooks/run-hook.ts';
 import { DB_PATH, PROJECT_ROOT } from './core/config.ts';
@@ -40,7 +40,7 @@ import { commonSkillsDirOf, LINK_FILE, linkedFolders, linkFor, linkProblem, writ
 import { commonSkillProblem, fixCommonSkills } from './workspace/common-skills.ts';
 import { lastContextTokens } from './hooks/context-size-nudge.ts';
 import { backupDb, openDb } from './store/schema.ts';
-import { offFeatureChecks } from './setup/features.ts';
+import { offFeatureChecks } from './core/features.ts';
 import { ingestTranscript } from './log/ingest-transcript.ts';
 import { executePurge, formatPlan, formatResult, parseSpec, planPurge, restorePurged, rowLine } from './log/purge.ts';
 import { runPreview } from './log/purge-initials.ts';
@@ -141,15 +141,20 @@ async function main(): Promise<void> {
     // Each workspace's secretary-link.local.json (and its .gitignore line): what its tools read to find this secretary. Reads the
     // database read-only (secretary-link.ts linkedFolders); with none it does run-job's home folder only.
     const dry = process.argv.includes('--dry-run');
+    const a = process.argv.indexOf('--add-missing');
+    const addMissing = new Set(a >= 0 ? (process.argv[a + 1] ?? '').split(',').filter(Boolean) : []);
+    if (a >= 0 && !addMissing.size) throw new Error('usage: workspace-links [--dry-run] [--add-missing <폴더 이름,…>]');
     if (!fs.existsSync(DB_PATH)) console.log(noDbLine('공간 목록은 건너뛰고 run-job 기본 폴더만 봐요'));
     const folders = linkedFolders(DB_PATH, PROJECT_ROOT);
     let fixed = 0;
     for (const f of folders) {
+      const add = addMissing.has(path.basename(f));
       const problem = linkProblem(f, PROJECT_ROOT);
-      if (!problem) continue;
-      if (!dry) writeLink(f, PROJECT_ROOT);
-      fixed++;
-      console.log(`${dry ? '고칠 것' : '고침'}: ${f} (${problem})`);
+      if (!problem && !add) continue;
+      if (!dry) writeLink(f, PROJECT_ROOT, add);
+      const left = dry ? null : linkProblem(f, PROJECT_ROOT);
+      if (!left) fixed++;
+      console.log(`${dry ? '고칠 것' : left ? '못 고침' : '고침'}: ${f} (${left ?? problem ?? '빠진 절 더하기'})`);
     }
     const { bin, id } = linkFor(PROJECT_ROOT);
     console.log(`공간 ${folders.length}개 중 ${dry ? '고칠 것' : '고친 것'} ${fixed}개 (${LINK_FILE}: ${JSON.stringify({ bin, id })})`);
@@ -278,6 +283,12 @@ async function main(): Promise<void> {
         break;
       case CLI.situationBoardUpdate: {
         // Started detached by the first prompt of a new session; the user or the secretary can also run it directly to test the rewrite.
+        // --detach (the secretary-update skill, right after an update): start it in the background and return, so the next session reads the new format.
+        if (arg === '--detach') {
+          console.log(spawnBoardJobAfterUpdate(store));
+          break;
+        }
+        if (arg !== undefined) throw new Error(`usage: ${CLI.situationBoardUpdate} [--detach]`);
         const job = await runBoardUpdate(store);
         console.log(JSON.stringify(job));
         break;
@@ -317,12 +328,12 @@ async function main(): Promise<void> {
         console.log(`공간 #${w.id} ${w.title} 보관 → ${w.folder}`);
         break;
       }
-      case CLI.bigWorkFromProfile: {
-        if (!arg) throw new Error('usage: big-work-from-profile <plan.json> [--apply]');
+      case CLI.mainAgendaFromProfile: {
+        if (!arg) throw new Error('usage: main-agenda-from-profile <plan.json> [--apply]');
         if (process.argv.includes('--apply')) {
           const plan = JSON.parse(fs.readFileSync(arg, 'utf8')) as MovePlan;
           const r = applyPlan(store, plan);
-          console.log(`큰 일 판 ${r.board}줄 넣음, 프로필 v${r.profileVersion} 저장(큰 일 칸 뺌)`);
+          console.log(`주요 현안 ${r.board}줄 넣음, 프로필 v${r.profileVersion} 저장(큰 일 칸 뺌)`);
           break;
         }
         const profile = store.getProfile();
@@ -333,7 +344,7 @@ async function main(): Promise<void> {
         const problems = planProblems(plan);
         console.log(
           [
-            `프로필 v${profile.version}의 큰 일 칸 ${plan.section.length}줄 → 판 ${plan.rows.length}줄 (계획: ${arg})`,
+            `프로필 v${profile.version}의 큰 일 칸 ${plan.section.length}줄 → 주요 현안 ${plan.rows.length}줄 (계획: ${arg})`,
             ...plan.rows.map((r) => `- ${r.name} — ${r.state}${r.note ? ` (${r.note})` : ''}`),
             problems.length ? `고칠 것:\n- ${problems.join('\n- ')}` : '고칠 것 없음. 줄마다 상태가 맞는지 보고 --apply로 넣는다.',
           ].join('\n'),
@@ -350,10 +361,10 @@ async function main(): Promise<void> {
 }
 
 const USAGE =
-  `usage: node src/cli.ts <${CLI.hook} session-start|prompt|stop | ${CLI.setupCheck} [--skip ids|--unskip ids] | ${CLI.memoryStats} | ${CLI.userTitle} [<호칭>|--clear] | ${CLI.dbBackup} | ${CLI.ingestTranscript} <file> | ${CLI.rewindClean} <file> [--dry-run] [--keep-memories] | ${CLI.purgeLog} [preview|restore] <2턴|120|120-135> [--here id] [--session id] [--confirm] | ${CLI.situationBoardUpdate} | ${CLI.situationBoardShow} | ${CLI.idleJobs} | ${CLI.memoryConsolidation} [--detach] | ${CLI.workspaceLinks} [--dry-run] | ${CLI.workspaceAuxFolders} [--dry-run] | ${CLI.thisSecretaryMerge} [--dry-run] | ${CLI.skillLinks} [--dry-run] | ${CLI.sessionHandoffWake} <id> | ${CLI.archiveWorkspace} <id> <folder> | ${CLI.bigWorkFromProfile} <plan.json> [--apply]>`;
+  `usage: node src/cli.ts <${CLI.hook} session-start|prompt|stop | ${CLI.setupCheck} [--skip ids|--unskip ids] | ${CLI.memoryStats} | ${CLI.userTitle} [<호칭>|--clear] | ${CLI.dbBackup} | ${CLI.ingestTranscript} <file> | ${CLI.rewindClean} <file> [--dry-run] [--keep-memories] | ${CLI.purgeLog} [preview|restore] <2턴|120|120-135> [--here id] [--session id] [--confirm] | ${CLI.situationBoardUpdate} [--detach] | ${CLI.situationBoardShow} | ${CLI.idleJobs} | ${CLI.memoryConsolidation} [--detach] | ${CLI.workspaceLinks} [--dry-run] | ${CLI.workspaceAuxFolders} [--dry-run] | ${CLI.thisSecretaryMerge} [--dry-run] | ${CLI.skillLinks} [--dry-run] | ${CLI.sessionHandoffWake} <id> | ${CLI.archiveWorkspace} <id> <folder> | ${CLI.mainAgendaFromProfile} <plan.json> [--apply]>`;
 
 /** The commands below that open the database (main's switch); any other word is a usage error, not a new database. */
-const DB_COMMANDS = new Set<string>([CLI.memoryStats, CLI.userTitle, CLI.dbBackup, CLI.ingestTranscript, CLI.rewindClean, CLI.purgeLog, CLI.catchUpTranscripts, CLI.situationBoardUpdate, CLI.idleJobs, CLI.memoryConsolidation, CLI.sessionHandoffWake, CLI.situationBoardShow, CLI.archiveWorkspace, CLI.bigWorkFromProfile]);
+const DB_COMMANDS = new Set<string>([CLI.memoryStats, CLI.userTitle, CLI.dbBackup, CLI.ingestTranscript, CLI.rewindClean, CLI.purgeLog, CLI.catchUpTranscripts, CLI.situationBoardUpdate, CLI.idleJobs, CLI.memoryConsolidation, CLI.sessionHandoffWake, CLI.situationBoardShow, CLI.archiveWorkspace, CLI.mainAgendaFromProfile]);
 
 /**
  * A command that only looks at the database (or backs it up): with no database there is nothing to see, so it is not

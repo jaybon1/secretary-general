@@ -25,7 +25,7 @@ import { PROJECT_ROOT } from '../core/config.ts';
 import { NO_MODEL_ENV } from '../core/no-model-calls.ts';
 import { scriptPath, USAGE_DIR } from '../core/paths.ts';
 import { pidAlive } from '../core/windows-process.ts';
-import { featureOn, readFeatures } from '../setup/features.ts';
+import { featureOn, readFeatures } from '../core/features.ts';
 import { FEATURE } from '../core/names.ts';
 import { failureWait, readFailure, recordFailure, refreshFile } from './usage-files.ts';
 import { readProviders } from './provider-usage.ts';
@@ -203,7 +203,7 @@ export function runUsagePoll(parent?: number, o: { root?: string; usageDir?: str
 
 /** The real reading: usage-query.ps1 for one provider, without a window, at most 3 minutes. Never in tests (the no-model mark). */
 export function runUsageScript(name: string, root = PROJECT_ROOT): Promise<void> {
-  if (process.env[NO_MODEL_ENV]) return Promise.reject(new Error('시험 중에는 사용량을 실제로 조회하지 않음'));
+  if (process.env[NO_MODEL_ENV]) return Promise.reject(new Error('테스트 중에는 사용량을 실제로 조회하지 않음'));
   return new Promise((resolve, reject) =>
     execFile(
       'powershell.exe',

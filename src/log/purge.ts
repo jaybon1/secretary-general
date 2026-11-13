@@ -34,6 +34,7 @@ import { dropQuestionsFrom } from '../session-continuity/open-questions.ts';
 import { transaction } from '../store/schema.ts';
 import { ingestTranscript } from './ingest-transcript.ts';
 import type { LogRowInfo, Store } from '../store/store.ts';
+import { QUEUED_PREFIX } from '../store/conversation-log.ts';
 import { formatLocal, nowIso } from '../core/kst-time.ts';
 import { indexText } from '../memory/search-terms.ts';
 import { catchUpTranscripts, transcriptDirs } from './catch-up.ts';
@@ -77,7 +78,7 @@ export interface PurgeCommand {
 
 /** One logged row, without its text. */
 export interface RowInfo extends LogRowInfo {
-  /** A user prompt that starts a turn (not a compaction summary, not a picked answer). */
+  /** A user prompt that starts a turn (not a compaction summary, not a picked answer, not a message sent mid-turn). */
   prompt: boolean;
 }
 
@@ -155,13 +156,14 @@ export const USAGE = [
   `- ${PHRASE} 2턴 → 마지막 2턴(이 세션에 지울 대화가 없으면 바로 앞 세션)`,
   `- ${PHRASE} #120 → #120이 든 턴 하나`,
   `- ${PHRASE} #120-#135 → #120의 세션에서 그 범위의 줄`,
-  '먼저 지울 줄마다 낱말 첫 글자(40개까지)와 승인 코드(영숫자 6글자)를 보여 줘요. 30분 안에 그 코드만 보내면 지워요.',
+  '먼저 지울 줄마다 단어 첫 글자(40개까지)와 승인 코드(영숫자 6글자)를 보여 줘요. 30분 안에 그 코드만 보내면 지워요.',
 ].join('\n');
 
 // ---- choosing rows --------------------------------------------------------------
 
 const INFO_SQL = `SELECT id, session_id, message_uuid, role, length(content) AS chars, created_at,
-  (role = 'user' AND substr(content, 1, ${SUMMARY_PREFIX.length}) != '${SUMMARY_PREFIX}' AND substr(content, 1, 7) != '[선택 응답]') AS prompt,
+  (role = 'user' AND substr(content, 1, ${SUMMARY_PREFIX.length}) != '${SUMMARY_PREFIX}' AND substr(content, 1, 7) != '[선택 응답]'
+    AND substr(content, 1, ${QUEUED_PREFIX.length}) != '${QUEUED_PREFIX}') AS prompt,
   CASE WHEN role = 'user' AND length(content) <= ${CMD_MAX_CHARS} THEN content END AS short
   FROM raw_log`;
 
@@ -322,7 +324,7 @@ interface Block {
   text?: string;
 }
 
-/** Memory numbers the remember calls between two transcript messages returned ("기억 #1458 저장"). */
+/** Memory numbers the remember calls between two transcript messages returned ("기억 #1234 저장"). */
 function rememberedIn(file: string | undefined, fromUuid: string, untilUuid?: string): number[] {
   if (!file) return [];
   let text: string;
@@ -560,9 +562,9 @@ export function previewRowLine(r: LogRowInfo, tail = ''): string {
 }
 
 export interface PreviewLines {
-  /** What follows each listed row's length (the first LIST_ROWS), in order: " · 6낱말 — 대 삭 …" (log/purge-initials.ts). */
+  /** What follows each listed row's length (the first LIST_ROWS), in order: " · 6단어 — 대 삭 …" (log/purge-initials.ts). */
   rows?: string[];
-  /** What follows each "기억 #id" (one per plan.memoryIds): " 30자 · 5낱말 — …". */
+  /** What follows each "기억 #id" (one per plan.memoryIds): " 30자 · 5단어 — …". */
   memories?: string[];
 }
 
@@ -673,7 +675,7 @@ export function previewOrder(spec: PurgeSpec, sessionId?: string): string {
   const cmd = `node src/cli.ts ${CLI.purgeLog} preview ${specArg(spec)}${sessionId ? ` --here ${sessionId}` : ''}`;
   return [
     `<${TAG.purgePreview}>`,
-    '사용자가 "비서 대화 삭제" 미리 보기를 청했다(이 질문에는 기억·상황판·알림을 붙이지 않았다). 아래 명령을 비서 폴더에서 한 번만 돌리고(모델을 부르지 않아 몇 초면 끝난다), 출력을 고치거나 줄이거나 풀이를 덧붙이지 말고 그대로 전한다. 지울 대화의 내용을 짐작하거나 기억·대화 기록 도구로 찾아보지 않고, 다른 일은 하지 않는다.',
+    '사용자가 "비서 대화 삭제" 미리 보기를 청했다(이 질문에는 기억·상황판·알림을 붙이지 않았다). 아래 명령을 비서 폴더에서 한 번만 돌리고(모델을 부르지 않아 몇 초면 끝난다), 출력을 원문 그대로 전한다. 지울 대화의 내용을 짐작하거나 기억·대화 기록 도구로 찾아보지 않고, 다른 일은 하지 않는다(결과는 훅이 이미 다 붙여 주었고, 지울 대화를 도구로 다시 찾아 읽으면 오류를 부르던 내용을 다시 불러올 수 있기 때문이다).',
     cmd,
     `</${TAG.purgePreview}>`,
   ].join('\n');
@@ -694,7 +696,7 @@ export function purgeHook(store: Store, prompt: string, sessionId?: string, tran
   const cmd = parsePurgeCommand(prompt);
   if (!cmd) return null;
   if (!cmd.spec) {
-    return { context: `<${TAG.purgePreview}>사용자가 "비서 대화 삭제" 명령을 지울 대상 없이 보냈다. 도구를 쓰지 말고 아래 쓰는 법을 그대로 전한다.\n${USAGE}\n</${TAG.purgePreview}>` };
+    return { context: `<${TAG.purgePreview}>사용자가 "비서 대화 삭제" 명령을 지울 대상 없이 보냈다. 도구를 쓰지 말고 아래 쓰는 법을 그대로 전한다(쓰는 법은 훅이 이미 다 붙여 주었고, 지울 대화를 도구로 다시 찾아 읽으면 오류를 부르던 내용을 다시 불러올 수 있기 때문이다).\n${USAGE}\n</${TAG.purgePreview}>` };
   }
   try {
     catchUp(store, transcriptPath, deps);
@@ -707,7 +709,7 @@ export function purgeHook(store: Store, prompt: string, sessionId?: string, tran
 function approve(store: Store, state: CodeState, sessionId: string | undefined, transcriptPath: string | undefined, deps: HookDeps): HookAction {
   const again = `다시 지우려면 '${PHRASE} ${specText(state.spec)}'부터 보내세요`;
   const tell = (why: string) => ({
-    context: `<${TAG.purgeCode}>사용자가 보낸 "${state.code}"는 대화 지우기 승인 코드인데, ${why} 이 질문에는 기억·상황판을 붙이지 않았다. 도구를 쓰지 말고 그 사실과 "${again}." 한 줄만 전한다.</${TAG.purgeCode}>`,
+    context: `<${TAG.purgeCode}>사용자가 보낸 "${state.code}"는 대화 지우기 승인 코드인데, ${why} 이 질문에는 기억·상황판을 붙이지 않았다. 도구를 쓰지 말고(알릴 것은 이 안내에 다 있고, 지울 대화를 도구로 다시 찾아 읽으면 오류를 부르던 내용을 다시 불러올 수 있기 때문이다) 그 사실과 "${again}." 한 줄만 전한다.</${TAG.purgeCode}>`,
   });
   const now = (deps.now ?? Date.now)();
   if (state.used) return tell(`${formatLocal(state.used)}에 이미 그 코드로 지웠다. 이번에는 아무것도 안 지웠다.`);
@@ -740,7 +742,7 @@ export function purgeDone(plan: PurgePlan, r: PurgeResult, sameSession: boolean)
   if (sameSession) lines.push('이 세션 맥락에 그 대화가 아직 남아 있으면 /clear 하거나 그 앞으로 되감기하세요(DB 정리는 다음 세션이 다시 읽지 않게 하는 것).');
   return [
     `<${TAG.purgeDone}>`,
-    '사용자가 보낸 메시지는 대화 지우기 승인 코드였고, 질문 훅이 이미 지웠다(이 질문에는 기억·상황판·알림을 붙이지 않았다). 도구를 쓰지 말고 아래 결과를 고치거나 줄이거나 풀이를 덧붙이지 말고 그대로 전한다. 지운 대화의 내용을 짐작하거나 되묻지 않고, 다른 일은 하지 않는다.',
+    '사용자가 보낸 메시지는 대화 지우기 승인 코드였고, 질문 훅이 이미 지웠다(이 질문에는 기억·상황판·알림을 붙이지 않았다). 도구를 쓰지 말고 아래 결과를 원문 그대로 전한다. 지운 대화의 내용을 짐작하거나 되묻지 않고, 다른 일은 하지 않는다(결과는 훅이 이미 다 붙여 주었고, 지운 대화를 도구로 다시 찾아 읽으면 오류를 부르던 내용을 다시 불러올 수 있기 때문이다).',
     ...lines,
     `</${TAG.purgeDone}>`,
   ].join('\n');
@@ -761,5 +763,5 @@ export function purgeNotice(store: Store): string {
   const what = pending.map((p) => `#${p.from}~#${p.to}(${p.rows}줄)`).join(', ');
   const ids = [...new Set(pending.flatMap((p) => p.forgotten))].map((i) => `#${i}`).join(', ');
   const mem = ids ? `, 그 턴의 기억 ${ids}를 무효 처리` : '';
-  return `<${TAG.purge}>사용자가 "비서 대화 삭제" 명령으로 대화 기록 ${what}를 지웠다${mem}. 지운 대화는 따로 보관됐고 비서는 읽지 않는다. 그 내용을 짐작하거나 되묻지 않는다. 답 끝("다음 행동" 위)에 "대화 ${what}를 지웠어요${ids ? `(기억 ${ids} 무효 처리)` : ''}." 한 줄을 붙인다.</${TAG.purge}>`;
+  return `<${TAG.purge}>사용자가 "비서 대화 삭제" 명령으로 대화 기록 ${what}를 지웠다${mem}. 지운 대화는 따로 보관됐고 비서는 읽지 않는다. 그 내용을 짐작하거나 되묻지 않는다(지운 대화를 다시 찾아 읽으면 오류를 부르던 내용을 다시 불러올 수 있기 때문이다). 답 끝("다음 행동" 위)에 "대화 ${what}를 지웠어요${ids ? `(기억 ${ids} 무효 처리)` : ''}." 한 줄을 붙인다.</${TAG.purge}>`;
 }

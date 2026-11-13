@@ -271,12 +271,9 @@ const MIGRATIONS: string[] = [
   CREATE INDEX tasks_status ON tasks (status, updated_at);
   CREATE INDEX tasks_workspace ON tasks (workspace_id, id);
   `,
-  // The meta key of the weekly tool version notice (an original-only feature) takes its tool's name (2026-11-10): the old
-  // key's value moves over, so a report already shown is not shown again (nothing to move elsewhere). legacy-name: meta-tool-update-seen
-  `
-  INSERT OR IGNORE INTO meta (key, value) SELECT 'tool_update_check_seen', value FROM meta WHERE key = 'tool_versions_seen';
-  DELETE FROM meta WHERE key = 'tool_versions_seen';
-  `,
+  // 14: emptied (2026-11-10). It moved the weekly tool notice's old meta key to its new name; the one DB that had the old
+  // key has run it, and at worst one old report shows again. Its slot stays: the version is counted by this array's order.
+  '',
   // The big-work state "the user's turn" is '사용자 차례' (2026-11-10): it used to carry the user's own name, which belongs
   // in the profile, not in the code. SQLite can't alter a CHECK, so the table is rebuilt keeping ids and history. Any state
   // outside the other five is the old CHECK's user's-turn value, whichever name it had (a release DB already has
@@ -297,13 +294,92 @@ const MIGRATIONS: string[] = [
   ALTER TABLE big_work_v15 RENAME TO big_work;
   CREATE INDEX big_work_name ON big_work (name, id);
   `,
+  // No more waiting for the user's look (2026-11-12): a task is closed as done once the secretary has checked its report,
+  // so the 'review' status and its two fields go. A task still in 'review' is done. Rebuilt keeping ids and records.
+  `
+  CREATE TABLE tasks_v16 (
+    id           INTEGER PRIMARY KEY,
+    workspace_id INTEGER NOT NULL REFERENCES workspaces (id),
+    name         TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    goal         TEXT NOT NULL,
+    output_dir   TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK (status IN ('ready', 'running', 'done', 'failed', 'cancelled')),
+    session_ref  TEXT,
+    result       TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    UNIQUE (workspace_id, output_dir)
+  );
+  INSERT INTO tasks_v16 (id, workspace_id, name, title, goal, output_dir, status, session_ref, result, created_at, updated_at)
+    SELECT id, workspace_id, name, title, goal, output_dir, CASE WHEN status = 'review' THEN 'done' ELSE status END,
+           session_ref, result, created_at, updated_at
+    FROM tasks ORDER BY id;
+  DROP TABLE tasks;
+  ALTER TABLE tasks_v16 RENAME TO tasks;
+  CREATE INDEX tasks_status ON tasks (status, updated_at);
+  CREATE INDEX tasks_workspace ON tasks (workspace_id, id);
+  `,
+  // Names (2026-11-12): the big-work board is the main agenda (main_agenda, "주요 현안"); the memory kind 'task' is
+  // 'action' ("할 일", apart from the tasks table of delegated work); mistakes.eval_ids, unread since the eval set went,
+  // is dropped. The memories table is rebuilt (SQLite can't alter a CHECK) keeping ids, so memories_fts (rowid = id),
+  // memory_vectors and superseded_by still point at the same rows; it has no triggers. Contents keep the words they had.
+  `
+  ALTER TABLE big_work RENAME TO main_agenda;
+  DROP INDEX big_work_name;
+  CREATE INDEX main_agenda_name ON main_agenda (name, id);
+  ALTER TABLE mistakes DROP COLUMN eval_ids;
+  CREATE TABLE memories_v17 (
+    id               INTEGER PRIMARY KEY,
+    kind             TEXT NOT NULL CHECK (kind IN ('fact', 'preference', 'decision', 'event', 'action', 'person', 'note', 'summary')),
+    content          TEXT NOT NULL,
+    tags             TEXT NOT NULL DEFAULT '',
+    importance       INTEGER NOT NULL DEFAULT 3 CHECK (importance BETWEEN 1 AND 5),
+    valid_from       TEXT NOT NULL,
+    valid_to         TEXT,
+    superseded_by    INTEGER REFERENCES memories (id),
+    invalid_reason   TEXT,
+    source_session   TEXT,
+    source_log_id    INTEGER REFERENCES raw_log (id),
+    created_at       TEXT NOT NULL,
+    last_accessed_at TEXT,
+    access_count     INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO memories_v17 (id, kind, content, tags, importance, valid_from, valid_to, superseded_by, invalid_reason,
+                            source_session, source_log_id, created_at, last_accessed_at, access_count)
+    SELECT id, CASE WHEN kind = 'task' THEN 'action' ELSE kind END, content, tags, importance, valid_from, valid_to, superseded_by,
+           invalid_reason, source_session, source_log_id, created_at, last_accessed_at, access_count
+    FROM memories ORDER BY id;
+  DROP TABLE memories;
+  ALTER TABLE memories_v17 RENAME TO memories;
+  CREATE INDEX memories_valid ON memories (valid_to, kind);
+  `,
+  // 2026-11-13 (the user's calls): (1) a decision memory keeps a short quote of the user's own words, checked
+  // by code to stand word for word in a logged user message (memory/source-quote.ts): its own table, so the memories table
+  // is not rebuilt and older memories simply have none. status: 'pending' until the turn it was saved in is logged (the
+  // Stop hook links it), 'found' with the row and line it stands on, 'missing' when it is in none. (2) The mistakes record
+  // had one kind of slip, a recommendation made without checking its source, under four group names; they become one
+  // ('확인 없이 추천', mistake-guards/answer-check-table.ts RECOMMEND_UNCHECKED), and the repeat flag is counted again.
+  `
+  CREATE TABLE IF NOT EXISTS memory_quotes (
+    memory_id  INTEGER PRIMARY KEY REFERENCES memories (id),
+    quote      TEXT NOT NULL,
+    status     TEXT NOT NULL CHECK (status IN ('pending', 'found', 'missing')),
+    log_id     INTEGER REFERENCES raw_log (id),
+    line       INTEGER,
+    checked_at TEXT
+  );
+  UPDATE mistakes SET group_name = '확인 없이 추천'
+    WHERE group_name IN ('근거 없는 추천', '확인 없이 추천', '추천 근거 안 봄', 'basis-unopened');
+  UPDATE mistakes SET recurred = CASE WHEN id = (
+      SELECT m2.id FROM mistakes m2 WHERE m2.group_name = '확인 없이 추천' ORDER BY m2.happened_at, m2.id LIMIT 1
+    ) THEN 0 ELSE 1 END
+    WHERE group_name = '확인 없이 추천';
+  `,
 ];
 
 /** The schema a fully migrated DB has (its PRAGMA user_version). */
 export const SCHEMA_VERSION = MIGRATIONS.length;
-
-/** Migrations (their 1-based number) that rebuild a table holding records: an existing DB is backed up just before them. */
-const BACKUP_BEFORE = [11, 13, 15];
 
 /** `upTo` stops at an older schema (tests of a migration); everything else takes them all. */
 export function openDb(file: string = DB_PATH, upTo: number = MIGRATIONS.length): DatabaseSync {
@@ -351,8 +427,8 @@ export function backupDb(db: DatabaseSync, dir?: string, reuse = false): string 
 function migrate(db: DatabaseSync, upTo: number): void {
   const current = userVersion(db);
   if (current >= upTo) return;
-  // An existing DB (not a fresh one) is copied before a big rebuild; a failed copy stops the migration.
-  if (current > 0 && db.location() && BACKUP_BEFORE.some((n) => n > current && n <= upTo)) backupDb(db, undefined, true);
+  // An existing DB (not a fresh one) is copied before any migration runs; a failed copy stops the migration.
+  if (current > 0 && db.location()) backupDb(db, undefined, true);
   // Table rebuilds drop a referenced table; foreign keys can only be switched off outside a transaction.
   db.exec('PRAGMA foreign_keys = OFF');
   try {

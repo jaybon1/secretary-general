@@ -32,3 +32,8 @@ export function typedText(prompt: string): string {
 export function personText(prompt: string): string {
   return typedText(prompt);
 }
+
+/** How the conversation log keeps a message from another session that carries the person's words: none in this release. */
+export function relayedLogText(_prompt: string): string {
+  return '';
+}

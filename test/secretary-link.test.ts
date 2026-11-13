@@ -3,9 +3,9 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { SECRETARY_ID_FILE } from '../src/setup/secretary-id.ts';
+import { SECRETARY_ID_FILE } from '../src/core/secretary-id.ts';
 import { CHECKS } from '../src/setup/check-items.ts';
-import { createWorkspaceFolder, findSecretaryCode, LINK_FILE, linkProblem, linkProblems, oldFindSecretaryFixes, readLink, renderCharter, renderFindSecretary, writeLink, type WorkspaceSpec } from '../src/workspace/workspace-create.ts';
+import { BLOCK_MARK, createWorkspaceFolder, findSecretaryCode, LINK_FILE, linkProblem, linkProblems, QUESTION_BASIS_RULE, QUESTION_FIRST_RULE, readLink, renderCharter, renderRunJobHome, RUN_JOB_HOME, VERIFIER_RUN_RULE, writeLink, type WorkspaceSpec } from '../src/workspace/workspace-create.ts';
 import { tempDir, testStore } from './helpers.ts';
 
 const win = process.platform === 'win32';
@@ -38,7 +38,8 @@ test('an older workspace gets the file and the .gitignore line; one pointing els
   const root = secretary();
   const folder = tempDir();
   fs.writeFileSync(path.join(folder, '.gitignore'), 'node_modules/');
-  assert.equal(linkProblem(folder, root), `${LINK_FILE} 없음`);
+  // 없으면 놓치는 실수: 점검이 첫 문제 하나만 보여 줘, 비서 진입점이 다른 공간에서는 AGENTS.md 옛 글 같은 뒤 문제가 가려진다(2026-11-10).
+  assert.match(linkProblem(folder, root)!, new RegExp(`^${LINK_FILE} 없음; .*링크 없음: \\.claude/skills`));
   assert.equal(writeLink(folder, root), true);
   assert.equal(fs.readFileSync(path.join(folder, '.gitignore'), 'utf8').split('\n').filter((l) => l === LINK_FILE).length, 1);
   assert.match(fs.readFileSync(path.join(folder, '.gitignore'), 'utf8'), /^node_modules\/\n#/, 'the old lines stay, the new one goes on its own line');
@@ -51,6 +52,14 @@ test('an older workspace gets the file and the .gitignore line; one pointing els
   writeLink(folder, root);
   assert.equal(readLink(folder)!.id, 'EF56');
   assert.equal(fs.readFileSync(path.join(folder, '.gitignore'), 'utf8').split('\n').filter((l) => l === LINK_FILE).length, 1, 'the line is not added twice');
+  // 없으면 놓치는 실수: 2026-11-11 전에 만든 공간 .gitignore의 비서 주석이 옛 말("입구 폴더")로 남아도 점검이 조용하고 workspace-links가 고치지 않는다.
+  const ignoreFile = path.join(folder, '.gitignore');
+  const oldComment = '# 이 공간을 맡은 비서의 입구 폴더(비서가 써 둔다, PC마다 다르다)';
+  fs.writeFileSync(ignoreFile, fs.readFileSync(ignoreFile, 'utf8').replace(/^# 이 공간을 맡은 비서의 .*$/m, oldComment));
+  assert.match(linkProblem(folder, root)!, /\.gitignore 주석에 .*옛 말/);
+  assert.equal(writeLink(folder, root), true);
+  assert.ok(!fs.readFileSync(ignoreFile, 'utf8').includes(oldComment));
+  assert.equal(linkProblem(folder, root), null);
   fs.writeFileSync(path.join(folder, LINK_FILE), '{ broken');
   assert.equal(linkProblem(folder, root), `${LINK_FILE}을 못 읽음`);
 });
@@ -77,7 +86,7 @@ test('the install check lists the database\'s workspaces (and run-job\'s home) w
     const item = CHECKS.find((c) => c.id === 'workspace-links')!;
     const out = item.run({ o: { root, dbPath } as never, probe: null });
     assert.equal(out.status, 'missing');
-    assert.equal(out.detail, `live: ${LINK_FILE} 없음, _run-job-home: ${LINK_FILE} 없음`);
+    assert.match(out.detail!, new RegExp(`^live: ${LINK_FILE} 없음; .*, _run-job-home: ${LINK_FILE} 없음; `));
     for (const p of linkProblems(dbPath, root)) writeLink(p.folder, root);
     assert.equal(item.run({ o: { root, dbPath } as never, probe: null }).status, 'ok');
     // No database (a first install): nothing to look at but run-job's home.
@@ -140,58 +149,84 @@ test('the same in Python', { skip: spawnSync('python', ['--version']).status !==
   assert.doesNotMatch(none.stderr, /TypeError/);
 });
 
-// 없으면 놓치는 실수: 공간 규칙(AGENTS.md)의 파이썬 찾는 코드가 2026-11-10 전 꼴(못 찾으면 TypeError)에 머물러, 새 도구도 그 꼴을 베낀다.
-test('workspace-links rewrites the charter\'s Python code that stopped with a bare TypeError', () => {
-  const root = secretary();
-  const folder = tempDir();
-  const now = renderFindSecretary('SECRETARY_AB12_DIR').join('\n');
-  const [a, b] = oldFindSecretaryFixes(root).at(-1)!;
-  assert.ok(now.includes(b));
-  writeLink(folder, root);
-  fs.writeFileSync(path.join(folder, 'AGENTS.md'), `# 공간\n\n${now.replace(b, a)}\n`);
-  assert.match(linkProblem(folder, root)!, /못 찾을 때 알림 없는/);
-  assert.equal(writeLink(folder, root), true);
-  assert.equal(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8'), `# 공간\n\n${now}\n`);
-});
+/** A charter's text with its block marks taken out: what a charter from before the marks (until 2026-11-12) looked like. */
+const unmarked = (text: string) => text.split('\n').filter((l) => !BLOCK_MARK.test(l)).join('\n');
+const SPEC_V: WorkspaceSpec = { ...SPEC, context: '- 우리 공간 맥락', verify: ['npm test'] };
 
-// 없으면 놓치는 실수: 공간 규칙(AGENTS.md)의 비서 입구 찾는 글과 코드에 옛 환경변수 SECRETARY_DIR가 남아, 새로 만드는 공간 도구도 옛 이름을 읽는다.
-test('workspace-links rewrites a charter\'s old find-secretary lines (the old SECRETARY_DIR after the variable) to today\'s', () => {
+// 없으면 놓치는 실수: 비서가 공간 규칙 틀을 고쳐도 이미 만든 공간 AGENTS.md는 옛 글로 남거나(옛 글 → 새 글 고침 쌍이 빠뜨린 문장), 다시 쓰면서
+// 사용자가 더한 줄·공간 맥락·검증 명령을 지운다.
+test('workspace-links writes each secretary block again from the template and leaves everything outside the marks', () => {
   const root = secretary();
   const folder = tempDir();
-  const now = renderFindSecretary('SECRETARY_AB12_DIR').join('\n');
-  let old = now;
-  for (const [a, b] of oldFindSecretaryFixes(root)) {
-    assert.ok(now.includes(b), `today's line: ${b}`);
-    old = old.replace(b, a);
+  writeLink(folder, root);
+  const now = renderCharter(SPEC_V, root);
+  assert.match(now, /<!-- secretary:begin work -->\n## 일하는 방식\n/);
+  assert.match(now, /<!-- secretary:end verify -->\n- `npm test`\n/, 'the check commands are the workspace\'s, after the block');
+  // A block with a sentence from an older template, and a line the user added after a block.
+  const mine = '- 새 영상 업무는 먼저 장부를 본다.';
+  const edited = now.replace('- 이 공간 폴더 밖은 읽기만 한다.', '- 이 공간 밖은 읽기만.').replace('<!-- secretary:end start -->\n', `<!-- secretary:end start -->\n${mine}\n`);
+  fs.writeFileSync(path.join(folder, 'AGENTS.md'), edited.replaceAll('\n', '\r\n'));
+  assert.match(linkProblem(folder, root)!, /AGENTS\.md의 비서 표시 안이 지금 틀과 다름/);
+  assert.equal(writeLink(folder, root), true);
+  assert.equal(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8'), now.replace('<!-- secretary:end start -->\n', `<!-- secretary:end start -->\n${mine}\n`), 'written back as LF');
+  assert.equal(linkProblem(folder, root), null);
+  // A mark with no pair, or a name the template does not have: reported, the file left.
+  for (const bad of [now.replace('<!-- secretary:end ask -->\n', ''), now.replace('secretary:begin ask', 'secretary:begin asks').replace('secretary:end ask', 'secretary:end asks')]) {
+    fs.writeFileSync(path.join(folder, 'AGENTS.md'), bad);
+    assert.match(linkProblem(folder, root)!, /비서 표시 짝이 맞지 않음|틀에 없는 비서 표시: asks/);
+    writeLink(folder, root);
+    assert.equal(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8'), bad);
   }
-  assert.notEqual(old, now);
-  assert.match(old, /SECRETARY_DIR/);
-  writeLink(folder, root);
-  fs.writeFileSync(path.join(folder, 'AGENTS.md'), `# 공간\n\n${old}\n`);
-  assert.match(linkProblem(folder, root)!, /옛 환경변수 SECRETARY_DIR/);
-  assert.equal(writeLink(folder, root), true);
-  assert.equal(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8'), `# 공간\n\n${now}\n`);
-  assert.equal(linkProblem(folder, root), null);
-  assert.deepEqual(oldFindSecretaryFixes(tempDir()), [], 'a copy without an id has only the old name');
 });
 
-// 없으면 놓치는 실수: 비서 위치 파일 이름을 secretary-link.local.json으로 바꾼 뒤, 옛 이름 secretary.json을 읽는 공간 도구가 낡은 값을 읽거나
-// 공간 AGENTS.md의 찾는 코드가 옛 이름에 머문다.
-test('the old link name secretary.json: kept the same while it is there (never made), the charter code moves to the new name', () => {
+// 없으면 놓치는 실수: 표시가 없던 공간(2026-11-12 전)을 옮기면서 사람이 더한 줄을 틀 줄로 알고 지우거나, 틀을 공간에 맞게 고친 줄을 공간 몫으로 남겨
+// 같은 규칙이 두 번 들어간다. legacy-name: charter-unmarked
+test('a charter without marks is moved: template lines (today\'s and old ones) into blocks, the workspace\'s own after them; unsure ones are left', () => {
   const root = secretary();
   const folder = tempDir();
   writeLink(folder, root);
-  assert.ok(!fs.existsSync(path.join(folder, 'secretary.json')), 'no old-name file is made');
-  // A workspace from before: the old file pointing elsewhere, and the charter's code reading the old name.
-  const now = renderFindSecretary('SECRETARY_AB12_DIR').join('\n');
-  const old = now.replaceAll(LINK_FILE, 'secretary.json');
-  assert.notEqual(old, now);
-  fs.writeFileSync(path.join(folder, 'AGENTS.md'), `# 공간\n\n${old}\n`);
-  assert.match(linkProblem(folder, root)!, /옛 파일 이름 secretary\.json/);
-  fs.writeFileSync(path.join(folder, 'secretary.json'), JSON.stringify({ bin: 'C:\\elsewhere\\bin' }));
-  assert.match(linkProblem(folder, root)!, /옛 이름 secretary\.json이 새 파일과 다름/);
+  const now = renderCharter(SPEC_V, root);
+  const mine = '- 새 영상 업무는 먼저 장부를 본다.';
+  // An old template's line (the question's first line before 2026-11-10) where today's lines are.
+  const oldFirst = '- 첫 줄은 `[질문]`으로 시작하고 질문 하나만 쓴다. 이어서 선택지, 추천과 이유, 답을 기다리는 동안 멈춘 작업을 적는다.';
+  const before = unmarked(now).replace(`${QUESTION_FIRST_RULE}\n${QUESTION_BASIS_RULE}\n`, `${oldFirst}\n`).replace('- 이 공간 폴더 밖은 읽기만 한다.\n', `- 이 공간 폴더 밖은 읽기만 한다.\n${mine}\n`);
+  fs.writeFileSync(path.join(folder, 'AGENTS.md'), before);
+  assert.match(linkProblem(folder, root)!, /AGENTS\.md에 비서 표시가 없음/);
   assert.equal(writeLink(folder, root), true);
-  assert.equal(fs.readFileSync(path.join(folder, 'secretary.json'), 'utf8'), fs.readFileSync(path.join(folder, LINK_FILE), 'utf8'), 'the old file now says the same');
-  assert.equal(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8'), `# 공간\n\n${now}\n`);
+  const moved = fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8');
+  assert.equal(moved, now.replace('<!-- secretary:end work -->\n', `<!-- secretary:end work -->\n${mine}\n`));
   assert.equal(linkProblem(folder, root), null);
+  // A line like a template line but not one (a template line the user changed): nothing changed, the line reported.
+  const unsure = unmarked(now).replace('보고서·시험 결과·배포본(zip 등)은', '보고서·시험 결과·배포본(zip은 요청할 때만)은');
+  fs.writeFileSync(path.join(folder, 'AGENTS.md'), unsure);
+  assert.match(linkProblem(folder, root)!, /"업무를 받으면"의 줄이 틀 줄과 비슷하지만 같지 않아 자동으로 옮기지 않음: - 제품 업무는/);
+  writeLink(folder, root);
+  assert.equal(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8'), unsure);
+  // A charter from a template without "스킬과 기억": left until the user says so, then it gets the section and MEMORY.md.
+  const noLearning = unmarked(now).replace(/## 스킬과 기억\n[^]*?\n(?=## 일하는 방식)/, '');
+  assert.notEqual(noLearning, unmarked(now));
+  fs.writeFileSync(path.join(folder, 'AGENTS.md'), noLearning);
+  assert.match(linkProblem(folder, root)!, /지금 틀에 있는 절이 없어 자동으로 옮기지 않음\(스킬과 기억\)/);
+  writeLink(folder, root);
+  assert.equal(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8'), noLearning);
+  assert.equal(writeLink(folder, root, true), true);
+  assert.equal(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8'), now);
+  assert.match(fs.readFileSync(path.join(folder, 'MEMORY.md'), 'utf8'), /^# 인스타 사실 메모/);
+  assert.equal(linkProblem(folder, root), null);
+  // run-job's folder rules (made only when missing, aux-folders.ts) follow the template the same way.
+  const home = path.join(tempDir(), RUN_JOB_HOME);
+  fs.mkdirSync(home);
+  writeLink(home, root);
+  fs.writeFileSync(path.join(home, 'AGENTS.md'), `${unmarked(renderRunJobHome(root))}${mine}\n`);
+  assert.equal(writeLink(home, root), true);
+  assert.equal(fs.readFileSync(path.join(home, 'AGENTS.md'), 'utf8'), `${renderRunJobHome(root)}${mine}\n`);
+  assert.equal(linkProblem(home, root), null);
+});
+
+// 없으면 놓치는 실수: 확인 담당이 검증을 업무 세션과 다른 환경(시험 폴더 환경변수 없이)으로 다시 돌리거나 반복·변형 시험까지 되풀이해 시간이 겹치고
+// 제품 폴더에 시험 파일을 남긴다(업무 159).
+test('the verifier line: settings handed over, one run with them, repeated/broken-copy runs only compared', () => {
+  const now = renderCharter(SPEC);
+  assert.ok(now.includes(VERIFIER_RUN_RULE), 'a new charter has the line');
+  for (const key of ['환경 설정', '환경변수', '한 번씩만', '출력 파일과 대조만', '다시 돌리면', '깨뜨린 복사본']) assert.ok(VERIFIER_RUN_RULE.includes(key), key);
 });

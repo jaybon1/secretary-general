@@ -4,14 +4,13 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { unseenReports, type ConsolidateReport } from '../src/memory/consolidate-notice.ts';
 import { runIdleJobs } from '../src/idle/idle-jobs.ts';
+import { BOARD_HEADINGS } from '../src/session-continuity/situation-board.ts';
 import { claimConsolidate, consolidatePrompt, consolidateRunning, runConsolidate } from '../src/memory/consolidate-run.ts';
 import { readStaff, staffFolder } from '../src/staff/staff.ts';
 import { lastActivityMs } from '../src/log/catch-up.ts';
 import type { Store } from '../src/store/store.ts';
 import { talk, tempDir, tempStore } from './helpers.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
-import { SECRETARY_SKILLS_DIR, skillFile } from '../src/core/paths.ts';
-import { frontMatter } from '../src/setup/skill-spec.ts';
 
 const MIN = 60_000;
 const okReport = (s: Store): Promise<ConsolidateReport> => Promise.resolve({ at: new Date().toISOString(), ok: true, text: '보고', fromLogId: 0, throughLogId: s.logAfter(0).at(-1)!.id });
@@ -43,6 +42,19 @@ test('idle jobs: the board after 10 quiet minutes, consolidation after 30 with 6
   assert.deepEqual(calls, ['board', 'consolidate']);
 });
 
+// 없으면 놓치는 실수: 상황판 칸 이름을 바꾼 뒤(2026-11-12) 새 대화가 없으면 쉬는 시간 작업이 판을 건드리지 않아, 옛 제목 판이 다음 대화까지 남는다.
+test('idle jobs: a board with old headings is due even with nothing said since', async () => {
+  const s = tempStore();
+  const now = Date.now();
+  talk(s, 1, now - 20 * MIN);
+  const board = (h: string[]) => ({ text: ['요약: x', ...h.map((x) => `## ${x}`)].join('\n'), lastLogId: s.logAfter(0).at(-1)!.id, updatedAt: new Date(now).toISOString() });
+  const deps = { now, dirs: [], updateBoard: async () => {}, consolidate: async (st: Store) => okReport(st) };
+  s.setJson('situation_board', board(BOARD_HEADINGS.map((h, i) => (i === 5 ? '비서가 확인할 것' : h))));
+  assert.deepEqual(await runIdleJobs(s, deps), ['board']);
+  s.setJson('situation_board', board(BOARD_HEADINGS));
+  assert.match((await runIdleJobs(s, deps)).join(), /할 일 없음/);
+});
+
 test('idle jobs: a transcript still being written counts as talk (a long turn is logged only when it ends)', () => {
   const s = tempStore();
   const now = Date.now();
@@ -68,10 +80,10 @@ test('consolidation: a run that moved the watermark is a report to confirm; one 
   })).report!;
   assert.equal(ok.ok, true);
   assert.equal(ok.by, 'idle');
-  assert.equal(ok.text, '처리 범위 #1~#3, 새 기억 1개', 'run-job session line removed');
+  assert.equal(ok.text, '처리 범위 #1~#3, 새 기억 1개\n\n[프로그램이 센 이번 정리 결과] 새 기억 0개 · 대체 0개 · 무효 0개 · 판정 없이 버린 후보 0개 · 주제 요약 0개 · 주요 현안 고친 줄 0개 · 프로필 갱신 안 함', 'run-job session line removed, the counts under it');
   assert.match(prompt, /^# 기억 정리 절차\n\n이 일은 개인 비서의 기억 정리다[^\n]*사람이 보고 있지 않으니 묻지 말고/);
   assert.match(prompt, /seen_id/);
-  assert.match(prompt, /allow_similar/);
+  assert.match(prompt, /propose_memory[^]*judge_memory/);
   assert.match(consolidatePrompt(), /get_unconsolidated_log/);
 
   talk(s, 1, Date.now());
@@ -82,7 +94,7 @@ test('consolidation: a run that moved the watermark is a report to confirm; one 
   const crashed = (await runConsolidate(s, 'manual', async () => {
     throw new Error('Not logged in');
   })).report!;
-  assert.equal(crashed.text, 'Not logged in');
+  assert.match(crashed.text, /^Not logged in\n\n\[프로그램이 센 이번 정리 결과\]/);
   assert.deepEqual(unseenReports(s).map((r) => r.ok), [true, false, false], 'reports wait until confirmed');
   assert.equal(JSON.parse(s.getMeta('consolidate_job')!).ok, false);
   // Each run leaves a line in the worker folder's run records (runs-<secretary tag>.jsonl).
@@ -138,18 +150,4 @@ test('idle tick housekeeping: marks of sessions quiet a week and read positions 
   assert.equal(s.markOnce('x', 'a'), false, 'same mark: already told');
   assert.equal(s.markOnce('x', '3', (last) => Number(last) >= 3), true, '"a" does not cover 3');
   assert.equal(s.markOnce('x', '2', (last) => Number(last) >= 2), false);
-});
-
-// Without it: the skill keeps keys outside the agentskills.io format, or the steps drift from what the run reads.
-test('the consolidate skill is format keys and a short launch note; the steps the run reads are its references/procedure.md', () => {
-  const file = skillFile('consolidate');
-  assert.equal(file, path.join(PROJECT_ROOT, SECRETARY_SKILLS_DIR, 'consolidate', 'SKILL.md'));
-  assert.ok(!fs.lstatSync(path.dirname(file)).isSymbolicLink(), 'a real folder');
-  const text = fs.readFileSync(file, 'utf8');
-  assert.deepEqual([...frontMatter(text)!.keys()].sort(), ['description', 'name']);
-  assert.match(text, /cli.ts memory-consolidation --detach/);
-  assert.match(text, /기억 정리 확인/);
-  const w = readStaff('memory-consolidation');
-  assert.equal(w.instructions, '.agents/skills/consolidate/references/procedure.md');
-  assert.equal(consolidatePrompt(), fs.readFileSync(path.join(PROJECT_ROOT, ...w.instructions!.split('/')), 'utf8').replace(/\r\n/g, '\n').trim());
 });

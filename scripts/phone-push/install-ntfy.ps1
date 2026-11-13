@@ -22,7 +22,7 @@ param(
   [switch]$WebPush,
   [string]$WebPushEmail,
   [switch]$DryRun,
-  # 시험용(install-scheduled-tasks.ps1에 그대로 넘긴다).
+  # 테스트용(install-scheduled-tasks.ps1에 그대로 넘긴다).
   [string]$FeaturesFile,
   [string]$IdFile,
   [string]$FakeTasksFile
@@ -31,11 +31,11 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch {}
 . "$PSScriptRoot\..\lib\common.ps1"
 
-if ($Listen -notmatch '^[\w.\[\]:-]*:\d{1,5}$') { throw "-Listen은 '주소:포트' 꼴이어야 해요: $Listen" }
+if ($Listen -notmatch '^[\w.\[\]:-]*:\d{1,5}$') { throw "-Listen은 '주소:포트' 형식이어야 해요: $Listen" }
 if ($BaseUrl -and $BaseUrl -notmatch '^https?://[^\s/]+$') { throw "-BaseUrl은 경로 없는 http(s) 주소여야 해요: $BaseUrl" }
 if ($WebPushEmail -and -not $WebPush) { throw '-WebPushEmail은 -WebPush와 함께 줘요.' }
 
-# 1. server.yml (ntfy 문서 docs.ntfy.sh/config의 칸 이름). 캐시는 설정 파일 옆에 둔다: 폰이 잠깐 끊겨도 다시 붙으면 놓친 알림을 받는다.
+# 1. server.yml (ntfy 문서 docs.ntfy.sh/config의 키 이름). 캐시는 설정 파일 옆에 둔다: 폰이 잠깐 끊겨도 다시 붙으면 놓친 알림을 받는다.
 $dir = Split-Path -Parent $ConfigFile
 $cache = Join-Path $dir 'cache.db'
 # YAML 큰따옴표 안에서는 역슬래시를 두 개로 쓴다.
@@ -61,7 +61,7 @@ if ($WebPush -and -not $configThere) {
     if ($LASTEXITCODE -ne 0 -or -not $pub -or -not $priv) { throw "ntfy webpush keys에서 키를 받지 못했어요(종료 코드 $LASTEXITCODE). server.yml은 만들지 않았어요." }
   }
   $webPushLines = @(
-    '# 웹 푸시(PC 브라우저가 탭을 닫아도 알림). 개인 키는 이 파일에만 둔다(대화·기록에 붙이지 않는다).'
+    '# 웹 푸시(PC 브라우저가 탭을 닫아도 알림). 개인 키는 이 파일에만 둔다(대화 원문은 DB에 저장된다).'
     "web-push-public-key: `"$pub`""
     "web-push-private-key: `"$priv`""
     $webPushFile
@@ -88,7 +88,7 @@ if ($configThere) {
   "server.yml: $ConfigFile (있음, 그대로 둠)"
   if ($WebPush -and -not (Select-String -LiteralPath $ConfigFile -Pattern '^\s*web-push-public-key:' -Quiet)) {
     '웹 푸시: server.yml에 web-push 줄이 없어요. 이 파일은 고치지 않으니 넣으려면:'
-    "  1. 이 PC의 PowerShell에서 직접 & `"$NtfyExe`" webpush keys 를 돌려, 나온 web-push-public-key·web-push-private-key 두 줄을 server.yml 끝에 붙인다(개인 키는 대화·기록에 붙이지 않는다)."
+    "  1. 이 PC의 PowerShell에서 직접 & `"$NtfyExe`" webpush keys 를 돌려, 나온 web-push-public-key·web-push-private-key 두 줄을 server.yml 끝에 붙인다(개인 키는 대화·기록에 붙이지 않는다. 대화 원문은 DB에 저장된다)."
     "  2. 같이 붙인다: $webPushFile 과 web-push-email-address: `"<관리자 메일>`" (base-url 줄도 있어야 한다)."
     "  3. ntfy 서버를 다시 띄운다: Stop-ScheduledTask·Start-ScheduledTask -TaskName '<Secretary ntfy Server (고유 번호)>'."
   }

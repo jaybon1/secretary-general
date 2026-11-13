@@ -1,8 +1,8 @@
 /**
- * 사용자를 부르는 이름(호칭)의 DB 칸(meta 'user_title'). 규칙·스킬·코드 글은 사용자를 '사용자'로 쓰고, 부르는 법은 핵심
- * 프로필에, 이름 하나는 이 칸에 둔다. 사람에 관한 사실은 DB에 두기 때문이다(git에 올라가는 파일에는 개인 값을 쓰지 않는다).
- * 이 칸을 읽는 곳: 그 이름으로 쓰인 기억 글("<호칭>님은 …")을 읽는 글 검사(hooks/prompt-memory.ts droppedLabel,
- * memory/injection-screen.ts의 숨기기 지시). 칸이 비면 '사용자'만 본다.
+ * 사용자를 부르는 이름(호칭)의 DB 값(meta 테이블의 'user_title' 키). 규칙·스킬·코드 글은 사용자를 '사용자'로 쓰고, 부르는 법은 핵심
+ * 프로필에, 이름 하나는 이 키에 둔다. 사람에 관한 사실은 DB에 두기 때문이다(git에 올라가는 파일에는 개인 값을 쓰지 않는다).
+ * 이 키를 읽는 곳: 그 이름으로 쓰인 기억 글("<호칭>님은 …")을 읽는 글 검사(hooks/prompt-memory.ts droppedLabel,
+ * memory/injection-screen.ts의 숨기기 지시). 값이 비면 '사용자'만 본다.
  * 넣고 보고 빼기: node src/cli.ts user-title [<호칭> | --clear] (끝의 '님'은 떼고 둔다. 검사가 '님'을 따로 본다).
  */
 import type { DatabaseSync } from 'node:sqlite';

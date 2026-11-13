@@ -6,18 +6,9 @@ import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { usageFile } from '../src/usage/usage-files.ts';
 import { applyGuardOverride } from '../src/usage/usage-guard-override.ts';
-import { subscriptionPick, routingNote, pauseLimit, routingContext } from '../src/usage/subscription-routing.ts';
+import { subscriptionPick, pauseLimit, routingContext } from '../src/usage/subscription-routing.ts';
 import { providerLabel, readProviders } from '../src/usage/provider-usage.ts';
 import { tempDir } from './helpers.ts';
-
-test('account b goes first while it has used less than twice account a, else a sets the level', () => {
-  assert.equal(routingNote(30, 50), 'b 우선(작은 일도 넘김)');
-  assert.equal(routingNote(10, 0), 'b 우선(작은 일도 넘김)');
-  assert.equal(routingNote(30, 60), '넘기기 2단계');
-  assert.equal(routingNote(47, 95), '넘기기 3단계');
-  assert.equal(routingNote(0, 0), '넘기기 1단계');
-  assert.equal(routingNote(30, 50, 'c'), 'c 우선(작은 일도 넘김)');
-});
 
 const NOW = Date.parse('2026-11-08T05:00:00Z');
 const iso = (msAgo = 0) => new Date(NOW - msAgo).toISOString();
@@ -71,31 +62,31 @@ function fixture(others: string[], def: string = 'subscription-b') {
   };
 }
 
-// Without it: going from "a and b" to "any number of subscriptions" changed the line or the account picked for those who
-// have just a and b (this secretary's own setup), so the rules written against that line stop matching.
-test('two subscriptions (a and b): the usage line and the account handed to are as before there could be more', () => {
+// Without it: with just a and b (this secretary's own setup) the line lost the numbers, kept a routing level (gone 2026-11-12),
+// or b at the guard's limit went unsaid; or auto picked other than b.
+test('two subscriptions (a and b): the usage line shows the numbers, and b is the account handed to', () => {
   const f = fixture(['subscription-b']);
   const line = (body: string) => `<secretary-usage>${body}</secretary-usage>`;
   f.set('subscription', 30);
   f.set('subscription-b', 50);
-  assert.equal(f.line(), line('5시간 사용량: 계정 a 30% · 계정 b 50% → b 우선(작은 일도 넘김)'));
+  assert.equal(f.line(), line('5시간 사용량: 계정 a 30% · 계정 b 50%'));
   f.set('subscription-b', 60);
-  assert.equal(f.line(), line('5시간 사용량: 계정 a 30% · 계정 b 60% → 넘기기 2단계'));
-  // b at the guard's limit is still the one (no other to pick), and the note is worked out as before.
+  assert.equal(f.line(), line('5시간 사용량: 계정 a 30% · 계정 b 60%'));
+  // b at the guard's limit is still the one (no other to pick), and the line says to ask before going elsewhere.
   f.set('subscription', 50);
   f.set('subscription-b', 95);
-  assert.equal(f.line(), line('5시간 사용량: 계정 a 50% · 계정 b 95% → b 우선(작은 일도 넘김)'));
+  assert.equal(f.line(), line('5시간 사용량: 계정 a 50% · 계정 b 95% → 보낼 구독 모두 90% 이상, 다른 계정·공급자로 돌릴지 먼저 묻는다'));
   assert.equal(f.pick(), 'subscription-b');
   f.set('subscription', 30, { updated_at: iso(25 * 60_000) });
   f.set('subscription-b', null);
-  assert.equal(f.line(), line('5시간 사용량: 계정 a 30%(25분 전 기록) · 계정 b 기록 없음 → b 우선(작은 일도 넘김)'));
+  assert.equal(f.line(), line('5시간 사용량: 계정 a 30%(25분 전 기록) · 계정 b 기록 없음'));
   assert.equal(f.pick(), 'subscription-b');
   f.set('subscription-b', 80, { resets_at: iso(60_000) });
-  assert.equal(f.line(), line('5시간 사용량: 계정 a 30%(25분 전 기록) · 계정 b 초기화됨 → b 우선(작은 일도 넘김)'));
-  // Chatting on b: work stays on b and b's % sets the level.
+  assert.equal(f.line(), line('5시간 사용량: 계정 a 30%(25분 전 기록) · 계정 b 초기화됨'));
+  // Chatting on b: work stays on b.
   f.set('subscription', 30);
   f.set('subscription-b', 70);
-  assert.equal(f.line('subscription-b'), line('이 세션은 계정 b. 5시간 사용량: 계정 b 70% · 계정 a 30% → 넘기기 4단계(b 기준, 넘기는 일도 b)'));
+  assert.equal(f.line('subscription-b'), line('이 세션은 계정 b. 5시간 사용량: 계정 b 70% · 계정 a 30% → 보내는 일도 b'));
   assert.equal(f.pick('subscription-b'), 'subscription-b');
   // No reading for the chat's own account: no line.
   f.set('subscription-b', null);
@@ -105,13 +96,13 @@ test('two subscriptions (a and b): the usage line and the account handed to are 
   // A chat on a provider that is not a subscription handed to (the gateway) reads like account a's.
   f.set('subscription', 30);
   f.set('subscription-b', 50);
-  assert.equal(f.line('gw'), line('5시간 사용량: 계정 a 30% · 계정 b 50% → b 우선(작은 일도 넘김)'));
+  assert.equal(f.line('gw'), line('5시간 사용량: 계정 a 30% · 계정 b 50%'));
   // Only account a listed: auto stays on a.
   const solo = fixture([]);
   assert.equal(solo.pick(), 'subscription');
   assert.equal(pauseLimit({}), 90);
   assert.equal(pauseLimit({ USAGE_PAUSE_PCT: '80' }), 80, 'the old name, for a while');
-  // 없으면 놓치는 실수: 새 이름 SECRETARY_USAGE_GUARD_PCT로 정한 기준을 넘기기 판단이 읽지 않거나, 옛 이름이 새 이름을 이긴다.
+  // 없으면 놓치는 실수: 새 이름 SECRETARY_USAGE_GUARD_PCT로 정한 기준을 계정 고르기가 읽지 않거나, 옛 이름이 새 이름을 이긴다.
   assert.equal(pauseLimit({ SECRETARY_USAGE_GUARD_PCT: '85', USAGE_PAUSE_PCT: '80' }), 85);
 });
 
@@ -127,7 +118,7 @@ test('three or more subscriptions: the one with the most room is picked, account
   assert.equal(f.pick(), 'subscription-c');
   assert.equal(
     f.line(),
-    `<secretary-usage>5시간 사용량: 계정 a 30% · 계정 b 70% · 계정 c 20% · 계정 d 45% → 계정 c에 넘김, c 우선(작은 일도 넘김)${hint('subscription-c')}</secretary-usage>`,
+    `<secretary-usage>5시간 사용량: 계정 a 30% · 계정 b 70% · 계정 c 20% · 계정 d 45% → 계정 c로 보냄${hint('subscription-c')}</secretary-usage>`,
   );
   // At the limit in its week, or in its 5 hours: passed over, even when its 5-hour % is the lowest.
   f.set('subscription-c', 10, { week_pct: 95, week_resets_at: iso(-86400_000) });
@@ -136,12 +127,12 @@ test('three or more subscriptions: the one with the most room is picked, account
   assert.equal(f.pick(), 'subscription-c', 'its week has reset');
   f.set('subscription-c', 92);
   assert.equal(f.pick(), 'subscription-d');
-  assert.match(f.line(), /→ 계정 d에 넘김, d 우선\(작은 일도 넘김\) \(.*-Provider subscription-d/);
+  assert.match(f.line(), /→ 계정 d로 보냄 \(.*-Provider subscription-d/);
   // Every one at the limit: the lowest anyway, and the line says so.
   f.set('subscription-b', 95);
   f.set('subscription-d', 91);
   assert.equal(f.pick(), 'subscription-d');
-  assert.match(f.line(), /→ 계정 d에 넘김\(넘길 구독 모두 90% 이상\), /);
+  assert.match(f.line(), /→ 계정 d로 보냄\(보낼 구독 모두 90% 이상, 다른 계정·공급자로 돌릴지 먼저 묻는다\) \(/);
   // An account with no reading yet loses to one that has a reading, unless none has.
   f.set('subscription-b', 70);
   f.set('subscription-c', null);
@@ -157,11 +148,11 @@ test('three or more subscriptions: the one with the most room is picked, account
   const g = fixture(['subscription-b', 'subscription-c', 'subscription-d'], 'subscription-d');
   for (const [p, pct] of [['subscription', 30], ['subscription-b', 40], ['subscription-c', 20], ['subscription-d', 20]] as const) g.set(p, pct);
   assert.equal(g.pick(), 'subscription-d');
-  // Chatting on c: work stays on c, c's % sets the level, every other account is shown.
+  // Chatting on c: work stays on c, every other account is shown.
   assert.equal(f.pick('subscription-c'), 'subscription-c');
   assert.equal(
     f.line('subscription-c'),
-    '<secretary-usage>이 세션은 계정 c. 5시간 사용량: 계정 c 20% · 계정 a 30% · 계정 b 40% · 계정 d 20% → 넘기기 2단계(c 기준, 넘기는 일도 c)</secretary-usage>',
+    '<secretary-usage>이 세션은 계정 c. 5시간 사용량: 계정 c 20% · 계정 a 30% · 계정 b 40% · 계정 d 20% → 보내는 일도 c</secretary-usage>',
   );
 });
 
@@ -172,10 +163,10 @@ test('default "auto": the line names the account picked and no -Provider is need
   f.set('subscription', 30);
   f.set('subscription-b', 70);
   f.set('subscription-c', 20);
-  assert.equal(f.line(), '<secretary-usage>5시간 사용량: 계정 a 30% · 계정 b 70% · 계정 c 20% → 계정 c에 넘김, c 우선(작은 일도 넘김)</secretary-usage>');
+  assert.equal(f.line(), '<secretary-usage>5시간 사용량: 계정 a 30% · 계정 b 70% · 계정 c 20% → 계정 c로 보냄</secretary-usage>');
   assert.equal(f.pick(), 'subscription-c');
   f.set('subscription-c', 75);
-  assert.match(f.line(), /→ 계정 b에 넘김, 넘기기 2단계<\/secretary-usage>$/);
+  assert.match(f.line(), /→ 계정 b로 보냄<\/secretary-usage>$/);
 });
 
 // Without it: a third subscription had no 계정 c name, so "계정 c 90퍼 넘어도 진행" lifted nothing (unknown account).

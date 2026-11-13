@@ -7,8 +7,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { ALL_SECRETARIES_EXAMPLE, allSecretariesFile, hasThisSecretary, leftoverThisSecretaryFiles, mergeThisSecretaryFiles, MERGE_BACKUP_DIR, PATHS_SECTION, planThisSecretaryMerge, readThisSecretary, THIS_SECRETARY_EXAMPLE, THIS_SECRETARY_FILE, writeThisSecretary } from '../src/core/this-secretary.ts';
-import { readFeatures } from '../src/setup/features.ts';
-import { SECRETARY_ID_ALPHABET, SECRETARY_ID_LENGTH } from '../src/setup/secretary-id.ts';
+import { readFeatures } from '../src/core/features.ts';
+import { SECRETARY_ID_ALPHABET, SECRETARY_ID_LENGTH } from '../src/core/secretary-id.ts';
 import { tempDir, write } from './helpers.ts';
 
 const features = readFeatures(PROJECT_ROOT)!;
@@ -23,7 +23,7 @@ function rootWith(...off: string[]): string {
 }
 const readAllOf = (root: string) => JSON.parse(fs.readFileSync(path.join(root, THIS_SECRETARY_FILE), 'utf8'));
 
-// 없으면 놓치는 실수: 기능 칸 이름이 기능 id와 어긋나 기능을 꺼도 그 칸이 계속 읽히거나, 옛 파일이 .gitignore에서 빠져 이 PC 값이 커밋되거나, 예시에 칸이 빠진다.
+// 없으면 놓치는 실수: 기능 키 이름이 기능 id와 어긋나 기능을 꺼도 그 키가 계속 읽히거나, 옛 파일이 .gitignore에서 빠져 이 PC 값이 커밋되거나, 예시에 칸이 빠진다.
 test('features.json thisSecretary: a section per feature named by its id (paths for the core), old files git-ignored, every section in the example', () => {
   assert.ok(columns.length >= 5 && columns.some((f) => f.core), 'the features that keep this PC settings say so');
   const sections = columns.map((f) => f.thisSecretary!.section);
@@ -40,7 +40,7 @@ test('features.json thisSecretary: a section per feature named by its id (paths 
   }
 });
 
-// 없으면 놓치는 실수: 기능을 꺼도 그 칸 값이 읽혀 꺼진 기능이 돌거나, 칸 하나를 쓰다 다른 칸을 지운다.
+// 없으면 놓치는 실수: 기능을 꺼도 그 키 값이 읽혀 꺼진 기능이 돌거나, 키 하나를 쓰다 다른 키를 지운다.
 test('read and write: a feature off reads as missing, paths always; writing one section keeps the others', () => {
   const root = rootWith('dashboard');
   assert.deepEqual(readThisSecretary('dashboard', { root }), { ok: false, missing: true, error: "기능 'dashboard'이 꺼져 있음" });
@@ -53,7 +53,7 @@ test('read and write: a feature off reads as missing, paths always; writing one 
   // Several readers: either on is enough (the usage choice is read by the reader and the dashboard).
   assert.equal(readThisSecretary('usage-poll', { root, features: ['usage-poll', 'dashboard'] }).ok, true);
   assert.equal(readThisSecretary('usage-poll', { root: rootWith('usage-poll', 'dashboard'), features: ['usage-poll', 'dashboard'] }).ok, false);
-  assert.deepEqual(readThisSecretary(PATHS_SECTION, { root: rootWith(...features.map((f) => f.id)) }), { ok: false, missing: true, error: `${THIS_SECRETARY_FILE}에 'paths' 칸 없음` });
+  assert.deepEqual(readThisSecretary(PATHS_SECTION, { root: rootWith(...features.map((f) => f.id)) }), { ok: false, missing: true, error: `${THIS_SECRETARY_FILE}에 'paths' 키 없음` });
   // A file that does not parse is said, and never written over.
   fs.writeFileSync(path.join(root, THIS_SECRETARY_FILE), '{ nope');
   assert.equal(readThisSecretary(PATHS_SECTION, { root }).ok, false);
@@ -61,7 +61,7 @@ test('read and write: a feature off reads as missing, paths always; writing one 
   assert.equal(fs.readFileSync(path.join(root, THIS_SECRETARY_FILE), 'utf8'), '{ nope');
 });
 
-// 없으면 놓치는 실수: 옛 이 비서 설정 파일을 합치다 값을 덮어쓰거나 잃고(다른 PC 경로가 다른 칸으로 가지 않음), 다시 돌리면 또 옮기거나, 보기만 할 때 파일을 건드린다.
+// 없으면 놓치는 실수: 옛 이 비서 설정 파일을 합치다 값을 덮어쓰거나 잃고(다른 PC 경로가 다른 키로 가지 않음), 다시 돌리면 또 옮기거나, 보기만 할 때 파일을 건드린다.
 test('merge: each old file into its sections, the old file to the backup folder; nothing overwritten; dry run touches nothing; again does nothing', () => {
   const root = rootWith('phone-push');
   const old = (f: string, v: unknown, bom = false) => write(path.join(root, 'scripts', f), `${bom ? '\uFEFF' : ''}${JSON.stringify(v)}`);

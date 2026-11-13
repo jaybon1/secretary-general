@@ -19,7 +19,7 @@ export function runJobScript(jobArgs: string[], promptFile: string, timeoutMs: n
   });
 }
 
-/** run-job's output without the trailing "(새 세션) 세션: …" / "(이어 부름) 세션: …" line. */
+/** run-job's output without the trailing "(새 세션) 세션: …" / "(재사용) 세션: …" line (also the reuse label before 2026-11-11). */
 export function stripSessionLine(output: string): string {
-  return output.replace(/\n?\((?:새 세션|이어 부름)\) 세션:.*$/s, '').trim();
+  return output.replace(/\n?\((?:새 세션|재사용|이어 부름)\) 세션:.*$/s, '').trim(); // legacy-name: session-reuse-words
 }

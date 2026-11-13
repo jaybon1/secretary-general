@@ -2,7 +2,7 @@
 // start-worker.ps1이 업무 세션 설정(--settings)에 넣는다: node worker-folder-guard.mjs <공간 폴더> [--lock-tests] [--secretary <비서 폴더>]...
 // 막는 것: 공간 폴더 밖에 파일 쓰기(Write/Edit), git push, 공개 게시·업로드 명령, 큰 삭제, (--lock-tests면) 테스트 파일 수정,
 // 결과물 상위 폴더 바로 아래에 새 폴더 만들기·그 temp 폴더에 쓰기를 하는 셸 명령(src/mistake-guards/folder-place.ts, 기능 'mistake-guards'가 켜졌을 때),
-// 비서 폴더를 건드리는 셸 명령(--secretary로 받은 폴더. 긴 이름·8.3 짧은 이름 꼴을 함께 받는다): 비서 입구 bin\<입구>를 부르는 것만 된다.
+// 비서 폴더를 건드리는 셸 명령(--secretary로 받은 폴더. 긴 이름·8.3 짧은 이름 형식을 함께 받는다): 비서 진입점 bin\<이름>을 부르는 것만 된다.
 // src\cli.ts 직접 실행, 비서 파일 읽기·고치기, 리디렉션·복사로 쓰기는 막힌다. 비서 폴더 환경변수(SECRETARY_<번호>_DIR, SECRETARY_DIR)도
 // 그 아래 bin\만 된다. 읽기 전용 기억 도구(MCP)는 셸 명령이 아니라 이 훅과 상관없다.
 // 셸 명령 안의 파일 쓰기(> 리디렉션 등)는 다 잡지 못한다. Claude Code가 아닌 CLI(agy, Copilot)에는 훅이 걸리지 않는다.
@@ -81,7 +81,7 @@ function entries(dirs) {
 export function secretaryProblem(cmd, dirs, names = entries(dirs)) {
   if (!dirs?.length) return null;
   const text = plain(cmd);
-  const bad = (why) => `비서 폴더는 입구(bin\\<이름>)를 부르는 것만 된다(${why}). 비서의 다른 파일을 열거나 실행하거나 쓰지 않는다. 꼭 필요하면 [질문]으로 물어라.`;
+  const bad = (why) => `비서 폴더는 진입점(bin\\<이름>)을 부르는 것만 된다(${why}). 그 밖의 파일이 꼭 필요하면 [질문]으로 물어라.`;
   let touched = false;
   for (const f of forms(dirs)) {
     let at = text.indexOf(f);
@@ -96,8 +96,8 @@ export function secretaryProblem(cmd, dirs, names = entries(dirs)) {
       touched = true;
       const m = /^\/bin\/([\w.-]+)/.exec(text.slice(end));
       if (!m) return bad(`비서 폴더 ${text.slice(at, end + 30).split(/[\s"'`]/)[0]}`);
-      if (!names.has(m[1])) return bad(`bin에 없는 입구 ${m[1]}`);
-      if (REDIRECT_BEFORE.test(text.slice(0, at))) return bad('입구에 리디렉션으로 쓰기');
+      if (!names.has(m[1])) return bad(`bin에 없는 진입점 ${m[1]}`);
+      if (REDIRECT_BEFORE.test(text.slice(0, at))) return bad('진입점에 리디렉션으로 쓰기');
       at = text.indexOf(f, end);
     }
   }
@@ -105,7 +105,7 @@ export function secretaryProblem(cmd, dirs, names = entries(dirs)) {
     touched = true;
     const m = /^[\\/]+bin[\\/]+([\w.-]+)/.exec(v[2]);
     if (!m) return bad(`비서 폴더 환경변수 ${v[0]}`);
-    if (names.size && !names.has(m[1].toLowerCase())) return bad(`bin에 없는 입구 ${m[1]}`);
+    if (names.size && !names.has(m[1].toLowerCase())) return bad(`bin에 없는 진입점 ${m[1]}`);
   }
   if (touched && WRITES.test(cmd)) return bad('쓰기·복사·지우기 명령과 함께');
   return null;
@@ -119,7 +119,7 @@ export function check(toolName, toolInput, workspace, { lockTests = false, secre
     const file = toolInput?.file_path ?? toolInput?.notebook_path;
     if (!file || !workspace) return null;
     const rel = relative(resolve(workspace), resolve(workspace, file));
-    if (rel.startsWith('..') || isAbsolute(rel)) return `공간 폴더 밖에는 쓰지 않는다: ${file}`;
+    if (rel.startsWith('..') || isAbsolute(rel)) return `공간 폴더 안에만 쓴다(밖은 읽기만): ${file}`;
     if (lockTests && TEST_FILE.test(rel)) return `테스트 잠금 업무라 테스트 파일은 고칠 수 없다: ${rel}. 테스트가 아니라 코드를 고치고, 테스트가 틀렸다고 보이면 [질문]으로 물어라.`;
     return null;
   }

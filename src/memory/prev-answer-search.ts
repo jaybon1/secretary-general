@@ -8,14 +8,31 @@
  */
 import { tailLines } from '../hooks/context-size-nudge.ts';
 import { parseTranscriptLine } from '../log/ingest-transcript.ts';
+import { relayedLogText } from '../hooks/prompt-sender.ts';
 import { SEM_POOL } from './recall.ts';
-import { semanticClient, type SemanticHits, type SemanticSearch } from '../semantic-search/client.ts';
+import { SEARCH_TIMEOUT_MS, semanticClient, START_WAIT_MS, type SemanticHits, type SemanticSearch } from '../semantic-search/client.ts';
 
 /** The second search drifts more than the question alone, so its lead counts this much less. */
 export const PREV_PENALTY = 0.02;
-/** The question alone waits as before; the longer query gets more time, and falls back to the question's results. */
-const QUESTION_TIMEOUT_MS = 1500;
-const PREV_TIMEOUT_MS = 5000;
+/**
+ * Both searches wait as every feature does (2026-11-13 the user's call: no quiet fall back to word search):
+ * up to SEARCH_TIMEOUT_MS for a server that is up, up to START_WAIT_MS for one that is gone (the prompt hook starts it) or
+ * loading, less when the prompt hook's own time runs short (promptWaitMs). Was 1.5 s and 5 s.
+ */
+const QUESTION_FEATURE = '질문마다 기억 자동 주입(질문)';
+const PREV_FEATURE = '질문마다 기억 자동 주입(질문+이전 답)';
+/** The prompt hook's time limit (.claude/settings.json UserPromptSubmit timeout 330 s) less room for the rest. */
+export const PROMPT_HOOK_BUDGET_MS = 300_000;
+
+/** How long the prompt's searches may wait for the server to come up: START_WAIT_MS, or what the hook has left. */
+export function promptWaitMs(elapsedMs = process.uptime() * 1000): number {
+  return Math.max(0, Math.min(START_WAIT_MS, PROMPT_HOOK_BUDGET_MS - elapsedMs - SEARCH_TIMEOUT_MS));
+}
+
+/** The question's and the question-plus-answer's clients; `onQuestionMiss` hears why the question's search got nothing. */
+export function promptClients(onQuestionMiss?: (why: string) => void, waitMs = promptWaitMs()): [SemanticSearch, SemanticSearch] {
+  return [semanticClient(SEARCH_TIMEOUT_MS, QUESTION_FEATURE, onQuestionMiss, { waitMs }), semanticClient(SEARCH_TIMEOUT_MS, PREV_FEATURE, undefined, { waitMs })];
+}
 
 interface Block {
   type?: string;
@@ -25,7 +42,8 @@ interface Block {
 /**
  * The secretary's answer since the last user prompt: the prose after its last tool call (earlier
  * prose is progress narration, as log/ingest-transcript.ts drops it). '' at a session's first prompt.
- * The current prompt may already be in the transcript, so a prompt equal to it is passed over.
+ * The current prompt may already be in the transcript, so a prompt equal to it is passed over (a message from another
+ * session carrying the person's words is kept as relayedLogText writes it).
  */
 export function lastAnswer(transcriptPath: string, prompt: string): string {
   const lines = tailLines(transcriptPath);
@@ -40,7 +58,7 @@ export function lastAnswer(transcriptPath: string, prompt: string): string {
     if (o.type === 'user') {
       const p = parseTranscriptLine(lines[i]);
       if (p[0]?.kind !== 'prompt') continue;
-      if (parts.length === 0 && p[0].content === prompt.trim()) continue;
+      if (parts.length === 0 && (p[0].content === prompt.trim() || p[0].content === relayedLogText(prompt))) continue;
       break;
     }
     if (o.type !== 'assistant' || o.isSidechain || !Array.isArray(o.message?.content)) continue;
@@ -116,8 +134,7 @@ export function mergeHits(question: SemanticHits | null, withPrev: SemanticHits 
  */
 export function prevAnswerSearch(
   compressed: string,
-  quick: SemanticSearch = semanticClient(QUESTION_TIMEOUT_MS),
-  slow: SemanticSearch = semanticClient(PREV_TIMEOUT_MS),
+  [quick, slow]: [SemanticSearch, SemanticSearch] = promptClients(),
 ): SemanticSearch {
   return async (query, opts) => {
     if (!compressed) return quick(query, opts);

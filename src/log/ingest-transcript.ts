@@ -8,14 +8,16 @@ import { cleanRewound } from './rewind.ts';
 import type { LogEntry, Store } from '../store/store.ts';
 import { redactSecrets } from '../core/secret-mask.ts';
 import { HOOK_FEEDBACK } from '../mistake-guards/last-turn.ts';
+import { promptSource, relayedLogText } from '../hooks/prompt-sender.ts';
+import { QUEUED_PREFIX } from '../store/conversation-log.ts';
 
 type Entry = Omit<LogEntry, 'id'>;
 
 /**
- * prompt: what the user typed · answer: the user's picks in an AskUserQuestion ·
- * text: assistant prose · recap: the assistant's end-of-turn summary (wrap_up).
+ * prompt: what the user typed · queued: what the user typed while the turn was running (it does not start a turn) ·
+ * answer: the user's picks in an AskUserQuestion · text: assistant prose · recap: the assistant's end-of-turn summary (wrap_up).
  */
-type Kind = 'prompt' | 'answer' | 'text' | 'recap';
+type Kind = 'prompt' | 'queued' | 'answer' | 'text' | 'recap';
 type Parsed = Entry & { kind: Kind };
 
 interface ContentBlock {
@@ -34,6 +36,24 @@ interface TranscriptLine {
   isSidechain?: boolean;
   message?: { role?: string; content?: unknown };
   toolUseResult?: { questions?: unknown; answers?: Record<string, unknown>; annotations?: Record<string, { notes?: string }> };
+  attachment?: QueuedCommand;
+  /** Who sent a user line: a message from another session is a meta line with kind 'peer'. */
+  origin?: { kind?: string };
+}
+
+/**
+ * A message that came in while a turn was running. Claude Code writes it only as an `attachment` line of type
+ * `queued_command` (never as a `user` line), besides `queue-operation` lines (enqueue, then remove) that carry the same
+ * text: the attachment is the one read, so it is stored once. `origin.kind` says who sent it: 'human' (typed by the person),
+ * 'peer' (another session or a subagent's report, `<agent-message …>`), 'task-notification' (a background task's end).
+ */
+interface QueuedCommand {
+  type?: string;
+  prompt?: unknown;
+  commandMode?: string;
+  origin?: { kind?: string };
+  /** When it was sent (enqueued); the line's own timestamp can be later. */
+  timestamp?: string;
 }
 
 /** Harness-generated user turns (slash-command plumbing, reminders), not things the user said. */
@@ -51,6 +71,8 @@ export function parseTranscriptLine(line: string): Parsed[] {
   } catch {
     return [];
   }
+  if (o.type === 'attachment') return parseQueued(o);
+  if (o.type === 'user' && o.isMeta) return parseRelayed(o);
   if ((o.type !== 'user' && o.type !== 'assistant') || o.isMeta || o.isSidechain) return [];
   if (!o.uuid || !o.sessionId) return [];
   const base = { session_id: o.sessionId, role: o.type as LogEntry['role'], created_at: o.timestamp ?? new Date().toISOString() };
@@ -63,8 +85,8 @@ export function parseTranscriptLine(line: string): Parsed[] {
     if (Array.isArray(content) && content.some((b) => b?.type === 'tool_result')) return [];
     const text = blockText(content).trim();
     // A Stop hook's reason for going on is not something the user said, and does not start a turn: the answer written
-    // after it replaces the one sent back (or, guards/stop-guard.ts 'fill', is logged with it: AnswerOverride below).
-    if (!text || SYNTHETIC_PREFIXES.some((p) => text.startsWith(p)) || HOOK_FEEDBACK.test(text)) return [];
+    // after it replaces the one sent back (or, mistake-guards/stop-guard.ts 'fill', is logged with it: AnswerOverride below).
+    if (notSaid(text)) return [];
     return [{ ...base, message_uuid: o.uuid, content: text, kind: 'prompt' }];
   }
 
@@ -73,6 +95,59 @@ export function parseTranscriptLine(line: string): Parsed[] {
   if (text) out.push({ ...base, message_uuid: o.uuid, content: text, kind: 'text' });
   const recap = Array.isArray(content) ? content.map(formatRecap).find(Boolean) : undefined;
   if (recap) out.push({ ...base, message_uuid: text ? `${o.uuid}:recap` : o.uuid, content: recap, kind: 'recap' });
+  return out;
+}
+
+/**
+ * A meta user line is the harness's or another session's, not the person's, except a message from another session
+ * that carries the person's words (hooks/prompt-sender.ts relayedLogText): that one is their question and starts a turn,
+ * kept as relayedLogText writes it. Subagent reports and other sessions' messages stay out.
+ */
+function parseRelayed(o: TranscriptLine): Parsed[] {
+  if (o.isSidechain || !o.uuid || !o.sessionId || (o.origin?.kind ?? 'peer') !== 'peer') return [];
+  const said = relayedLogText(blockText(o.message?.content).trim());
+  if (!said) return [];
+  return [{ session_id: o.sessionId, role: 'user', created_at: o.timestamp ?? new Date().toISOString(), message_uuid: o.uuid, content: said, kind: 'prompt' }];
+}
+
+/** Text in a user line that the person did not say. */
+function notSaid(text: string): boolean {
+  return !text || SYNTHETIC_PREFIXES.some((p) => text.startsWith(p)) || HOOK_FEEDBACK.test(text);
+}
+
+/**
+ * A queued message the person typed → one 'queued' entry (QUEUED_PREFIX in front), dated when it was sent. Only the
+ * person's own count, by the same measure as user lines: there, messages from other sessions are meta lines and background
+ * task ends are dropped by their frame, so here only origin 'human' is kept (and, from a version without origin, a plain
+ * prompt whose text has no machine frame, hooks/prompt-sender.ts). A queued message from another session that carries
+ * the person's words (relayedLogText) is kept the same way, as relayedLogText writes it.
+ */
+function parseQueued(o: TranscriptLine): Parsed[] {
+  const q = o.attachment;
+  if (q?.type !== 'queued_command' || o.isMeta || o.isSidechain || !o.uuid || !o.sessionId) return [];
+  const text = blockText(q.prompt).trim();
+  const human = q.origin?.kind ? q.origin.kind === 'human' : (q.commandMode ?? 'prompt') === 'prompt' && promptSource(text) === 'user';
+  const said = human ? (notSaid(text) ? '' : text) : relayedLogText(text);
+  if (!said) return [];
+  const at = q.timestamp && !Number.isNaN(Date.parse(q.timestamp)) ? q.timestamp : (o.timestamp ?? new Date().toISOString());
+  return [{ session_id: o.sessionId, role: 'user', created_at: at, message_uuid: o.uuid, content: QUEUED_PREFIX + said, kind: 'queued' }];
+}
+
+/**
+ * The transcript writes a queued message where the turn took it in (often after a tool result), later than it was
+ * sent. Moves it back before the entries of its turn written after it was sent, so the log reads in the order things
+ * happened; it never moves past the turn's prompt.
+ */
+export function placeQueued(parsed: Parsed[]): Parsed[] {
+  const out: Parsed[] = [];
+  for (const p of parsed) {
+    let at = out.length;
+    if (p.kind === 'queued') {
+      const sent = Date.parse(p.created_at);
+      while (at > 0 && out[at - 1].kind !== 'prompt' && out[at - 1].kind !== 'queued' && Date.parse(out[at - 1].created_at) > sent) at--;
+    }
+    out.splice(at, 0, p);
+  }
   return out;
 }
 
@@ -111,6 +186,7 @@ export function selectEntries(parsed: Parsed[], answer?: AnswerOverride): Entry[
   const keep = parsed.map(() => true);
   let lastText = -1;
   parsed.forEach((p, i) => {
+    // A queued message is said inside the turn: the turn's answer is still its last prose.
     if (p.kind === 'prompt') lastText = -1;
     else if (p.kind === 'text') {
       if (lastText >= 0) keep[lastText] = false;
@@ -124,7 +200,7 @@ export function selectEntries(parsed: Parsed[], answer?: AnswerOverride): Entry[
 
 /**
  * The answer a turn really ended with, when it is more than its last text line: lines added after an answer the Stop
- * hook sent back for missing lines (guards/stop-guard.ts 'fill'). That line's row holds the whole answer.
+ * hook sent back for missing lines (mistake-guards/stop-guard.ts 'fill'). That line's row holds the whole answer.
  */
 export interface AnswerOverride {
   /** Transcript uuid of the answer's last text line. */
@@ -172,7 +248,7 @@ export function ingestTranscript(store: Store, transcriptPath: string, answer?: 
   const complete = chunk.subarray(0, lastNewline + 1).toString('utf8');
 
   // The Stop hook runs at the end of a turn, so a chunk holds whole turns.
-  const entries = selectEntries(complete.split('\n').filter(Boolean).flatMap(parseTranscriptLine), answer);
+  const entries = selectEntries(placeQueued(complete.split('\n').filter(Boolean).flatMap(parseTranscriptLine)), answer);
   const added = store.appendLog(entries);
   const newOffset = offset + lastNewline + 1;
   store.setMeta(key, String(newOffset));

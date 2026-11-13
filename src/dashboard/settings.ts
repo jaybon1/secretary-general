@@ -17,7 +17,7 @@
 import path from 'node:path';
 import { PROJECT_ROOT } from '../core/config.ts';
 import { readThisSecretary, THIS_SECRETARY_FILE } from '../core/this-secretary.ts';
-import { featureOn, readFeatures } from '../setup/features.ts';
+import { featureOn, readFeatures } from '../core/features.ts';
 import { FEATURE } from '../core/names.ts';
 
 export const FEATURE_ID = FEATURE.dashboard;
@@ -73,7 +73,7 @@ export function readSettings(root = PROJECT_ROOT): { settings: DashboardSettings
     } else problems.push('share는 { 이름: 폴더 }');
   }
   const publicUrl = typeof local.publicUrl === 'string' && /^https?:\/\/[^\s/]+\/?$/.test(local.publicUrl) ? local.publicUrl.replace(/\/$/, '') : null;
-  if (local.publicUrl !== undefined && !publicUrl) problems.push('publicUrl은 https://주소 꼴');
+  if (local.publicUrl !== undefined && !publicUrl) problems.push('publicUrl은 https://주소 형식');
   return {
     settings: {
       hosts,

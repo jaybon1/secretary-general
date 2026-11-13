@@ -9,7 +9,8 @@
  * It also makes each staff member's folder, and run-job's default folder _run-job-home when it is missing (its rules
  * AGENTS.md, CLAUDE.md, .gitignore, common-skills.json, then the secretary link and skill links): run-job stops with an
  * error without it (2026-11-09), so a new install gets it from the install check. Files already there are never
- * rewritten (the user may have changed the rules). A release's user gets the same by the same command after an update;
+ * rewritten here (the user may have changed the rules); the secretary block of its AGENTS.md follows the template through
+ * workspace-links like a workspace's (workspace/charter-blocks.ts). A release's user gets the same by the same command after an update;
  * a copy that never had the old folders has nothing to move.
  *
  * The staff members' folders were _consolidate and _board until later on 2026-11-09 (renamed memory-consolidation and
@@ -197,7 +198,7 @@ export function fixAuxFolders(root: string, dbPath: string, moveWorkspace: (id: 
   }
   for (const r of plan.repath) {
     if (fs.existsSync(r.to) || !fs.existsSync(r.from)) moveWorkspace(r.id, r.to);
-    else failed.push(`공간 #${r.id}: 새 자리가 아직 없어 DB를 고치지 않음(${r.to})`);
+    else failed.push(`공간 #${r.id}: 새 위치가 아직 없어 DB를 고치지 않음(${r.to})`);
   }
   for (const r of plan.staffMoves) {
     try {

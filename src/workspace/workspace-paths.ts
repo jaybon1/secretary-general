@@ -1,6 +1,5 @@
 /** Names and shapes of workspace folders, shared by the folder maker (workspace/workspace-create.ts) and the rules text (workspace/rules-text.ts). */
 import path from 'node:path';
-import { WORKSPACE_ROOT } from '../core/config.ts';
 import type { WorkspaceKind } from '../store/store.ts';
 
 export const REPORT_FILE = 'REPORT.md';
@@ -18,8 +17,14 @@ export const HISTORY_FILE = 'notes/history.md';
  */
 export const HISTORY_DIR = 'notes/history';
 export const STATUS_LIMIT = 2000;
+/** Where workspaces live for the secretary at root (core/config.ts WORKSPACE_ROOT, for any root). */
+export const workspaceRootOf = (root: string) => process.env.SECRETARY_WORKSPACE_ROOT ?? path.join(path.dirname(path.resolve(root)), 'workspaces');
 /** Throwaway test folders (empty-environment runs, install trials) sit beside the workspaces, where no rules file or git above them leaks in. */
-export const SANDBOX_DIR = path.join(WORKSPACE_ROOT, '_sandbox');
+export const SANDBOX_NAME = '_sandbox';
+/** The file at the top of a workspace naming the secretary's entrance folder (workspace/secretary-link.ts). */
+export const LINK_FILE = 'secretary-link.local.json';
+/** The folder run-job works in when not given one (scripts/run-job/run-job.ps1); not a workspace in the database. */
+export const RUN_JOB_HOME = '_run-job-home';
 /**
  * What the workspace learns, kept apart from the task log: one skill per kind of work
  * (procedures, pitfalls, corrections) and a small file of facts that always hold.
@@ -75,6 +80,16 @@ export interface TaskSpec {
   name: string;
   title: string;
   goal: string;
+  /**
+   * Why the user wants it and what the result is for (2026-11-13 the user's call: "그 조사를 사용자가 왜
+   * 하려고하는지 알아야 알맞는 결과를 가져올것이고"). With what is out of scope and the user's own words, the three parts a
+   * brief without them is told about (scripts/delegate-check brief).
+   */
+  intent?: string;
+  /** What this task does not do. */
+  outOfScope?: string[];
+  /** The user's request in their own words, with the conversation number (not a retelling). */
+  userWords?: string;
   /** The few memory lines the worker needs, never the whole store. */
   context?: string;
   doneCriteria: string[];
@@ -87,8 +102,6 @@ export interface TaskSpec {
   planFirst?: boolean;
   /** Test files are off limits (worker-folder-guard.mjs enforces it when started with -LockTests). */
   lockTests?: boolean;
-  /** The user sees the result before it counts as done (the report says what to look at). */
-  review?: boolean;
 }
 
 export const QUICK_SPEC: WorkspaceSpec = {

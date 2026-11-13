@@ -3,12 +3,15 @@
  * would put something new directly under the results' parent folder or into its temp folder is refused with the reason
  * (folder-place.ts). Started on its own (`node src/mistake-guards/pre-tool-hook.ts`, JSON on stdin), not through src/cli.ts,
  * so a tool call waits only for this small file and features.json. Anything it cannot read lets the call through.
+ * A refusal is noted for the turn record (tool-hook-hits.ts).
  */
 import { pathToFileURL } from 'node:url';
 import { commandPlaceProblem, writePlaceProblem } from './folder-place.ts';
 import { readGuardSettings } from './mistake-guard-settings.ts';
+import { noteToolHookHit } from './tool-hook-hits.ts';
 
 interface PreToolInput {
+  session_id?: string;
   tool_name?: string;
   tool_input?: { file_path?: string; notebook_path?: string; command?: string };
   cwd?: string;
@@ -48,7 +51,9 @@ async function main(): Promise<void> {
   const s = readGuardSettings();
   if (!s.on) return;
   const reason = preToolProblem(input, s.aiRoot);
-  if (reason) process.stdout.write(denyOutput(reason));
+  if (!reason) return;
+  process.stdout.write(denyOutput(reason));
+  noteToolHookHit(input.session_id, { hook: 'PreToolUse', check: 'folder-place', level: 'block', tool: input.tool_name ?? '' });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

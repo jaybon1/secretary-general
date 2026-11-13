@@ -62,13 +62,13 @@ export function skillSpecProblems(dir: string, { own = false } = {}): string[] {
     return ['SKILL.md 없음'];
   }
   const fm = frontMatter(text);
-  if (!fm) out.push('머리말(--- … ---) 없음');
+  if (!fm) out.push('머리말(`--- … ---`) 없음');
   else {
     const name = fm.get('name');
     if (!name) out.push('name 없음');
     else {
       if (name !== folder) out.push(`name(${name})이 폴더 이름과 다름`);
-      if (!NAME.test(name) || name.length > 64) out.push(`name(${name})이 소문자·숫자·하이픈 64자 꼴이 아님`);
+      if (!NAME.test(name) || name.length > 64) out.push(`name(${name})이 소문자·숫자·하이픈 64자 형식이 아님`);
     }
     const desc = fm.get('description') ?? '';
     if (!desc) out.push('description 없음');
@@ -87,7 +87,7 @@ export function skillSpecProblems(dir: string, { own = false } = {}): string[] {
   } catch {}
   const loose = entries.filter((e) => e.name !== 'SKILL.md' && !IGNORED.has(e.name) && !(e.isDirectory() && SPEC_DIRS.includes(e.name))).map((e) => e.name);
   if (loose.length) out.push(`SKILL.md 옆에 scripts/·references/·assets/ 밖의 것: ${loose.join(', ')}`);
-  if (own && folder.startsWith('common-')) out.push('공간 스킬 이름이 common-으로 시작함(공통 스킬 이름 자리)');
+  if (own && folder.startsWith('common-')) out.push('공간 스킬 이름이 common-으로 시작함(공통 스킬에만 쓰는 이름)');
   return out;
 }
 

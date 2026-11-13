@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECT_ROOT } from '../core/config.ts';
-import { readSecretaryId } from '../setup/secretary-id.ts';
+import { readSecretaryId } from '../core/secretary-id.ts';
 import { workspaceRootOf } from '../workspace/secretary-link.ts';
 import { CLAUDE_IMPORT } from '../workspace/workspace-paths.ts';
 import { STAFF } from '../core/names.ts';
@@ -76,9 +76,9 @@ export function staffConfigProblems(v: unknown): string[] {
   if (!c || typeof c !== 'object') return ['JSON 객체가 아님'];
   const str = (k: keyof StaffConfig) => typeof c[k] === 'string' && (c[k] as string).trim() !== '';
   for (const k of ['about', 'provider', 'model', 'effort'] as const) if (!str(k)) out.push(`${k} 없음`);
-  if ('folder' in c) out.push(`folder 칸은 쓰지 않음(폴더는 ${STAFF_HOME}/<담당자 이름>)`);
-  if ('name' in c) out.push('name 칸은 쓰지 않음(이름은 파일 이름)');
-  if (c.instructions !== undefined && !str('instructions')) out.push('instructions는 파일 경로(없으면 칸을 뺀다)');
+  if ('folder' in c) out.push(`folder 키는 쓰지 않음(폴더는 ${STAFF_HOME}/<담당자 이름>)`);
+  if ('name' in c) out.push('name 키는 쓰지 않음(이름은 파일 이름)');
+  if (c.instructions !== undefined && !str('instructions')) out.push('instructions는 파일 경로(없으면 키를 뺀다)');
   if (typeof c.newSession !== 'boolean') out.push('newSession은 true/false');
   if (!['none', 'read', 'write'].includes(c.memory as string)) out.push('memory는 none|read|write');
   for (const k of ['tools', 'mcpTools', 'deniedTools'] as const) {
@@ -87,7 +87,7 @@ export function staffConfigProblems(v: unknown): string[] {
   }
   if (c.memory === 'write' && !(c.mcpTools ?? []).length) out.push('memory write인데 mcpTools가 비었음');
   if (!(typeof c.timeoutMinutes === 'number' && c.timeoutMinutes > 0)) out.push('timeoutMinutes는 양수');
-  if (c.retryAfterFailMinutes !== undefined && !(typeof c.retryAfterFailMinutes === 'number' && c.retryAfterFailMinutes > 0)) out.push('retryAfterFailMinutes는 양수(없으면 칸을 뺀다)');
+  if (c.retryAfterFailMinutes !== undefined && !(typeof c.retryAfterFailMinutes === 'number' && c.retryAfterFailMinutes > 0)) out.push('retryAfterFailMinutes는 양수(없으면 키를 뺀다)');
   if (!Array.isArray(c.role) || !c.role.every((l) => typeof l === 'string')) out.push('role은 글 줄 목록');
   return out;
 }

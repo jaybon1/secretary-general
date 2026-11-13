@@ -27,6 +27,12 @@ Object.assign(process.env, {
   SECRETARY_SEMANTIC_SEARCH_MODEL_DIR: path.join(ENV_DIR, 'models'),
   // The repeat reminder's per-session counts (src/mistake-guards/repeat-hook.ts), otherwise under the system temp folder.
   SECRETARY_TEST_REPEAT_HOOK_STATE_DIR: path.join(ENV_DIR, 'repeat'),
+  // What the PreToolUse and PostToolUse hooks caught, per session, until the Stop hook takes it (src/mistake-guards/tool-hook-hits.ts).
+  SECRETARY_TEST_TOOL_HOOK_HITS_DIR: path.join(ENV_DIR, 'tool-hook-hits'),
+  // The record of failed tests, for a run-tests.mjs a test starts (test/test-failures.ts), otherwise this secretary's records folder.
+  SECRETARY_TEST_FAILURES_FILE: path.join(ENV_DIR, 'test-failures.jsonl'),
+  // Where the searches the semantic-search server did not answer are recorded (src/semantic-search/misses.ts), otherwise this secretary's records folder.
+  SECRETARY_SEMANTIC_SEARCH_MISS_LOG: path.join(ENV_DIR, 'semantic-search-misses.jsonl'),
   // Tests never start the semantic-search server or download its model; semantic tests inject a fake.
   SECRETARY_SEMANTIC_SEARCH: 'off',
   [NO_MODEL_ENV]: '1',

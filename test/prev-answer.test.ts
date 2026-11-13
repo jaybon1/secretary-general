@@ -54,6 +54,11 @@ test('the previous answer is the prose after the last tool call since the last p
   const first = path.join(tempDir(), 'first.jsonl');
   fs.writeFileSync(first, user('안녕') + '\n');
   assert.equal(lastAnswer(first, '안녕'), '');
+  // 없으면 놓치는 실수: 다른 세션이 보낸 메시지 줄에서 멈춰 이전 답을 못 찾는다.
+  const voice = 'Another Claude session sent a message:\n<agent-message from="relay01">\n[전달]\n오늘\n</agent-message>';
+  const spoken = path.join(tempDir(), 'voice.jsonl');
+  fs.writeFileSync(spoken, [user('배포 준비해 줘'), assistant({ type: 'text', text: '준비했어요.' }), line({ type: 'user', isMeta: true, origin: { kind: 'peer' }, message: { role: 'user', content: voice } }), ''].join('\n'));
+  assert.equal(lastAnswer(spoken, voice), '준비했어요.');
 });
 
 const hits = (median: number, ...h: Array<[number, number]>): SemanticHits => ({ median, hits: h.map(([id, sim]) => ({ id, sim })) });
@@ -71,14 +76,15 @@ test('merging compares leads, docks the second search, and keeps the top 10 on t
   assert.equal(mergeHits(null, null), null);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 앞 답으로 하는 두 번째 검색이 늦거나 없을 때 기억 주입이 통째로 빠진다(기억 주입, 2026-11-12 늘 남김으로 올림).
 test('the question search is used alone when the second one times out, or without a previous answer', async () => {
   const q = hits(0.4, [1, 0.7]);
   const seen: string[] = [];
   const quick: SemanticSearch = async (query) => (seen.push(query), q);
   const timedOut: SemanticSearch = async (query) => (seen.push(query), null); // semanticClient's answer past its timeout
-  assert.deepEqual(await prevAnswerSearch('A. 언제 배포할까요?', quick, timedOut)('오늘', { limit: 10 }), q);
+  assert.deepEqual(await prevAnswerSearch('A. 언제 배포할까요?', [quick, timedOut])('오늘', { limit: 10 }), q);
   assert.deepEqual(seen, ['오늘', '오늘\nA. 언제 배포할까요?']);
   seen.length = 0;
-  assert.deepEqual(await prevAnswerSearch('', quick, timedOut)('오늘', { limit: 10 }), q);
+  assert.deepEqual(await prevAnswerSearch('', [quick, timedOut])('오늘', { limit: 10 }), q);
   assert.deepEqual(seen, ['오늘']);
 });

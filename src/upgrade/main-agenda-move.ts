@@ -1,16 +1,16 @@
 /**
- * One-off move of the profile's '큰 일 상태' section onto the big-work board (cli big-work-from-profile), for an
+ * One-off move of the profile's '큰 일 상태' section onto the main-agenda board (cli main-agenda-from-profile), for an
  * update from v7: before v8 the big works were a section of the core profile. Kept only in this release
  * (the original secretary moved its own profile once and dropped this code); the update skill runs it.
  * Preview writes a plan file the secretary checks and fixes itself (each line's state is a judgement);
  * --apply puts the plan on the board and saves the profile without the section as a new version.
  */
-import { BIG_WORK_LIMITS, BIG_WORK_STATES, renderBigWork, type BigWorkState } from '../store/big-work.ts';
+import { MAIN_AGENDA_LIMITS, MAIN_AGENDA_STATES, renderMainAgenda, type MainAgendaState } from '../store/main-agenda.ts';
 import type { Store } from '../store/store.ts';
 
 export interface PlanRow {
   name: string;
-  state: BigWorkState | '?';
+  state: MainAgendaState | '?';
   note: string;
   /** The profile line it came from, so the check can be done without opening the profile. */
   from: string;
@@ -24,7 +24,7 @@ export interface MovePlan {
   newProfile: string;
 }
 
-const ACTIVE_STATES = BIG_WORK_STATES.slice(0, 4) as readonly BigWorkState[];
+const ACTIVE_STATES = MAIN_AGENDA_STATES.slice(0, 4) as readonly MainAgendaState[];
 const HEADING = /^\s*(#{1,6}\s|\*\*[^*]+\*\*\s*:?\s*$|[^-*\s][^:]{0,30}:\s*$)/;
 const LIST = /^\s*(?:[-*+]|\d+[.)])\s+/;
 
@@ -52,7 +52,7 @@ function nameNote(item: string): { name: string; note: string } {
   return m ? { name: clean(m[1]), note: clean(m[2]) } : { name: clean(item), note: '' };
 }
 
-function findState(text: string): BigWorkState | undefined {
+function findState(text: string): MainAgendaState | undefined {
   return ACTIVE_STATES.find((s) => text.includes(s));
 }
 
@@ -103,16 +103,16 @@ export function planProblems(plan: MovePlan): string[] {
   const out: string[] = [];
   const names = new Set<string>();
   for (const r of plan.rows) {
-    if (!ACTIVE_STATES.includes(r.state as BigWorkState)) out.push(`상태를 정해야 함(${ACTIVE_STATES.join('·')}): ${r.name || r.from}`);
+    if (!ACTIVE_STATES.includes(r.state as MainAgendaState)) out.push(`상태를 정해야 함(${ACTIVE_STATES.join('·')}): ${r.name || r.from}`);
     if (!r.name.trim()) out.push(`이름이 비어 있음: ${r.from}`);
-    if (Array.from(r.name).length > BIG_WORK_LIMITS.nameChars) out.push(`이름 ${BIG_WORK_LIMITS.nameChars}자 넘음: ${r.name}`);
-    if (Array.from(r.note).length > BIG_WORK_LIMITS.noteChars) out.push(`메모 ${BIG_WORK_LIMITS.noteChars}자 넘음(${Array.from(r.note).length}자): ${r.name}`);
+    if (Array.from(r.name).length > MAIN_AGENDA_LIMITS.nameChars) out.push(`이름 ${MAIN_AGENDA_LIMITS.nameChars}자 넘음: ${r.name}`);
+    if (Array.from(r.note).length > MAIN_AGENDA_LIMITS.noteChars) out.push(`메모 ${MAIN_AGENDA_LIMITS.noteChars}자 넘음(${Array.from(r.note).length}자): ${r.name}`);
     if (names.has(r.name)) out.push(`이름이 겹침: ${r.name}`);
     names.add(r.name);
   }
-  const chars = renderBigWork(plan.rows.map((r, i) => ({ ...r, id: i, state: r.state as BigWorkState, source_log_id: null, created_at: new Date().toISOString() }))).length;
-  if (chars > BIG_WORK_LIMITS.boardChars) out.push(`판이 ${chars}자(상한 ${BIG_WORK_LIMITS.boardChars}자): 메모를 줄인다`);
-  if (plan.rows.length > BIG_WORK_LIMITS.active) out.push(`큰 일이 ${plan.rows.length}개(상한 ${BIG_WORK_LIMITS.active}개)`);
+  const chars = renderMainAgenda(plan.rows.map((r, i) => ({ ...r, id: i, state: r.state as MainAgendaState, source_log_id: null, created_at: new Date().toISOString() }))).length;
+  if (chars > MAIN_AGENDA_LIMITS.boardChars) out.push(`주요 현안이 ${chars}자(상한 ${MAIN_AGENDA_LIMITS.boardChars}자): 메모를 줄인다`);
+  if (plan.rows.length > MAIN_AGENDA_LIMITS.active) out.push(`안건이 ${plan.rows.length}개(상한 ${MAIN_AGENDA_LIMITS.active}개)`);
   if (!plan.newProfile.trim()) out.push('큰 일 칸을 빼면 프로필이 비어요');
   return out;
 }
@@ -125,8 +125,8 @@ export function applyPlan(store: Store, plan: MovePlan): { board: number; profil
   if (current?.version !== plan.profileVersion) {
     throw new Error(`계획은 프로필 v${plan.profileVersion}에서 만들었는데 지금은 v${current?.version}이에요. 미리 보기부터 다시 하세요.`);
   }
-  if (store.bigWork().length) throw new Error('큰 일 판이 이미 비어 있지 않아요(한 번 옮겼나요?). list_big_work로 확인하세요.');
-  for (const r of plan.rows) store.setBigWork({ name: r.name, state: r.state as BigWorkState, note: r.note });
-  const p = store.updateProfile(plan.newProfile, "큰 일 상태 칸을 큰 일 판(set_big_work)으로 옮김");
-  return { board: store.bigWork().length, profileVersion: p.version };
+  if (store.mainAgenda().length) throw new Error('주요 현안이 이미 비어 있지 않아요(한 번 옮겼나요?). list_main_agenda로 확인하세요.');
+  for (const r of plan.rows) store.setMainAgenda({ name: r.name, state: r.state as MainAgendaState, note: r.note });
+  const p = store.updateProfile(plan.newProfile, "큰 일 상태 칸을 주요 현안(set_main_agenda)으로 옮김");
+  return { board: store.mainAgenda().length, profileVersion: p.version };
 }

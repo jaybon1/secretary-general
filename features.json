@@ -1,5 +1,5 @@
 {
-  "about": "비서의 기능 목록. core는 언제나 켜짐(enabled 없음). 선택 기능은 enabled가 false면 파일은 그대로 두고 그 기능의 설치 점검(checks, src/setup/check-items.ts), 질문 훅 알림(notices, src/hooks/prompt-notices.ts), 예약 작업(scheduledTasks, scripts/scheduled/install-scheduled-tasks.ps1 -Task의 id와 등록되는 작업 이름 name(실제 이름은 그 뒤에 비서 고유 번호가 붙어 'Secretary Idle Jobs (A3F9)' 꼴, .secretary-id), 설치 점검도 이 이름으로 찾는다)을 건너뛴다. files는 비서 폴더 기준 경로(폴더는 / 로 끝남), rules는 이 기능 규칙의 글: 켜진 기능은 AGENTS.md에, 꺼진 기능은 켤 때 AGENTS.md에 넣을 글로 .agents/skills/feature-toggle/references/<id>.md에 있다. 켜고 끄기는 비서가 feature-toggle 스킬로 한다(사용자에게 묻고). 점검·알림·작업과 bin·src·scripts·.agents/skills·test의 파일은 모두 꼭 한 기능에 속한다(test/features.test.ts).",
+  "about": "비서의 기능 목록. core는 언제나 켜짐(enabled 없음). 선택 기능은 enabled가 false면 파일은 그대로 두고 그 기능의 설치 상태 점검(checks, src/setup/check-items.ts), UserPromptSubmit 훅(질문 훅) 알림(notices, src/hooks/prompt-notices.ts), 예약 작업(scheduledTasks, scripts/scheduled/install-scheduled-tasks.ps1 -Task의 id와 등록되는 작업 이름 name(실제 이름은 그 뒤에 비서 고유 번호가 붙어 'Secretary Idle Jobs (A3F9)' 형식, .secretary-id), 설치 상태 점검도 이 이름으로 찾는다)을 건너뛴다. files는 비서 폴더 기준 경로(폴더는 / 로 끝남), rules는 이 기능 규칙의 글: 켜진 기능은 AGENTS.md에, 꺼진 기능은 켤 때 AGENTS.md에 넣을 글로 .agents/skills/feature-toggle/references/<id>.md에 있다. 켜고 끄기는 비서가 feature-toggle 스킬로 한다(사용자에게 묻고). 점검·알림·작업과 bin·src·scripts·.agents/skills·test의 파일은 모두 꼭 한 기능에 속한다(test/features.test.ts).",
   "features": [
     {
       "id": "memory-core",
@@ -15,7 +15,7 @@
         "src/hooks/session-start.ts",
         "src/staff/job-record.ts",
         "src/log/",
-        "src/mcp/big-work-tools.ts",
+        "src/mcp/main-agenda-tools.ts",
         "src/mcp/tool-common.ts",
         "src/mcp/memory-tools.ts",
         "src/mcp/server.ts",
@@ -24,12 +24,13 @@
         "src/memory/search-terms.ts",
         "src/memory/prev-answer-search.ts",
         "src/memory/recall.ts",
+        "src/memory/source-quote.ts",
         "src/semantic-search/",
         "src/store/",
         "scripts/lib/common.ps1",
         "scripts/lib/this-secretary.ps1",
         "scripts/semantic-search/",
-        "test/big-work.test.ts",
+        "test/main-agenda.test.ts",
         "test/db.test.ts",
         "test/duplicate.test.ts",
         "test/semantic-search-outage.test.ts",
@@ -42,11 +43,14 @@
         "test/memory.test.ts",
         "test/prev-answer.test.ts",
         "test/prompt-notices.test.ts",
+        ".agents/hook-notices/other-situations.md",
+        ".agents/hook-notices/semantic-search-misses.md",
         "test/prompt-source.test.ts",
         "test/purge-initials.test.ts",
         "test/purge.test.ts",
         "test/rewind.test.ts",
         "test/run-tests.mjs",
+        "test/test-failures.ts",
         "test/semantic.test.ts",
         "test/this-secretary.test.ts",
         "test/wording.test.ts",
@@ -69,7 +73,7 @@
     },
     {
       "id": "setup-check",
-      "description": "설치 점검(세션 시작 안내, setup-check)과 이 기능 목록·기능 켜고 끄기(feature-toggle 스킬), 예약 작업 등록 스크립트, 바깥용 입구(bin/)와 비서 폴더 환경변수(SECRETARY_<번호>_DIR) 확인, 비서 고유 번호(.secretary-id), 스킬 자리(.agents/skills/<이름>에 실제 폴더, .claude/skills는 그리로 가는 정션 하나, 옛 skills/ 옮기기, skill-links)",
+      "description": "설치 상태 점검(세션 시작 안내, setup-check)과 이 기능 목록·기능 켜고 끄기(feature-toggle 스킬), 예약 작업 등록 스크립트, 진입점 폴더(bin/)와 비서 폴더 환경변수(SECRETARY_<번호>_DIR) 확인, 비서 고유 번호(.secretary-id, 설치 상태 점검 때 없으면 만듦. 번호와 기능 목록을 읽는 코드는 공용 바탕 src/core/secretary-id.ts·features.ts), 스킬 위치(.agents/skills/<이름>에 실제 폴더, .claude/skills는 그리로 가는 링크(정션) 하나, 옛 skills/ 옮기기, skill-links)",
       "core": true,
       "files": [
         "src/setup/",
@@ -77,6 +81,7 @@
         ".agents/skills/feature-toggle/",
         "test/entry-points.test.ts",
         "test/features.test.ts",
+        "test/run-changed.ts",
         "test/ps1-syntax.test.ts",
         "test/setup.test.ts",
         "test/skill-links.test.ts",
@@ -108,13 +113,14 @@
     },
     {
       "id": "session-continuity",
-      "description": "상황판, 세션 사이 이어가기(남은 질문), 문맥 크기 알림, 세션 넘기기",
+      "description": "상황판, 세션 사이 이어가기(남은 질문), 컨텍스트 크기 알림, 세션 이관(session-handoff)",
       "core": true,
       "files": [
         "src/session-continuity/",
         "src/staff/situation-board.json",
         "src/hooks/context-size-nudge.ts",
         ".agents/skills/session-handoff/",
+        ".agents/hook-notices/situation-board.md",
         "test/situation-board.test.ts",
         "test/context-size.test.ts",
         "test/open-questions.test.ts"
@@ -131,19 +137,23 @@
       "files": [
         "src/memory/consolidate-notice.ts",
         "src/memory/consolidate-run.ts",
+        "src/memory/consolidate-tally.ts",
+        "src/memory/consolidate-verdicts.ts",
+        "src/mcp/consolidate-tools.ts",
         "src/staff/memory-consolidation.json",
         ".agents/skills/consolidate/",
+        ".agents/hook-notices/memory-consolidation-report.md",
         "test/consolidate.test.ts",
         "test/staff.test.ts"
       ],
       "checks": [],
       "notices": ["memory-consolidation"],
       "scheduledTasks": [],
-      "rules": ["기억 정리 보고가 오면"]
+      "rules": ["`<secretary-consolidate-report>`에 정리 보고를 붙인다"]
     },
     {
       "id": "delegate",
-      "description": "일 맡기기: 작업 공간(공간 도구가 비서 폴더를 찾는 secretary-link.local.json), 백그라운드 업무 세션과 감시, run-job, 공급자 고르기",
+      "description": "일 맡기기: 작업 공간(공간 도구가 비서 폴더를 찾는 secretary-link.local.json), 백그라운드 업무 세션과 모니터링, run-job, 공급자 고르기",
       "core": true,
       "files": [
         "src/staff/launch.ts",
@@ -155,22 +165,24 @@
         "scripts/lib/providers.json",
         "scripts/lib/providers.ps1",
         "bin/run-job.ps1",
+        "bin/run-job-worktree.ps1",
         "scripts/run-job/run-job-stats.ps1",
+        "scripts/run-job/run-job-worktree.ps1",
         "scripts/run-job/run-job.ps1",
         "scripts/run-job/wait-job.ps1",
         "scripts/worker/",
         ".agents/skills/delegate/",
         ".agents/skills/plan-grill/",
+        ".agents/skills/run-job/",
         "test/providers.test.ts",
         "test/secretary-link.test.ts",
         "test/common-skills.test.ts",
         "test/watch.test.ts",
         "test/worker-folder-guard.test.ts",
         "test/worker-lib.test.ts",
-        "test/review.test.ts",
         "test/workspace.test.ts"
       ],
-      "checks": ["workspace-links", "workspace-aux-folders"],
+      "checks": ["workspace-links", "workspace-aux-folders", "provider-personal-data"],
       "notices": ["watch-missing"],
       "scheduledTasks": [],
       "rules": ["## 일 맡기기 (위임)"]
@@ -211,11 +223,11 @@
       "checks": ["usage-hooks"],
       "notices": ["usage-guard-override"],
       "scheduledTasks": [],
-      "rules": ["90퍼센트를 초과하더라도 진행"]
+      "rules": ["- **정지 장치:**"]
     },
     {
       "id": "usage-poll",
-      "description": "사용량 뒤에서 조회: 비서 서버가 켜져 있는 동안 고른 공급자(this-secretary.local.json의 usage-poll 칸, 없으면 조회할 수 있고 이 PC에 설정된 공급자: 처음엔 구독 하나)의 사용량을 5분마다 조회(토큰 0, node src/cli.ts usage-poll, 이 PC에 하나만). 사용량 정지 장치(90%)가 늘 새 값을 본다. 꺼 두면 정지 훅이 기록이 5분 넘게 오래됐을 때만 갱신한다",
+      "description": "사용량 뒤에서 조회: 비서 서버가 켜져 있는 동안 고른 공급자(this-secretary.local.json의 usage-poll 키, 없으면 조회할 수 있고 이 PC에 설정된 공급자: 처음엔 구독 하나)의 사용량을 5분마다 조회(토큰 0, node src/cli.ts usage-poll, 이 PC에 하나만). 사용량 정지 장치(90%)가 늘 새 값을 본다. 꺼 두면 정지 훅이 기록이 5분 넘게 오래됐을 때만 갱신한다",
       "enabled": true,
       "files": ["src/usage/usage-poller.ts", "src/usage/usage-settings.ts", "test/usage-poll.test.ts"],
       "checks": [],
@@ -235,7 +247,7 @@
       "checks": ["idle-jobs-task"],
       "notices": [],
       "scheduledTasks": [{ "id": "idle-jobs", "name": "Secretary Idle Jobs" }],
-      "rules": ["기억 정리는 쉬는 시간에 저절로 돈다"]
+      "rules": ["기억 정리는 쉬는 시간에 자동으로 돈다"]
     },
     {
       "id": "browser",
@@ -249,13 +261,13 @@
     },
     {
       "id": "multi-subscription",
-      "description": "다중 구독: 사용률에 따라 계정 a에서 넘길 구독(b, c, …) 중 가장 여유 있는 것으로 일 넘기기(providers.json default가 auto면 run-job·업무 세션도 그 계정으로), 다른 계정으로 비서 서버",
+      "description": "다중 구독: 사용률에 따라 계정 a에서 일을 보낼 구독(b, c, …) 중 가장 여유 있는 것으로 일 보내기(providers.json default가 auto면 run-job·업무 세션도 그 계정으로), 다른 계정으로 비서 서버",
       "enabled": false,
       "files": ["src/usage/subscription-routing.ts", "test/subscription-routing.test.ts"],
       "checks": [],
       "notices": ["subscription-routing"],
       "scheduledTasks": [],
-      "rules": ["- **넘기기 단계:**"]
+      "rules": []
     },
     {
       "id": "external-providers",
@@ -265,7 +277,7 @@
       "checks": ["provider-key"],
       "notices": [],
       "scheduledTasks": [],
-      "rules": ["구독이 아닌 공급자(특히 외부 게이트웨이)"]
+      "rules": ["`personalDataAllowed`가 `true`가 아닌 공급자"]
     },
     {
       "id": "calendar",
@@ -323,7 +335,7 @@
     },
     {
       "id": "phone-push",
-      "description": "끝 알림: 비서 본 세션의 턴이 끝나면 끝(Stop) 훅이 모델 호출 없이 답 첫 줄을 이 PC의 ntfy 서버로 보내 폰 앱에 띄운다(우선순위 4, 누르면 이 세션의 Claude 대화가 열림. this-secretary.local.json의 phone-push 칸이 있을 때만, 보내기는 따로 떨어진 프로세스가 해 훅이 기다리지 않는다). ntfy 서버는 로그인 때 예약 작업으로 관리자 없이 띄운다(scripts/phone-push/install-ntfy.ps1)",
+      "description": "끝 알림: 비서 본 세션의 턴이 끝나면 Stop 훅이 모델 호출 없이 답 첫 줄을 이 PC의 ntfy 서버로 보내 폰 앱에 띄운다(우선순위 4, 누르면 이 세션의 Claude 대화가 열림. this-secretary.local.json의 phone-push 키가 있을 때만, 보내기는 따로 떨어진 프로세스가 해 훅이 기다리지 않는다). ntfy 서버는 로그인 때 예약 작업으로 관리자 없이 띄운다(scripts/phone-push/install-ntfy.ps1)",
       "enabled": false,
       "files": ["src/phone-push/", "scripts/phone-push/", "test/phone-push.test.ts"],
       "checks": ["phone-push"],
@@ -337,10 +349,11 @@
     },
     {
       "id": "mistake-guards",
-      "description": "실수 막기 장치: 답 검사(영어 답, 경로 표기: 막거나 다음 질문에 알림)와 턴마다 부른 도구 기록(Stop 훅), 질문 다음 기호 알림, 결과물 상위 폴더에 새 폴더·temp에 쓰기 막기(PreToolUse 훅, 업무 세션 worker-folder-guard도), 같은 종류 조작이 한 턴에 여러 번 되풀이되면 도구·스크립트로 바꿀지 따져 보라는 알림(PostToolUse 훅, 비서·업무 세션·run-job), 위임 앞뒤 대조(bin/delegate-check.mjs), 실수 기록 도구(record_mistake·update_mistake·list_mistakes)",
+      "description": "실수 막기 장치: 답변 검사(영어 답, 경로 표기, 근거 출처 열람·지어낸 말·딸린 질문·보고 전달: 막거나 다음 질문에 알림)와 턴마다 부른 도구 기록(Stop 훅), 질문 다음 알파벳 알림, 결과물 상위 폴더에 새 폴더·temp에 쓰기 막기(PreToolUse 훅, 업무 세션 worker-folder-guard도), 같은 종류 조작이 한 턴에 여러 번 되풀이되면 도구·스크립트로 바꿀지 따져 보라는 알림(PostToolUse 훅, 비서·업무 세션·run-job), 비서 세션에서 이 두 훅이 막거나 알린 것도 턴 기록에 남기고 list_mistakes가 셈(src/mistake-guards/tool-hook-hits.ts), 위임 앞뒤 대조(bin/delegate-check.mjs), 실수 기록 도구(record_mistake·update_mistake·list_mistakes)",
       "enabled": true,
       "files": [
         "src/mistake-guards/",
+        ".agents/hook-notices/answer-format.md",
         "src/mcp/mistake-tools.ts",
         "bin/delegate-check.mjs",
         "scripts/delegate-check/",
@@ -351,7 +364,7 @@
       "checks": [],
       "notices": ["answer-check-warn", "question-label"],
       "scheduledTasks": [],
-      "rules": ["다음 기호는 훅이 알려 줌", "`record_mistake`로 한 건 적는다"],
+      "rules": ["다음 알파벳은 훅이 알려 줌", "`record_mistake`로 한 건 적는다"],
       "thisSecretary": {
         "section": "mistake-guards",
         "from": [

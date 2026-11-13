@@ -137,7 +137,7 @@ test('plan: the answer the checks read, titled with the session name (else 비�
 test('plan: nothing for a turn sent back, a subagent, no settings, an empty answer, a feature turned off', () => {
   const skip = (p: ReturnType<typeof planNotice>) => ('skip' in p ? p.skip : 'sent');
   const input = { session_id: 's', hook_event_name: 'Stop' };
-  assert.equal(skip(planNotice(input, { block: '[답 검사] …', answer: '영어 답' }, { ...ON, settings: SETTINGS })), 'turn sent back');
+  assert.equal(skip(planNotice(input, { block: '[답변 검사·Stop 훅] …', answer: '영어 답' }, { ...ON, settings: SETTINGS })), 'turn sent back');
   assert.equal(skip(planNotice({ ...input, agent_id: 'a1' }, { answer: 'x' }, { ...ON, settings: SETTINGS })), 'not the main session');
   assert.equal(skip(planNotice({ ...input, hook_event_name: 'SubagentStop' }, { answer: 'x' }, { ...ON, settings: SETTINGS })), 'not the main session');
   assert.equal(skip(planNotice(input, { answer: 'x' }, { ...ON, settings: null })), 'no settings');
@@ -149,7 +149,7 @@ test('plan: nothing for a turn sent back, a subagent, no settings, an empty answ
   assert.equal(skip(planNotice(input, { answer: 'x' }, { ...ON, root: tempDir('notify-none-') })), 'no settings');
 });
 
-test('in tests (and eval runs) nothing is ever handed to the sender, settings or not', () => {
+test('in tests nothing is ever handed to the sender, settings or not', () => {
   assert.ok(process.env[NO_MODEL_ENV], 'test/env.ts sets the mark');
   let launched = 0;
   notifyAfterStop({ session_id: 's', hook_event_name: 'Stop' }, { answer: '끝났어요.' }, { settings: SETTINGS, launch: () => launched++ });

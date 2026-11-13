@@ -202,7 +202,7 @@ test('the guard reads only its own account’s lift, never the old shared guard-
   assert.match(guard(), /"permissionDecision":"deny"/, 'the newer record (the old folder) is read');
 });
 
-// Without it: someone who signs in with an API key (no claude.ai account in .claude.json, /usage gives no usage) is
+// [늘 남김] Without it: someone who signs in with an API key (no claude.ai account in .claude.json, /usage gives no usage) is
 // stopped for want of a record, or every tool call starts a heavy /usage reading again every 5 minutes for ever.
 test('the guard without a usage record (an API key login): never stops; a reading that keeps failing waits longer each time', () => {
   const home = tempDir();
@@ -244,6 +244,7 @@ test('usage-query.ps1 counts failed readings in <name>.fail the way usage-files.
   assert.ok(!fs.existsSync(path.join(usage, 'subscription.json')), 'no usage made up');
 });
 
+// [늘 남김] 없으면 놓치는 실수: 90% 이야기만 해도 정지 장치가 풀리거나, 넘어도 진행하라는 말을 못 알아들어 턴을 계속 막는다(훅이 턴을 잘못 막음).
 test('the guard override takes close wordings of "go past 90%", not other talk about 90%', () => {
   for (const p of ['90퍼센트를 초과하더라도 진행', 'd3 - 90퍼 초과하더라도 진행 깃헙에 올려줘', '90% 넘어도 계속해', '90프로 넘더라도 진행해줘', '90 초과해도 진행']) {
     assert.ok(isGuardOverride(p), p);
@@ -440,7 +441,7 @@ test('providers.json here: every provider says how its usage is read', () => {
   for (const [name, p] of Object.entries(raw.providers)) assert.ok(['claude-usage', 'agy', 'none'].includes(p.usage ?? ''), `${name}: usage 칸`);
 });
 
-// 없으면 놓치는 실수: 정지 장치 끄기 파일을 새 자리(~/.secretary)로 옮긴 뒤 옛 자리(~/.claude/usage-guard-off)에 만들어 둔 끄기가 안 먹어 갑자기 막힌다.
+// 없으면 놓치는 실수: 정지 장치 끄기 파일을 새 위치(~/.secretary)로 옮긴 뒤 옛 위치(~/.claude/usage-guard-off)에 만들어 둔 끄기가 안 먹어 갑자기 막힌다.
 test('the usage guard is off while its off file is in the new place or the old one', () => {
   const dir = tempDir();
   const files = [path.join(dir, 'new-off'), path.join(dir, 'old-off')];

@@ -5,6 +5,7 @@
  * probabilistic judge model can replace it without touching storage or packing.
  * Semantic hits (semantic-search/client.ts) are optional: when the server isn't ready, recall is word search alone.
  */
+import { quoteNote } from './source-quote.ts';
 import { CANDIDATE_POOL } from '../core/config.ts';
 import { semanticClient, type SemanticHits, type SemanticSearch } from '../semantic-search/client.ts';
 import type { Memory, Store } from '../store/store.ts';
@@ -144,7 +145,7 @@ function merge(a: Scored[], b: Scored[]): Scored[] {
 }
 
 export async function recall(store: Store, query: string, opts: RecallOptions): Promise<RecallResult> {
-  const semantic = opts.semantic === undefined ? semanticClient(1500) : opts.semantic;
+  const semantic = opts.semantic === undefined ? semanticClient(1500, 'recall(기본)') : opts.semantic;
   const semanticHits = semantic?.(query, { includeInvalid: opts.includeInvalid, limit: SEM_POOL });
   const candidates = store
     .searchMemories(query, { includeInvalid: opts.includeInvalid, limit: CANDIDATE_POOL })
@@ -156,20 +157,45 @@ export async function recall(store: Store, query: string, opts: RecallOptions): 
   const scored = merge(lexical, hits ? semanticScores(store, hits, opts.includeInvalid) : []).filter(
     (s) => s.score >= (opts.minScore ?? 0) && !opts.excludeIds?.has(s.memory.id),
   );
-  const ordered = opts.summariesFirst
-    ? [...scored.filter((s) => s.memory.kind === 'summary'), ...scored.filter((s) => s.memory.kind !== 'summary')]
-    : scored;
-  return pack(ordered, opts.budgetTokens);
+  // A decision shows the user's own words it was checked against (memory/source-quote.ts), so a retelling is read with them.
+  const quoted = (m: Memory) => (m.kind === 'decision' ? quoteNote(store, m.id) : '');
+  if (!opts.summariesFirst) return pack(scored, opts.budgetTokens, quoted);
+  const ordered = [...scored.filter((s) => s.memory.kind === 'summary'), ...scored.filter((s) => s.memory.kind !== 'summary')];
+  return pack(ordered, opts.budgetTokens, (m) => (m.kind === 'summary' ? newerNote(store, m) : quoted(m)));
 }
 
-/** Greedy fill in score order; skips items that don't fit and keeps trying smaller ones. */
-export function pack(scored: Scored[], budgetTokens: number): RecallResult {
+/** How many newer (and how many ended) memories a summary's note lists by id before "외 N개". */
+const NEWER_LISTED = 8;
+
+/**
+ * A topic summary is rewritten only at consolidation, so what was saved since can contradict it (a state that changed,
+ * 2026-11-13 evaluation K). Under an injected summary: the topic's active memories made after it, by id, so the
+ * secretary reads them (recall ids) before taking the summary as the current state; and the topic's memories that
+ * stopped holding since (replaced or marked untrue, with what replaced them: fix C11, hindsight's retractions), since the
+ * summary may still say them and a memory that ended raises no "newer" line by itself (forget, or a replacement filed
+ * under another topic). Empty when there are none.
+ */
+export function newerNote(store: Store, summary: Memory): string {
+  const topic = summary.tags.split(' ')[0];
+  const list = <T>(xs: T[], show: (x: T) => string) => `${xs.slice(0, NEWER_LISTED).map(show).join(', ')}${xs.length > NEWER_LISTED ? ` 외 ${xs.length - NEWER_LISTED}개` : ''}`;
+  const ids = store.newerInTopic(topic, summary.created_at, NEWER_LISTED + 20);
+  const ended = store.endedInTopic(topic, summary.created_at, NEWER_LISTED + 20);
+  const parts: string[] = [];
+  if (ids.length) parts.push(`요약 뒤 새 기억(요약에 아직 안 들어감): ${list(ids, (id) => `#${id}`)}`);
+  if (ended.length) parts.push(`요약 뒤 무효가 된 기억(요약에 아직 남아 있을 수 있음): ${list(ended, (e) => `#${e.id}${e.by ? `→#${e.by}` : ''}`)}`);
+  return parts.length ? `  ${parts.join(' · ')}` : '';
+}
+
+/** Greedy fill in score order; skips items that don't fit and keeps trying smaller ones. `note` adds a line under an item (counted in the budget). */
+export function pack(scored: Scored[], budgetTokens: number, note?: (m: Memory) => string): RecallResult {
   const items: Scored[] = [];
   const lines: string[] = [];
   const dropped: Scored[] = [];
   let tokens = 0;
   for (const s of scored) {
-    const line = formatMemory(s.memory);
+    const extra = note?.(s.memory);
+    const line = formatMemory(s.memory) + (extra ? `
+${extra}` : '');
     const cost = estimateTokens(line) + 1;
     if (tokens + cost > budgetTokens) {
       dropped.push(s);

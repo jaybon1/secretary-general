@@ -172,7 +172,7 @@ interface Block {
   text?: string;
 }
 
-/** Memory numbers from the branch's own remember calls ("기억 #1458 저장"). */
+/** Memory numbers from the branch's own remember calls ("기억 #1234 저장"). */
 function rememberedIds(branch: Line[]): number[] {
   const calls = new Set<string>();
   for (const l of branch) {
@@ -269,5 +269,5 @@ export function rewindNotice(store: Store, transcriptPath?: string): string {
   if (!pending?.length) return '';
   store.setJson(NOTICE_KEY, []);
   const ids = pending.map((i) => `#${i}`).join(', ');
-  return `<${TAG.rewind}>되감기로 버려진 대화에서 저장된 기억 ${ids}를 무효 처리했다(그 대화 기록은 지웠다). 답 끝("다음 행동" 위)에 "되감기로 버려진 대화의 기억 ${ids}를 무효 처리했어요." 한 줄을 붙인다. 내용은 적지 않는다.</${TAG.rewind}>`;
+  return `<${TAG.rewind}>되감기로 버려진 대화에서 저장된 기억 ${ids}를 무효 처리했다(그 대화 기록은 지웠다). 답 끝("다음 행동" 위)에 "되감기로 버려진 대화의 기억 ${ids}를 무효 처리했어요." 한 줄만 붙인다(버린 대화라 내용은 다시 꺼내지 않는다).</${TAG.rewind}>`;
 }

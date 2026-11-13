@@ -8,6 +8,6 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# 실제 일은 worker-lib.ps1에 있다(입구만 이 파일, 권한 허용 목록이 스크립트 이름으로 구분한다).
+# 실제 일은 worker-lib.ps1에 있다(진입점만 이 파일, 권한 허용 목록이 스크립트 이름으로 구분한다).
 . "$PSScriptRoot\worker-lib.ps1"
 Show-WorkerLogs @PSBoundParameters

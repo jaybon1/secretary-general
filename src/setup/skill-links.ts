@@ -17,9 +17,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { SECRETARY_SKILLS_DIR } from '../core/paths.ts';
 
-/** Where the skills really are, relative to the folder (Codex and Antigravity read them here). */
-export const SKILLS_DIR = '.agents/skills';
+/** Where the skills really are, relative to the folder (Codex and Antigravity read them here); kept in core/paths.ts, which core reads without setup. */
+export const SKILLS_DIR = SECRETARY_SKILLS_DIR;
 /** Where Claude Code reads skills: one link to SKILLS_DIR. */
 export const CLAUDE_SKILLS_DIR = '.claude/skills';
 /** The old place of the real skill folders (the secretary up to v8, workspaces before): moved into SKILLS_DIR. */
@@ -32,11 +33,18 @@ export const SKILL_LINK_DIRS = [CLAUDE_SKILLS_DIR, SKILLS_DIR] as const;
  * carries them.
  */
 export const SKILL_GITIGNORE_LINES = [
-  '# 스킬 연결(비서가 만든다, PC마다 다르다): .claude/skills는 .agents/skills로, .agents/skills/common-*는 공통 스킬(workspaces/_skills)로 가는 연결, .agents/skills.json은 Antigravity용 공통 스킬 목록(절대 경로)',
+  '# 스킬 링크(비서가 만든다, PC마다 다르다): .claude/skills는 .agents/skills로, .agents/skills/common-*는 공통 스킬(workspaces/_skills)로 가는 링크(정션), .agents/skills.json은 Antigravity용 공통 스킬 목록(절대 경로)',
   `/${CLAUDE_SKILLS_DIR}`,
   `/${SKILLS_DIR}/common-*`,
   `/${SKILLS_DIR}.json`,
 ];
+/**
+ * How the header line SKILL_GITIGNORE_LINES[0] began until 2026-11-11 (it said 연결 for the links): put right in place, in
+ * the secretary's and every workspace's .gitignore. Matched by its start, since the line had more than one wording (the
+ * workspaces of this PC carry a shorter one, from before the Antigravity list was added).
+ */
+const OLD_GITIGNORE_HEADER = '# 스킬 연결('; // legacy-name: skill-gitignore-header
+const isOldHeader = (line: string) => line.trim().startsWith(OLD_GITIGNORE_HEADER);
 /** Lines of the old layout's .gitignore block, taken out when the new lines go in. */
 const OLD_GITIGNORE_LINES = [ // legacy-name: old-skills-layout
   '# 공통 스킬(workspaces/_skills)로 가는 연결(비서가 common-skills.json대로 만든다, PC마다 다르다)',
@@ -230,7 +238,11 @@ export function skillLayout(root: string): SkillLayout {
   } else r.claude = 'file';
 
   const lines = ignoreLines(root);
-  r.ignore = !lines || !SKILL_GITIGNORE_LINES.slice(1).every((l) => hasLine(lines, l)) || OLD_GITIGNORE_LINES.slice(1).some((l) => lines.includes(l));
+  r.ignore =
+    !lines ||
+    !SKILL_GITIGNORE_LINES.slice(1).every((l) => hasLine(lines, l)) ||
+    OLD_GITIGNORE_LINES.slice(1).some((l) => lines.includes(l)) ||
+    lines.some(isOldHeader);
   return r;
 }
 
@@ -240,16 +252,16 @@ export function skillLinkProblems(r: SkillLayout): string[] {
   const add = (label: string, xs: string[]) => {
     if (xs.length) out.push(`${label} ${xs.join(', ')}`);
   };
-  if (r.claude === 'missing') out.push(`연결 없음: ${CLAUDE_SKILLS_DIR}`);
+  if (r.claude === 'missing') out.push(`링크 없음: ${CLAUDE_SKILLS_DIR}`);
   if (r.claude === 'wrong') out.push(`다른 곳을 가리킴: ${CLAUDE_SKILLS_DIR}${r.claudeTarget ? `(→ ${r.claudeTarget})` : '(끊김)'}`);
-  if (r.claude === 'folder') out.push(`연결 대신 실제 폴더(옛 구조): ${CLAUDE_SKILLS_DIR}`);
-  if (r.claude === 'file') out.push(`연결 대신 파일: ${CLAUDE_SKILLS_DIR}`);
-  add('옛 자리에서 옮길 것:', r.move.map((m) => m.from));
+  if (r.claude === 'folder') out.push(`링크 대신 실제 폴더(옛 구조): ${CLAUDE_SKILLS_DIR}`);
+  if (r.claude === 'file') out.push(`링크 대신 파일: ${CLAUDE_SKILLS_DIR}`);
+  add('옛 위치에서 옮길 것:', r.move.map((m) => m.from));
   // An old skills/ left with nothing to move (only the old README, or empty): its clearing is the whole fix.
-  if (!r.move.length) add('옛 자리에서 지울 것:', r.clear);
-  add('옛 구조의 연결:', r.cut);
+  if (!r.move.length) add('옛 위치에서 지울 것:', r.clear);
+  add('옛 구조의 링크:', r.cut);
   add('같은 이름이 이미 있어 옮기지 않음(지우지 않음):', r.kept);
-  if (r.ignore) out.push('.gitignore에 스킬 연결 줄 없음');
+  if (r.ignore) out.push('.gitignore에 스킬 링크 줄 없음(또는 옛 줄)');
   return out;
 }
 
@@ -298,11 +310,14 @@ function moveEntry(from: string, to: string): void {
   fs.renameSync(from, to);
 }
 
-/** Adds the link lines to .gitignore (taking out the old block's), keeping the rest. Returns whether it changed. */
+/** Adds the link lines to .gitignore (taking out the old block's, and putting an old header right in place), keeping the rest. Returns whether it changed. */
 export function fixSkillIgnore(root: string): boolean {
   const file = path.join(root, '.gitignore');
   const old = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const kept = old.split(/\r?\n/).filter((l) => !OLD_GITIGNORE_LINES.includes(l.trim()));
+  const kept = old
+    .split(/\r?\n/)
+    .filter((l) => !OLD_GITIGNORE_LINES.includes(l.trim()))
+    .map((l) => (isOldHeader(l) ? SKILL_GITIGNORE_LINES[0] : l));
   while (kept.length && kept.at(-1)!.trim() === '') kept.pop();
   const trimmed = kept.map((k) => k.trim());
   const missing = SKILL_GITIGNORE_LINES.slice(1).filter((l) => !hasLine(trimmed, l));
@@ -370,12 +385,12 @@ export function fixSkillLinks(root: string, { dryRun = false } = {}): SkillLinkF
 }
 
 /** The fix as lines for the command line (`node src/cli.ts skill-links`). */
-export function formatSkillLinkFix(fix: SkillLinkFix, dryRun: boolean, label = '스킬 연결'): string[] {
+export function formatSkillLinkFix(fix: SkillLinkFix, dryRun: boolean, label = '스킬 링크'): string[] {
   const verb = (done: string, plan: string) => (dryRun ? plan : done);
   const lines = [
     ...fix.moved.map((m) => `${verb('옮김', '옮길 것')}: ${m}`),
-    ...fix.removed.map((r) => `${verb('지움', '지울 것')}(옛 구조의 연결·빈 자리): ${r}`),
-    ...fix.made.map((r) => (r === '.gitignore' ? `${verb('고침', '고칠 것')}: .gitignore(스킬 연결 줄)` : `${verb('만듦', '만들 것')}: ${r} → ${SKILLS_DIR}`)),
+    ...fix.removed.map((r) => `${verb('지움', '지울 것')}(옛 구조의 링크·빈 폴더): ${r}`),
+    ...fix.made.map((r) => (r === '.gitignore' ? `${verb('고침', '고칠 것')}: .gitignore(스킬 링크 줄)` : `${verb('만듦', '만들 것')}: ${r} → ${SKILLS_DIR}`)),
     ...fix.remade.map((r) => `${verb('다시 만듦', '다시 만들 것')}(다른 곳을 가리켰음): ${r} → ${SKILLS_DIR}`),
     ...fix.kept.map((r) => `그대로 둠(같은 이름이 이미 있거나 실제 폴더·파일이라 지우지 않는다): ${r}`),
     ...fix.failed.map((f) => `실패: ${f.rel} (${f.error})`),

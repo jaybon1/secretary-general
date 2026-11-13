@@ -126,6 +126,14 @@
     "test/usage.test.ts": "test/subscription-routing.test.ts",
     "test/worker-guard.test.ts": "test/worker-folder-guard.test.ts"
   },
+  "v0.11.0": {
+    "src/mcp/big-work-tools.ts": "src/mcp/main-agenda-tools.ts",
+    "src/setup/features.ts": "src/core/features.ts",
+    "src/setup/secretary-id.ts": "src/core/secretary-id.ts",
+    "src/store/big-work.ts": "src/store/main-agenda.ts",
+    "src/upgrade/big-work-move.ts": "src/upgrade/main-agenda-move.ts",
+    "test/big-work.test.ts": "test/main-agenda.test.ts"
+  },
   "scheduledTasks": {
     "v0.10.0": {
       "Secretary ntfy": "Secretary ntfy Server"

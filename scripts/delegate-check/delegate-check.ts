@@ -1,21 +1,69 @@
-// 위임 앞뒤 대조(기능 'mistake-guards'). 비서 폴더 밖에서는 입구 bin/delegate-check.mjs로 부른다.
+// 위임 앞뒤 대조(기능 'mistake-guards'). 비서 폴더 밖에서는 진입점 bin/delegate-check.mjs로 부른다.
 //   node bin/delegate-check.mjs brief <지시 파일> --tag <태그> [--tag <태그>]... [--query <말>] [--db <DB 파일>] [--memories <개수>] [--rules <줄 수>]
 //     지시서(TASK.md나 지시 파일)와 그 공간·업무 태그가 붙은 결정(decision) 기억을 대조해, 지시서에 안 들어간 듯한 결정 가운데
-//     지시서와 낱말이 겹치는(드문 낱말일수록 무겁게) 것을 관련 높은 순으로 위 몇 개(기본 10) 보여 주고, 들어간 듯한 결정을 잇는다.
-//     이어서 지시서가 있는 공간의 스킬(.agents/skills/*/SKILL.md, common-skills.json의 공통 스킬)에서 지시서와 낱말이 겹치는
+//     지시서와 단어가 겹치는(드문 단어일수록 무겁게) 것을 관련 높은 순으로 위 몇 개(기본 10) 보여 주고, 들어간 듯한 결정을 잇는다.
+//     이어서 지시서가 있는 공간의 스킬(.agents/skills/*/SKILL.md, common-skills.json의 공통 스킬)에서 지시서와 단어가 겹치는
 //     규칙 줄을 점수 순으로 위 몇 줄(기본 10) 보여 준다(어긋났는지는 비서가 대조한다).
+//     지시서에 "의도"(사용자가 왜 이 일을 하려는지), "범위 밖"(하지 않을 것), "사용자 원문"(요청한 말 그대로) 칸이 없거나
+//     비었으면 맨 앞에 알린다(TASK.md의 `## 의도` 꼴 제목이나 run-job·서브에이전트 지시의 `의도:` 꼴 줄).
 //     기억 DB는 읽기만 한다.
 //   node bin/delegate-check.mjs report <보고 파일> [--root <폴더>]... [--top <결과물 상위 폴더>] [--hours <시간>]
-//     보고의 "지웠다·없다·남지 않았다" 류 주장과 언급된 경로를 실제 파일·폴더와 대조하고, --root 아래 남은 시험·임시 폴더 후보와
+//     보고의 "지웠다·없다·남지 않았다" 류 주장과 언급된 경로를 실제 파일·폴더와 대조하고, --root 아래 남은 테스트·임시 폴더 후보와
 //     결과물 상위 폴더(기본: 비서 폴더의 상위)의 낯선 항목·최근 바뀐 항목을 보여 준다.
 // 둘 다 판단은 하지 않고 대조표만 낸다: 빠진 듯한 결정은 지시서에 넣을지, 어긋난 주장은 업무 세션에 물을지 비서가 정한다.
-// 종료 코드: 0 = 걸린 것 없음, 1 = 걸린 것 있음(지시서와 낱말이 겹치는데 빠진 듯한 결정, 주장과 다른 실제, 없는 경로), 2 = 쓰는 법 오류.
+// 종료 코드: 0 = 걸린 것 없음, 1 = 걸린 것 있음(빈 지시서 칸, 지시서와 단어가 겹치는데 빠진 듯한 결정, 주장과 다른 실제, 없는 경로), 2 = 쓰는 법 오류.
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH, PROJECT_ROOT } from '../../src/core/config.ts';
 import { formatLocal } from '../../src/core/kst-time.ts';
 import { queryTerms, searchTerms } from '../../src/memory/search-terms.ts';
+
+// ---- brief: the parts on what the user wants -------------------------------------------------------------------------
+// A brief without the user's intent, what is out of scope and the user's own words sends the worker off on a retelling
+// (2026-11-13 the user's call). TASK.md has them as headings (workspace/rules-text.ts renderTaskBrief, an
+// empty one says so in parentheses); a run-job's or subagent's instruction as "의도: …" lines or headings.
+
+export const BRIEF_PARTS: Array<{ name: string; head: RegExp }> = [
+  { name: '의도', head: /^\s*(?:#{1,4}\s*|[-*]\s*|\*\*)?의도\**\s*(?:[:：]|$|\()/ },
+  { name: '범위 밖', head: /^\s*(?:#{1,4}\s*|[-*]\s*|\*\*)?범위\s*밖[^:\n]{0,20}?\**\s*(?:[:：]|$)/ },
+  { name: '사용자 원문', head: /^\s*(?:#{1,4}\s*|[-*]\s*|\*\*)?사용자\s*원문[^:\n]{0,30}?\**\s*(?:[:：]|$)/ },
+];
+/** What renderTaskBrief writes in a part the secretary left empty. */
+const LEFT_EMPTY = /^\(비서가 적지 않음/;
+
+/** The parts a brief lacks or leaves empty: no line for it, or nothing under it before the next heading. */
+export function emptyBriefParts(brief: string): string[] {
+  const lines = brief.split(/\r?\n/);
+  const out: string[] = [];
+  for (const part of BRIEF_PARTS) {
+    const at = lines.findIndex((l) => part.head.test(l));
+    if (at < 0) {
+      out.push(part.name);
+      continue;
+    }
+    // Words on the line itself after the colon ("의도: …"), else the lines under it up to the next heading or part.
+    const same = lines[at].replace(part.head, '').replace(/\*\*/g, '').trim();
+    const below: string[] = [];
+    for (const l of lines.slice(at + 1)) {
+      if (/^\s*#{1,4}\s/.test(l) || BRIEF_PARTS.some((p) => p.head.test(l))) break;
+      if (l.trim()) below.push(l.trim());
+    }
+    const body = [same, ...below].filter(Boolean);
+    if (!body.length || body.every((b) => LEFT_EMPTY.test(b))) out.push(part.name);
+  }
+  return out;
+}
+
+export function briefPartsReport(brief: string): { text: string; empty: string[] } {
+  const empty = emptyBriefParts(brief);
+  return {
+    empty,
+    text: empty.length
+      ? `지시서 칸 빠짐: ${empty.join(', ')}. 의도(사용자가 왜 이 일을 하려는지, 결과를 어디에 쓰려는지), 범위 밖(이번에 하지 않을 것), 사용자 원문(요청한 말 그대로와 대화 #번호)을 채워 넘긴다. 모르면 사용자에게 먼저 묻는다.`
+      : '지시서 칸: 의도·범위 밖·사용자 원문 있음',
+  };
+}
 
 // ---- brief ----------------------------------------------------------------------------------------------------------
 
@@ -148,7 +196,7 @@ export function briefReport(briefFile: string, ranked: RankedCoverage[], tags: s
   const inBrief = ranked.filter((c) => c.covered >= LEFT_OUT_BELOW);
   const lines = [
     `지시서 대조: ${briefFile}`,
-    `대조한 결정 기억 ${ranked.length}개(태그: ${tags.join(', ') || '없음'}). 지시서에 안 들어간 듯 ${left.length}개 중 지시서와 낱말이 겹치는 것 ${related.length}개, 관련 높은 위 ${shown.length}개(최대 ${top}, --memories로 바꿈):`,
+    `대조한 결정 기억 ${ranked.length}개(태그: ${tags.join(', ') || '없음'}). 지시서에 안 들어간 듯 ${left.length}개 중 지시서와 단어가 겹치는 것 ${related.length}개, 관련 높은 위 ${shown.length}개(최대 ${top}, --memories로 바꿈):`,
   ];
   for (const c of shown) lines.push(decisionLine(c, '빠진 듯'));
   if (!shown.length && ranked.length) lines.push('(지시서와 겹치는 빠진 결정 없음)');
@@ -315,7 +363,7 @@ export function skillRulesFor(brief: string, files: Array<{ skill: string; file:
 
 export function rulesReport(space: string | null, files: number, rules: SkillRule[], top: number): string {
   if (!space) return '공간 스킬 규칙: 지시서 위쪽 폴더에서 공간(AGENTS.md와 .agents/skills가 있는 곳)을 못 찾음. 그 공간 스킬을 직접 연다.';
-  const lines = [`공간 스킬 규칙(지시서와 맞는지 확인): ${space}의 스킬 ${files}개에서 지시서와 낱말이 겹치는 줄 위 ${rules.length}개(최대 ${top}, --rules로 바꿈)`];
+  const lines = [`공간 스킬 규칙(지시서와 맞는지 확인): ${space}의 스킬 ${files}개에서 지시서와 단어가 겹치는 줄 위 ${rules.length}개(최대 ${top}, --rules로 바꿈)`];
   for (const r of rules) {
     lines.push(`- [${r.skill} ${path.basename(path.dirname(r.file))}/SKILL.md:${r.line}] ${r.text.length > 300 ? `${r.text.slice(0, 300)}…` : r.text}`);
     lines.push(`    겹친 말: ${r.shared.slice(0, 8).join(', ')}`);
@@ -419,7 +467,7 @@ export function reportCheck(reportText: string, opts: { reportFile: string; root
     if (path.isAbsolute(p) && !fs.existsSync(p)) findings.push({ kind: 'missing-path', text: `보고에 적힌 경로가 없음: ${p}` });
     else if (!path.isAbsolute(p) && /[\\/]/.test(p) && !candidates.some((c) => fs.existsSync(c))) findings.push({ kind: 'missing-path', text: `보고에 적힌 경로를 못 찾음(상대 경로, --root 기준): ${p}` });
   }
-  for (const root of opts.roots) for (const f of leftoverFolders(root)) findings.push({ kind: 'leftover', text: `남은 시험·임시 폴더 후보: ${f}` });
+  for (const root of opts.roots) for (const f of leftoverFolders(root)) findings.push({ kind: 'leftover', text: `남은 테스트·임시 폴더 후보: ${f}` });
   let top: { unknown: string[]; recent: string[] } | null = null;
   if (opts.top) {
     top = topReport(opts.top, opts.hours);
@@ -466,6 +514,7 @@ export function main(argv: string[], out: (s: string) => void = console.log): nu
       return 2;
     }
     const brief = fs.readFileSync(pos[0], 'utf8');
+    const parts = briefPartsReport(brief);
     const dbFile = multi.db?.[0] ?? DB_PATH;
     if (!fs.existsSync(dbFile)) {
       out(`기억 DB가 없음: ${dbFile}`);
@@ -481,13 +530,15 @@ export function main(argv: string[], out: (s: string) => void = console.log): nu
       const decisions = decisionsFor(db, tags, multi.query?.join(' '));
       const ranked = rankCoverage(brief, briefCoverage(brief, decisions), otherMemories(db, decisions));
       const r = briefReport(pos[0], ranked, tags, count(multi.memories?.[0], MEMORIES_SHOWN));
+      out(parts.text);
+      out('');
       out(r.text);
       const shown = count(multi.rules?.[0], RULES_SHOWN);
       const space = findSpaceRoot(pos[0]);
       const files = space ? spaceSkillFiles(space) : [];
       out('');
       out(rulesReport(space, files.length, skillRulesFor(brief, files, shown), shown));
-      return r.leftOut ? 1 : 0;
+      return r.leftOut || parts.empty.length ? 1 : 0;
     } finally {
       db.close();
     }

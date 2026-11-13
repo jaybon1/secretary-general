@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { callKind, callUnit, commandHead, runRepeatHook } from '../src/mistake-guards/repeat-hook.ts';
 import { DEFAULT_REPEAT_LIMIT, repeatLimit } from '../src/mistake-guards/mistake-guard-settings.ts';
-import { readFeatures } from '../src/setup/features.ts';
+import { readFeatures } from '../src/core/features.ts';
 import { tempDir } from './helpers.ts';
 
 test('a shell command is known by its program and its subcommand or script', () => {
@@ -88,7 +88,7 @@ test('counted within a turn: told once at the limit, again only in a new turn; o
   assert.equal(hook(), '');
   t.call('Bash', { command: 'ego-browser open https://mail.example.com/3' });
   const note = hook();
-  assert.match(note, /^\[되풀이 점검\] 같은 조작\(Bash: ego-browser open\)을 이 턴에서 3번 되풀이 중\. 도구·스크립트로 한꺼번에 처리할 수 있는지 따져 보고, 남은 건수와 예상 시간/);
+  assert.match(note, /^\[반복 작업 알림\] 같은 조작\(Bash: ego-browser open\)을 이 턴에서 3번 되풀이 중\. 도구·스크립트로 한꺼번에 처리할 수 있는지 따져 보고, 남은 건수와 예상 시간/);
   t.call('Bash', { command: 'ego-browser open https://mail.example.com/4' });
   assert.equal(hook(), '', 'once per kind in a turn');
   // A tool result is not a new turn; a new prompt is.

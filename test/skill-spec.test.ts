@@ -24,8 +24,8 @@ test('a skill against the format: name not the folder, bad name, no description,
   assert.deepEqual(skillSpecProblems(good), []);
   const bad = skill(dir, 'Bad', '---\nname: Other_X\nfoo: 1\n---\n' + 'x\n'.repeat(600), { 'notes.md': '' });
   const p = skillSpecProblems(bad).join(' / ');
-  for (const w of ['폴더 이름과 다름', '64자 꼴', 'description 없음', '사양에 없는 머리말 키: foo', '줄(500줄 미만', 'notes.md']) assert.ok(p.includes(w), `${w}: ${p}`);
-  assert.deepEqual(skillSpecProblems(skill(dir, 'no-fm', '# x')), ['머리말(--- … ---) 없음']);
+  for (const w of ['폴더 이름과 다름', '64자 형식', 'description 없음', '사양에 없는 머리말 키: foo', '줄(500줄 미만', 'notes.md']) assert.ok(p.includes(w), `${w}: ${p}`);
+  assert.deepEqual(skillSpecProblems(skill(dir, 'no-fm', '# x')), ['머리말(`--- … ---`) 없음']);
   const own = skill(dir, 'common-x', '---\nname: common-x\ndescription: d\n---\n');
   assert.deepEqual(skillSpecProblems(own), []);
   assert.match(skillSpecProblems(own, { own: true }).join(), /common-/);

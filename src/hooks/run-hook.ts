@@ -4,7 +4,7 @@
  *     folder once (core/state-dir-migrate.ts), move this PC's renamed files once (core/local-settings.ts), inject the profile and status (session-start.ts) and the install check's notice
  *     (setup/setup-check.ts).
  *   - prompt: "비서 대화 삭제" and its approval code (log/purge.ts) first; otherwise every notice (prompt-notices.ts).
- *   - stop: check the answer (guards/stop-guard.ts: sent back once with the reason, to be written again whole or, when only
+ *   - stop: check the answer (mistake-guards/stop-guard.ts: sent back once with the reason, to be written again whole or, when only
  *     lines are missing, to have them added after it; or let end), then log the turn (an answer with added lines as one row), link
  *     the memories it saved, read the open questions from the answer, record what the checks caught (mistakes), send the answer's first line to the phone
  *     (phone-push/ntfy.ts, only when the turn really ends).
@@ -15,7 +15,8 @@ import { DB_PATH, PROJECT_ROOT } from '../core/config.ts';
 import { moveRenamedLocalFiles } from '../core/local-settings.ts';
 import { ensureStateDir } from '../core/state-dir-migrate.ts';
 import { estimateTokens } from '../core/token-estimate.ts';
-import { recordGuardMistakes, stopGuard, type StopVerdict } from '../mistake-guards/stop-guard.ts';
+import { addGuardWarnings, recordGuardMistakes, stopGuard, type StopVerdict } from '../mistake-guards/stop-guard.ts';
+import { checkPendingQuotes, missingQuoteWarning } from '../memory/source-quote.ts';
 import { catchUpTranscripts } from '../log/catch-up.ts';
 import { ingestTranscript } from '../log/ingest-transcript.ts';
 import { purgeHook } from '../log/purge.ts';
@@ -24,6 +25,7 @@ import { sessionSetup } from '../setup/setup-check.ts';
 import { openDb } from '../store/schema.ts';
 import { Store } from '../store/store.ts';
 import { promptNotices } from './prompt-notices.ts';
+import { allowServerStart } from '../semantic-search/client.ts';
 import { sessionStartContext } from './session-start.ts';
 
 interface HookInput {
@@ -39,7 +41,7 @@ interface HookInput {
   agent_id?: string;
 }
 
-/** The answer checks (guards/stop-guard.ts); a failure in them never keeps the turn from being logged. */
+/** The answer checks (mistake-guards/stop-guard.ts); a failure in them never keeps the turn from being logged. */
 function guardedStop(store: Store, input: HookInput): StopVerdict {
   try {
     return stopGuard(store, input);
@@ -99,6 +101,8 @@ export async function runHook(name: string): Promise<void> {
           emitContext('UserPromptSubmit', purge.context);
           break;
         }
+        // The secretary's prompt hook is one of the callers that start the semantic-search server again (client.ts).
+        allowServerStart();
         emitContext('UserPromptSubmit', await promptNotices({ store, prompt: input.prompt, sessionId: input.session_id, transcriptPath: input.transcript_path }));
         break;
       }
@@ -117,6 +121,15 @@ export async function runHook(name: string): Promise<void> {
         if (input.transcript_path && fs.existsSync(input.transcript_path)) ingestTranscript(store, input.transcript_path, whole);
         if (input.session_id) {
           store.linkTurnMemories(input.session_id);
+          // Decisions saved this turn now have their row: their quotes of the user's words are looked up, and one found in
+          // no user message is told on the next prompt (memory/source-quote.ts).
+          try {
+            const missing = checkPendingQuotes(store);
+            if (missing.length) addGuardWarnings(store, input.session_id, [missingQuoteWarning(missing)]);
+          } catch (err) {
+            process.stderr.write(`[secretary] quote check failed: ${(err as Error).message}
+`);
+          }
           updateOpenQuestions(store, input.session_id);
           // What the checks caught goes into the mistakes record now that the turn's rows are logged (their ids are the evidence).
           try {

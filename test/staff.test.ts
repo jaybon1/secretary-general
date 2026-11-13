@@ -44,9 +44,9 @@ test('every worker file in src/staff is listed and right, its instructions are t
   const { name: _b, ...bFile } = b;
   const { name: _c, ...cFile } = c;
   assert.deepEqual(staffConfigProblems(bFile), []);
-  assert.deepEqual(staffConfigProblems({ ...bFile, instructions: '', retryAfterFailMinutes: 0 }), ['instructions는 파일 경로(없으면 칸을 뺀다)', 'retryAfterFailMinutes는 양수(없으면 칸을 뺀다)']);
+  assert.deepEqual(staffConfigProblems({ ...bFile, instructions: '', retryAfterFailMinutes: 0 }), ['instructions는 파일 경로(없으면 키를 뺀다)', 'retryAfterFailMinutes는 양수(없으면 키를 뺀다)']);
   // Without it: a folder written in the file drifts from the one the code and run-job use (_staff/<name>).
-  assert.deepEqual(staffConfigProblems({ ...cFile, tools: ['Bad Tool'], timeoutMinutes: 0, folder: '_consolidate' }), ['folder 칸은 쓰지 않음(폴더는 _staff/<담당자 이름>)', 'tools는 도구 이름 목록', 'timeoutMinutes는 양수']);
+  assert.deepEqual(staffConfigProblems({ ...cFile, tools: ['Bad Tool'], timeoutMinutes: 0, folder: '_consolidate' }), ['folder 키는 쓰지 않음(폴더는 _staff/<담당자 이름>)', 'tools는 도구 이름 목록', 'timeoutMinutes는 양수']);
 });
 
 // Without it: the tool list drifts back into a second place (the old run-job -MemoryWrite list copied from the skill).

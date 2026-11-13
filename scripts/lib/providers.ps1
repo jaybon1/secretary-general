@@ -13,8 +13,17 @@ function Get-KeysDir {
   Join-Path (Get-SecretaryHome) 'keys'
 }
 
-function Set-KeyEnv([string]$Name) {
-  $path = Join-Path (Get-KeysDir) "$Name.env"
+# $Pattern(providers.json의 keyFile, 예: anthropic-api-key-*.env)이 있으면 키 폴더에서 그 꼴 파일 하나를 쓴다.
+# 계정이 든 키 파일 이름(키 폴더 README 이름 규칙)을 git에 올라가는 providers.json에 적지 않기 위해서다.
+function Set-KeyEnv([string]$Name, [string]$Pattern) {
+  if ($Pattern) {
+    $found = @(Get-ChildItem -LiteralPath (Get-KeysDir) -Filter $Pattern -File -ErrorAction SilentlyContinue)
+    if ($found.Count -eq 0) { throw "'$Name' 키 파일이 없어요: $(Join-Path (Get-KeysDir) $Pattern)" }
+    if ($found.Count -gt 1) { throw "'$Name' 키 파일이 여러 개예요($(($found | ForEach-Object Name) -join ', ')). 하나만 남겨 주세요." }
+    $path = $found[0].FullName
+  } else {
+    $path = Join-Path (Get-KeysDir) "$Name.env"
+  }
   if (-not (Test-Path $path)) { throw "'$Name' 키 파일이 없어요: $path" }
   foreach ($line in Get-Content -Encoding UTF8 $path) {
     if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$') {
@@ -52,7 +61,7 @@ function Use-Provider([string]$Name) {
       $env:AWS_REGION = $p.region
       Set-KeyEnv $Name
     }
-    'claude-api-key' { Set-KeyEnv $Name }
+    'claude-api-key' { Set-KeyEnv $Name $p.keyFile }
     # Anthropic 호환 게이트웨이. 이 프로세스에만 주소·키를 넣어 이 PC의 구독 로그인은 그대로 둔다.
     'claude-gateway' {
       $env:ANTHROPIC_BASE_URL = $p.base_url
@@ -73,8 +82,22 @@ function Use-Provider([string]$Name) {
     if ($models.sonnet) { $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $models.sonnet }
     if ($models.haiku) { $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $models.haiku }
   }
-  # effort(생각 깊이, low|medium|high|xhigh|max)는 공급자에 기본값을 두고, 스크립트의 -Effort가 있으면 그쪽을 쓴다.
-  [pscustomobject]@{ Name = $Name; Type = $p.type; Models = $models; Effort = $p.effort }
+  # effort(추론 수준, low|medium|high|xhigh|max)는 공급자에 기본값을 두고, 스크립트의 -Effort가 있으면 그쪽을 쓴다.
+  [pscustomobject]@{ Name = $Name; Type = $p.type; Models = $models; Effort = $p.effort; PersonalDataAllowed = (Test-PersonalDataAllowed $p) }
+}
+
+# 개인정보(프로필, 기억, 다른 업무·일정·사람·계정 이야기)를 그 공급자에게 보내도 되는가: providers.json 공급자의
+# personalDataAllowed가 true일 때만이고, 값이 없거나 true가 아니면 안 된다(안전한 쪽). 구독·자기 유료 계정은 true,
+# 외부 중개 회사(게이트웨이)·무료 플랜·무료 키·연결 자리만 있는 것은 false다. 중개 회사는 믿기 어려울 수 있고,
+# 무료 플랜은 보낸 글을 학습 데이터로 쓸 수 있기 때문이다(2026-11-13 결정). 사용량·로그인·자동 판단 모드는 이 값이 아니라 type으로 가른다.
+# JSON의 true(불 값)만 본다: PowerShell은 글자 "true"도 -eq $true로 같다고 보므로 형을 함께 확인한다.
+function Test-PersonalDataAllowed($Provider) { $null -ne $Provider -and $Provider.personalDataAllowed -is [bool] -and $Provider.personalDataAllowed }
+
+# 비서 폴더에서 돌면 프로필·기억 주입 훅과 기억 MCP가 붙어 개인정보가 공급자에게 넘어가므로, 개인정보를 보내지 않는 공급자는 막는다(run-job.ps1).
+function Assert-SecretaryFolderProvider($Info, [string]$Folder, [string]$Root = $SecretaryRoot) {
+  if ($Info.PersonalDataAllowed) { return }
+  if ((Resolve-Path $Folder).Path.TrimEnd('\') -ne (Resolve-Path $Root).Path.TrimEnd('\')) { return }
+  throw "개인정보를 보내지 않는 공급자($($Info.Name), providers.json의 personalDataAllowed가 true가 아님)는 비서 폴더에서 돌리지 않아요. -Folder를 빼거나(workspaces\_run-job-home) 작업 공간을 주세요."
 }
 
 # --model에 넘길 이름. 공급자 models에 같은 이름(예: fable)이 있으면 그 모델 이름으로 바꾼다.
@@ -104,7 +127,7 @@ function Get-AccountConfigDirs {
 # TS 쪽 짝(같은 규칙): src/usage/usage-files.ts usageKey, src/core/provider-accounts.ts providerLoginFile·loginAccount.
 
 # 공급자의 로그인 파일(.claude.json). 구독 공급자만: 키 파일의 CLAUDE_CONFIG_DIR, 없으면 지금 프로세스가 그 공급자로 돌 때(SECRETARY_PROVIDER)
-# 지금 CLAUDE_CONFIG_DIR, 없으면 기본 로그인(사용자 폴더, 시험은 SECRETARY_TEST_LOGIN_HOME으로 임시 폴더). Use-Provider가 띄우는 것과 같은 폴더다.
+# 지금 CLAUDE_CONFIG_DIR, 없으면 기본 로그인(사용자 폴더, 테스트는 SECRETARY_TEST_LOGIN_HOME으로 임시 폴더). Use-Provider가 띄우는 것과 같은 폴더다.
 # -Clean은 부른 쪽 환경(CLAUDE_CONFIG_DIR·SECRETARY_PROVIDER)을 보지 않는다: Clear-HostClaudeEnv + Use-Provider $Name 뒤에 읽는 것과 같다
 # (키 파일의 CLAUDE_CONFIG_DIR, 없으면 기본 로그인). 다른 공급자들의 지금 이름을 셀 때 쓴다(Remove-LegacyUsageFiles).
 function Get-ProviderLoginFile([string]$Name, [switch]$Clean) {
@@ -146,7 +169,7 @@ function Get-UsageKey([string]$Name, [switch]$Clean) {
 # 공급자의 사용량 기록 파일(-Ext refresh면 조회 시작 표시).
 function Get-UsageFile([string]$Name, [string]$Ext = 'json') { Join-Path (Get-UsageDir) "$(Get-UsageKey $Name).$Ext" }
 
-# 지금 이름($Key)에서 거슬러 본 옛 이름: 계정 칸이 없던 "<공급자>"와, 계정 앞에 공급자 이름이 붙던 "<공급자>-<계정>"(예: subscription-b-kim2).
+# 지금 이름($Key)에서 거슬러 본 옛 이름: 계정 부분이 없던 "<공급자>"와, 계정 앞에 공급자 이름이 붙던 "<공급자>-<계정>"(예: subscription-b-kim2).
 # 지금 이름이 공급자 이름 그대로면(계정을 못 읽음) 없다. TS 쪽 짝: src/usage/usage-files.ts legacyUsageKeys.
 function Get-LegacyUsageKeys([string]$Name, [string]$Key) { # legacy-name: usage-key-no-account
   $plain = $Name -replace '[^A-Za-z0-9_.-]', '_'

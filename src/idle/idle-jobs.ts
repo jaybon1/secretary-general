@@ -4,7 +4,8 @@
  * runs `node src/cli.ts idle-jobs` every 5 minutes; it lives apart from every chat session
  * and the secretary server, so /clear, more talk or a server restart do not stop it.
  *
- *   - situation board: rewritten once talk has paused BOARD_IDLE_MS and something was said since.
+ *   - situation board: rewritten once talk has paused BOARD_IDLE_MS and something was said since, or its headings
+ *     renamed (no model) when the format's headings changed and nothing was said since.
  *   - memory consolidation: run once CONSOLIDATE_MIN entries are waiting and talk has paused
  *     CONSOLIDATE_IDLE_MS. The run is the staff member memory-consolidation's (memory/consolidate-run.ts, the same one /consolidate
  *     starts): its report waits in the DB; the next answer carries one line asking the user to say "기억 정리 확인", and
@@ -13,7 +14,7 @@
  * Each tick checks the DB only (no model) unless a job is due. A job records itself in meta while it
  * runs, so overlapping ticks (a consolidation can outlast 5 minutes) do not start it twice.
  */
-import { boardBehind, boardJobRunning, runBoardUpdate } from '../session-continuity/situation-board.ts';
+import { boardBehind, boardHeadingsStale, boardJobRunning, runBoardUpdate } from '../session-continuity/situation-board.ts';
 import { CONSOLIDATE_MARK_PREFIXES, type ConsolidateReport } from '../memory/consolidate-notice.ts';
 import { consolidateFailedRecently, consolidateRunning, runConsolidate } from '../memory/consolidate-run.ts';
 import { NUDGED_PREFIX as CONTEXT_NUDGED_PREFIX } from '../hooks/context-size-nudge.ts';
@@ -45,7 +46,7 @@ export async function runIdleJobs(store: Store, deps: IdleDeps = {}): Promise<st
   const idle = now - lastActivityMs(store, deps.dirs);
   const did: string[] = [];
   const idleMin = Math.floor(idle / 60_000);
-  if (idle >= BOARD_IDLE_MS && boardBehind(store) && !boardJobRunning(store)) {
+  if (idle >= BOARD_IDLE_MS && (boardBehind(store) || boardHeadingsStale(store)) && !boardJobRunning(store)) {
     await (deps.updateBoard ?? runBoardUpdate)(store);
     did.push('board');
   }

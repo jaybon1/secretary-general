@@ -85,7 +85,7 @@ if ($Action -in 'show', 'hide') {
   if (-not $window) { Write-Host "계정 $account 서버 창이 떠 있지 않아요."; exit 1 }
   $hwnd = Get-ConsoleWindow $window.ProcessId
   if (-not $hwnd) { Write-Host "계정 $account 서버 창(PID $($window.ProcessId))을 찾지 못했어요. 보이게 하려면 -Action restart -Visible로 다시 켜세요."; exit 1 }
-  # SW_RESTORE(9)는 숨긴 창과 최소화한 창을 모두 펼쳐 보인다. SW_HIDE(0).
+  # SW_RESTORE(9)는 숨긴 창과 최소화한 창을 모두 다시 보이게 한다. SW_HIDE(0).
   $show = $Action -eq 'show'
   [void][Secretary.Window]::ShowWindow($hwnd, $(if ($show) { 9 } else { 0 }))
   if ([Secretary.Window]::IsWindowVisible($hwnd) -ne $show) { Write-Host "계정 $account 서버 창(PID $($window.ProcessId))이 바뀌지 않았어요."; exit 1 }

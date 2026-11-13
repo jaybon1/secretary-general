@@ -49,6 +49,7 @@ function rewoundTurn(memoryId: number): { kept: string[]; old: string[] } {
   return { kept, old };
 }
 
+// [늘 남김] 없으면 놓치는 실수: 되감아 버린 대화와 거기서 저장한 기억이 그대로 남거나, 버리지 않은 대화까지 지운다(대화 지우기).
 test('a rewound branch: its rows go, its memories are invalidated and reported once, the rest stays', () => {
   const s = tempStore();
   const kept = s.remember({ kind: 'fact', content: '앞 대화의 기억' }).id;
@@ -59,7 +60,7 @@ test('a rewound branch: its rows go, its memories are invalidated and reported o
   const file = write([...first, ...old]);
   ingestTranscript(s, file);
   s.linkTurnMemories('s1');
-  s.setBigWork({ name: '시험 일', state: '진행 중', sourceLogId: s.logInfoByUuids(['p2'])[0].id });
+  s.setMainAgenda({ name: '시험 일', state: '진행 중', sourceLogId: s.logInfoByUuids(['p2'])[0].id });
   assert.equal(s.stats().logEntries, 6);
 
   // The user rewinds to a1 and asks again: a sibling of p2 under the same stop line.
@@ -73,7 +74,7 @@ test('a rewound branch: its rows go, its memories are invalidated and reported o
   assert.equal(s.searchLog('버려질', { limit: 5 }).length, 0, 'search index cleaned too');
   assert.equal(s.getMemory(doomed)?.invalid_reason, REWIND_REASON);
   assert.equal(s.getMemory(kept)?.valid_to, null);
-  assert.equal(s.bigWork()[0].source_log_id, null);
+  assert.equal(s.mainAgenda()[0].source_log_id, null);
 
   const notice = rewindNotice(s);
   assert.match(notice, new RegExp(`<secretary-rewind>.*#${doomed}[^0-9]`));
@@ -145,6 +146,7 @@ test('prompt hook right after a rewind: only the marker is written, and it is en
   assert.equal(rewindNotice(s, file), '');
 });
 
+// [늘 남김] 없으면 놓치는 실수: 되감기가 같은 때 다른 세션에서 저장한 기억까지 무효로 만든다(자료 유실).
 test('a memory saved in another session at the same time is not invalidated', () => {
   const s = tempStore();
   const { kept, old } = rewoundTurn(999);
@@ -182,6 +184,7 @@ test('dry run and keep-memories', () => {
   assert.equal(s.getMemory(doomed)?.valid_to, null);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 압축·동시 도구 호출·서브에이전트 가지를 되감기로 잘못 읽어 멀쩡한 대화를 지운다(자료 유실).
 test('compaction, parallel tool calls and sidechains are not rewinds', () => {
   resetClock();
   const lines = [

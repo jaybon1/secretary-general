@@ -1,7 +1,7 @@
 /**
  * What the prompt hook (cli hook prompt) adds to each question, in the order it appears in the context.
  * Each feature puts its notice here: one function that returns '' when it has nothing to say. Which feature
- * a notice belongs to is in features.json; notices of a feature turned off there are not run (setup/features.ts).
+ * a notice belongs to is in features.json; notices of a feature turned off there are not run (core/features.ts).
  * The board runs before the rest (it catches up other sessions' transcripts and may wait for a
  * rewrite), so the others see the conversation it logged.
  */
@@ -14,7 +14,7 @@ import { labelNotice } from '../mistake-guards/question-labels.ts';
 import { guardWarnNotice } from '../mistake-guards/stop-guard.ts';
 import { purgeNotice } from '../log/purge.ts';
 import { rewindNotice } from '../log/rewind.ts';
-import { disabledItems } from '../setup/features.ts';
+import { disabledItems } from '../core/features.ts';
 import { consolidateNotice, consolidateNudge } from '../memory/consolidate-notice.ts';
 import { setupReminder } from '../setup/setup-check.ts';
 import type { Store } from '../store/store.ts';

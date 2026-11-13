@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import { tempDir, testStore, write, writeFiles } from './helpers.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { entryPath } from '../src/core/paths.ts';
-import { briefCoverage, briefReport, decisionBody, decisionsFor, findSpaceRoot, leftoverFolders, main, otherMemories, pathsIn, rankCoverage, reportCheck, skillRulesFor, spaceSkillFiles, withoutFolders } from '../scripts/delegate-check/delegate-check.ts';
+import { ASSUMED_REPORT, renderCharter, renderTaskBrief } from '../src/workspace/rules-text.ts';
+import { briefPartsReport, emptyBriefParts, briefCoverage, briefReport, decisionBody, decisionsFor, findSpaceRoot, leftoverFolders, main, otherMemories, pathsIn, rankCoverage, reportCheck, skillRulesFor, spaceSkillFiles, withoutFolders } from '../scripts/delegate-check/delegate-check.ts';
 
 test('brief: the decisions of the given tags (and a query), the ones the brief leaves out first', () => {
   const file = path.join(tempDir(), 'd.db');
@@ -76,7 +77,7 @@ test('brief: left-out decisions ranked by the words they share with the brief, o
   assert.equal(main(['brief', task, '--tag', '채널', '--db', file, '--memories', '5'], (s) => out.push(s)), 1);
   assert.match(out.join('\n'), /최대 5, --memories/);
   const other = path.join(tempDir(), 'TASK.md');
-  write(other, '# 블로그 글\n주간 소식 글을 쓴다.');
+  write(other, '# 블로그 글\n주간 소식 글을 쓴다.\n의도: 독자에게 소식 전하기\n범위 밖: 없음\n사용자 원문: "써 줘" (#1)');
   assert.equal(main(['brief', other, '--tag', '채널', '--db', file], () => {}), 0, 'left-out decisions unrelated to the brief are not findings');
 });
 
@@ -123,8 +124,9 @@ test('brief: the space skill rules sharing words with the brief, the backup rule
   const db = path.join(tempDir(), 'd.db');
   testStore(db).db.close();
   const out: string[] = [];
+  fs.appendFileSync(task, '\n의도: 독자에게 소식 전하기\n범위 밖: 없음\n사용자 원문: "써 줘" (#1)\n');
   assert.equal(main(['brief', task, '--tag', '영상', '--db', db, '--rules', '2'], (s) => out.push(s)), 0);
-  assert.match(out.join('\n'), /공간 스킬 규칙\(지시서와 맞는지 확인\): .*cafe-1의 스킬 3개에서 지시서와 낱말이 겹치는 줄 위 2개[^]*\[channel-ops channel-ops\/SKILL\.md:8\] 10\. 공개가 끝난/);
+  assert.match(out.join('\n'), /공간 스킬 규칙\(지시서와 맞는지 확인\): .*cafe-1의 스킬 3개에서 지시서와 단어가 겹치는 줄 위 2개[^]*\[channel-ops channel-ops\/SKILL\.md:8\] 10\. 공개가 끝난/);
   const lone = path.join(tempDir(), 'TASK.md');
   write(lone, '백업한다');
   const out2: string[] = [];
@@ -176,4 +178,20 @@ test('bin/delegate-check.mjs runs the script (usage on a wrong call)', () => {
   assert.match(r.stdout, /^사용:\n {2}node bin\/delegate-check\.mjs brief/);
   const help = execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'scripts', 'delegate-check', 'delegate-check.ts'), 'report', path.join(PROJECT_ROOT, 'package.json'), '--top', tempDir()], { encoding: 'utf8' });
   assert.match(help, /^보고 대조: /);
+});
+
+// 없으면 놓치는 실수: 지시서에 사용자가 왜 이 일을 하려는지(의도), 하지 않을 것, 사용자 말 그대로가 빠져, 받는 쪽이 바꿔 쓴 지시대로 엉뚱한 결과를 가져온다(2026-11-13 사용자 결정, 의도 조사 사례 C).
+test('brief: TASK.md has intent, out of scope and the user\'s words (empty ones say so), and delegate-check tells which are empty; reports ask what was settled without asking', () => {
+  const task = { name: 'a', title: 'T', goal: 'g', doneCriteria: ['x'], proof: ['y'] };
+  assert.deepEqual(emptyBriefParts(renderTaskBrief(task)), ['의도', '범위 밖', '사용자 원문']);
+  const full = renderTaskBrief({ ...task, intent: '다음 주 회의에서 고를 자료', outOfScope: ['push 하지 않음'], userWords: '"비교해 줘" (#900543)' });
+  assert.deepEqual(emptyBriefParts(full), []);
+  assert.match(full, /## 의도\n\n다음 주 회의에서 고를 자료[^]*## 범위 밖 \(하지 않는 것\)\n\n- push 하지 않음[^]*## 사용자 원문\n\n"비교해 줘" \(#900543\)/);
+  // A run-job's or subagent's instruction: "의도: …" lines or headings with their words below.
+  assert.deepEqual(emptyBriefParts('일: 조사\n의도: 사러 가기 전 비교\n범위 밖: 구매\n사용자 원문: "알아봐 줘"'), []);
+  assert.deepEqual(emptyBriefParts('일: 조사\n## 의도\n\n## 범위 밖 (하지 않는 것)\n- 구매'), ['의도', '사용자 원문']);
+  assert.match(briefPartsReport('일: 조사').text, /지시서 칸 빠짐: 의도, 범위 밖, 사용자 원문/);
+  // The end-of-task report asks for what the worker settled without asking.
+  assert.match(ASSUMED_REPORT, /묻지 않고 대신 정한 것·가정/);
+  assert.ok(renderCharter({ kind: "solo", name: "w", title: "W", purpose: "p" } as never).includes(ASSUMED_REPORT));
 });

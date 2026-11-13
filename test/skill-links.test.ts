@@ -30,12 +30,12 @@ test('skills are real folders in .agents/skills; .claude/skills is one link to i
   const root = folder();
   assert.deepEqual(skillNames(root), ['delegate', 'grill']);
   assert.deepEqual(SKILL_LINK_DIRS, ['.claude/skills', '.agents/skills']);
-  assert.deepEqual(skillLinkProblems(skillLayout(root)), ['연결 없음: .claude/skills', '.gitignore에 스킬 연결 줄 없음']);
+  assert.deepEqual(skillLinkProblems(skillLayout(root)), ['링크 없음: .claude/skills', '.gitignore에 스킬 링크 줄 없음(또는 옛 줄)']);
   // --dry-run changes nothing.
   const dry = fixSkillLinks(root, { dryRun: true });
   assert.deepEqual(dry.made, ['.gitignore', '.claude/skills']);
   assert.ok(!exists(root, '.claude'));
-  assert.match(formatSkillLinkFix(dry, true).join('\n'), /만들 것: \.claude\/skills → \.agents\/skills[\s\S]*스킬 연결 고칠 것 2개$/);
+  assert.match(formatSkillLinkFix(dry, true).join('\n'), /만들 것: \.claude\/skills → \.agents\/skills[\s\S]*스킬 링크 고칠 것 2개$/);
   fixSkillLinks(root);
   assert.deepEqual(skillLinkProblems(skillLayout(root)), []);
   assert.ok(isLink(root, '.claude/skills'));
@@ -45,7 +45,26 @@ test('skills are real folders in .agents/skills; .claude/skills is one link to i
   assert.equal(read(root, '.agents/skills/grill/SKILL.md'), '# grill 2');
   assert.match(read(root, '.gitignore'), /^\/\.claude\/skills$/m);
   // Run again: nothing to do.
-  assert.deepEqual(formatSkillLinkFix(fixSkillLinks(root), false), ['스킬 연결: 모두 맞음']);
+  assert.deepEqual(formatSkillLinkFix(fixSkillLinks(root), false), ['스킬 링크: 모두 맞음']);
+});
+
+// 없으면 놓치는 실수: 2026-11-11 전에 만든 비서·공간 .gitignore의 머리 주석 "# 스킬 연결(…)"이 옛 말로 남거나, 고치면서 새 주석을 한 줄 더 넣는다.
+test('an old skill-link header in .gitignore is reported and put right in place, the rest kept', () => {
+  const root = folder();
+  const oldHeader = SKILL_GITIGNORE_LINES[0].replace('# 스킬 링크(', '# 스킬 연결(').replace('가는 링크(정션),', '가는 연결,');
+  const before = ['node_modules/', '', oldHeader, ...SKILL_GITIGNORE_LINES.slice(1), '', '/output/'];
+  fs.writeFileSync(path.join(root, '.gitignore'), `${before.join('\r\n')}\r\n`);
+  assert.ok(skillLayout(root).ignore);
+  assert.ok(fixSkillIgnore(root));
+  assert.equal(read(root, '.gitignore'), `${['node_modules/', '', ...SKILL_GITIGNORE_LINES, '', '/output/'].join('\n')}\n`);
+  assert.ok(!skillLayout(root).ignore);
+  assert.equal(fixSkillIgnore(root), false);
+  // The shorter header older workspaces carry (written before the Antigravity list was added) is put right too.
+  const shortHeader = oldHeader.slice(0, oldHeader.indexOf(', .agents/skills.json'));
+  fs.writeFileSync(path.join(root, '.gitignore'), `${['node_modules/', '', shortHeader, ...SKILL_GITIGNORE_LINES.slice(1)].join('\n')}\n`);
+  assert.ok(skillLayout(root).ignore);
+  assert.ok(fixSkillIgnore(root));
+  assert.equal(read(root, '.gitignore'), `${['node_modules/', '', ...SKILL_GITIGNORE_LINES].join('\n')}\n`);
 });
 
 test('the secretary up to v8: skills/ with per-skill links moves to .agents/skills; links elsewhere move as links', () => {
@@ -65,7 +84,7 @@ test('the secretary up to v8: skills/ with per-skill links moves to .agents/skil
   const r = skillLayout(root);
   assert.equal(r.claude, 'folder');
   assert.deepEqual(r.move.map((m) => m.from).sort(), ['skills/delegate', 'skills/ego-browser', 'skills/grill']);
-  assert.match(skillLinkProblems(r).join(' / '), /연결 대신 실제 폴더\(옛 구조\): \.claude\/skills/);
+  assert.match(skillLinkProblems(r).join(' / '), /링크 대신 실제 폴더\(옛 구조\): \.claude\/skills/);
   const fix = fixSkillLinks(root);
   assert.deepEqual(fix.failed, []);
   assert.deepEqual(fix.kept, []);
@@ -130,7 +149,7 @@ test('a name taken on both sides is left and reported; other moves still happen;
   assert.equal(read(root, '.agents/skills/grill/SKILL.md'), '# grill');
   assert.equal(read(root, '.claude/skills/mine/SKILL.md'), '# mine');
   assert.ok(fs.existsSync(path.join(other, '.agents', 'skills', 'delegate', 'SKILL.md')), 'what the wrong link pointed at is not touched');
-  assert.match(formatSkillLinkFix(fix, false).at(-1)!, /^스킬 연결 고친 것 \d+개, 그대로 둔 것 2개$/);
+  assert.match(formatSkillLinkFix(fix, false).at(-1)!, /^스킬 링크 고친 것 \d+개, 그대로 둔 것 2개$/);
 });
 
 test('a real skill folder in .claude/skills moves in; one whose name is taken keeps .claude/skills a folder', () => {

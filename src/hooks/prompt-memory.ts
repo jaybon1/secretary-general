@@ -6,9 +6,11 @@
 import fs from 'node:fs';
 import { BUDGET } from '../core/config.ts';
 import { estimateTokens } from '../core/token-estimate.ts';
-import { compress, lastAnswer, prevAnswerSearch } from '../memory/prev-answer-search.ts';
+import { compress, lastAnswer, prevAnswerSearch, promptClients } from '../memory/prev-answer-search.ts';
 import { recall } from '../memory/recall.ts';
-import { outageNotice } from '../semantic-search/client.ts';
+import { missNotice, outageNotice, readDown, type SemanticSearch } from '../semantic-search/client.ts';
+import { wordOnly } from '../semantic-search/word-only.ts';
+import { hookNoticeText } from '../core/hook-notice-text.ts';
 import type { Store } from '../store/store.ts';
 import { USER_WORD, userWords, wordsGroup } from '../store/user-title.ts';
 import { TAG } from '../core/names.ts';
@@ -46,18 +48,46 @@ function prevAnswerContext(transcriptPath: string | undefined, prompt: string): 
   }
 }
 
-export async function promptContext(store: Store, prompt: string, sessionId?: string, transcriptPath?: string): Promise<string> {
+/**
+ * The question's semantic search got nothing even after the wait (stopped, out of memory, never up, too slow): the
+ * prompt is not blocked (no model would answer), but the secretary is told to ask first, before answering, whether to
+ * start the server again or go on with word search in this conversation (.agents/hook-notices/semantic-search-misses.md
+ * `ask`, 2026-11-13 the user's call).
+ */
+export function semanticFailedNotice(why: string): string {
+  const text = hookNoticeText('semantic-search-misses', 'ask').replaceAll('{reason}', why);
+  return text ? `<${TAG.semanticSearchServer}>${text}</${TAG.semanticSearchServer}>` : '';
+}
+
+export async function promptContext(
+  store: Store,
+  prompt: string,
+  sessionId?: string,
+  transcriptPath?: string,
+  clients?: (onQuestionMiss: (why: string) => void) => [SemanticSearch, SemanticSearch],
+): Promise<string> {
+  // "단어 검색으로 답해" after such a question: this conversation goes on without the server (semantic-search/word-only.ts).
+  const wordSearchOnly = wordOnly(store, sessionId, prompt);
+  let failed = '';
+  const onQuestionMiss = (why: string) => (failed ||= why);
   const result = await recall(store, prompt, {
     budgetTokens: BUDGET.autoRecall,
     minScore: AUTO_MIN_SCORE,
     summariesFirst: true,
     excludeIds: sessionId ? store.injectedIds(sessionId) : undefined,
-    semantic: prevAnswerSearch(prevAnswerContext(transcriptPath, prompt)),
+    semantic: wordSearchOnly ? null : prevAnswerSearch(prevAnswerContext(transcriptPath, prompt), (clients ?? promptClients)(onQuestionMiss)),
   });
-  // Told once per session per outage, ahead of the memories so the reply can open with it.
-  const notice = sessionId ? outageNotice(sessionId) : '';
+  // A search that failed this time comes first: the secretary asks before answering. Otherwise, told once per session per
+  // outage, ahead of the memories so the reply can open with it; searches the server has not answered for a while are
+  // told the same way, with where they are recorded (semantic-search/misses.ts).
+  const notice = [
+    failed ? semanticFailedNotice(failed) : '',
+    sessionId && !wordSearchOnly ? outageNotice(sessionId) || (failed ? '' : missNotice(sessionId, !!readDown())) : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
   if (result.items.length === 0) return notice;
-  const more = result.droppedForBudget > 0 ? ` 예산 초과로 ${result.droppedForBudget}개 생략됨(아래 목록, 필요한 것만 recall의 ids로 펼침).` : '';
+  const more = result.droppedForBudget > 0 ? ` 예산 초과로 ${result.droppedForBudget}개 생략됨(아래 목록, 필요한 것만 recall의 ids로 조회).` : '';
   const listed = result.dropped.slice(0, DROPPED_LIST_MAX).map((s) => s.memory);
   const words = userWords(store.db);
   const droppedLine = listed.length ? `생략: ${listed.map((m) => droppedLabel(m, words)).join(' · ')}` : '';

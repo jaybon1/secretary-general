@@ -1,0 +1,14 @@
+{
+  "_comment": "비서가 지어내 사용자가 되물은 낱말(답변 검사 invented-word, answer-checks.ts). 질문·선택지·근거 줄에 바로 뒤 괄호 풀이 없이 나오면 알린다. record_mistake의 invented_words로 더한 낱말은 DB(meta invented_words)에 쌓인다. 개발 용어(테이블, 컬럼 등)는 넣지 않는다.",
+  "words": [
+    { "word": "칸", "source": "DB 이야기에서 column을 칸으로 씀(컬럼·키값·항목으로 바꿈)" },
+    { "word": "꼴", "source": "줄바꿈 문자(LF/CRLF) 설명에 지어낸 말(형식이나 모양으로 바꿈)" },
+    { "word": "두 꼴", "source": "줄바꿈 문자(LF/CRLF) 설명에 지어낸 말" },
+    { "word": "글 쌍", "source": "줄바꿈 문자(LF/CRLF) 설명에 지어낸 말" },
+    { "word": "입구", "source": "AGENTS.md 말투 예(얇은 입구, 진입점으로 바꿈)" },
+    { "word": "틀", "source": "템플릿을 틀로 씀" },
+    { "word": "손", "source": "누가 하는지(비서·사용자·프로그램) 흐린 낱말로 씀" },
+    { "word": "머리 글", "source": "머리말(frontmatter `---`)을 머리 글로 씀" },
+    { "word": "함정", "source": "스킬·규칙 글에 설명 없이 씀(주의사항으로 바꿈)" }
+  ]
+}

@@ -107,7 +107,7 @@ export function watchNotice(store: Store): string {
   const off = unwatchedTasks(rows);
   if (!off.length) return '';
   const lines = off.map((t) => `업무${t.id}(${t.title.slice(0, 20)}): ${SCRIPTS.watchWorker} -Id ${t.bg}`);
-  return `<${TAG.watch}>돌고 있는 업무의 감시가 꺼져 있다. 업무 세션이 이미 쉬고 있을 수 있으니 worker-logs로 확인하고, 계속 도는 업무면 이 답의 도구 호출에서 감시를 백그라운드 명령(시간제한 ${WATCH_TIMEOUT_MS}ms)으로 다시 띄운다. 끝난 업무면 delegate 스킬대로 마무리한다.\n${lines.join('\n')}</${TAG.watch}>`;
+  return `<${TAG.watch}>돌고 있는 업무의 모니터링이 꺼져 있다. 업무 세션이 이미 쉬고 있을 수 있으니 worker-logs로 확인하고, 계속 도는 업무면 이 답의 도구 호출에서 모니터링을 백그라운드 명령(시간제한 ${WATCH_TIMEOUT_MS}ms)으로 다시 띄운다. 끝난 업무면 delegate 스킬대로 마무리한다.\n${lines.join('\n')}</${TAG.watch}>`;
 }
 
 /** How many running tasks a new session is told about (there are rarely more than a few). */
@@ -136,13 +136,13 @@ export function runningTaskLines(store: Store, isWatched?: (bg: string) => boole
     const bg = /^bg:([0-9a-f]+)/i.exec(t.session_ref ?? '')?.[1];
     const alive = bg !== undefined && isWatched(bg);
     if (!alive) unwatched++;
-    return `- 업무 ${t.id} "${t.title}" · ${t.session_ref ?? 'session_ref 없음'}${alive ? ' · 감시 살아 있음' : ''}`;
+    return `- 업무 ${t.id} "${t.title}" · ${t.session_ref ?? 'session_ref 없음'}${alive ? ' · 모니터링 살아 있음' : ''}`;
   });
   return [
-    '돌고 있는 업무(기억 DB status running, 이 세션은 그 감시를 모른다. <id>는 bg: 뒤 글자):',
+    '돌고 있는 업무(기억 DB status running, 이 세션은 그 모니터링을 모른다. <id>는 bg: 뒤 글자):',
     ...rows,
     unwatched === 0
-      ? '모두 감시가 살아 있으니 다시 띄우지 않는다(겹친다).'
-      : `"감시 살아 있음"이 없는 업무만 첫 답에서 ${SCRIPTS.watchWorker} -Id <id>를 백그라운드 명령(시간제한 ${WATCH_TIMEOUT_MS}ms)으로 다시 띄운다. "감시 살아 있음"인 업무는 띄우지 않는다(겹친다).`,
+      ? '모두 모니터링이 살아 있으니 다시 띄우지 않는다(겹친다).'
+      : `"모니터링 살아 있음"이 없는 업무만 첫 답에서 ${SCRIPTS.watchWorker} -Id <id>를 백그라운드 명령(시간제한 ${WATCH_TIMEOUT_MS}ms)으로 다시 띄운다.`,
   ];
 }

@@ -16,30 +16,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { ENTRY_DIR, LEGACY_SECRETARY_DIR_ENV, secretaryDirEnv } from '../core/paths.ts';
-import { readSecretaryId } from '../setup/secretary-id.ts';
-import { fixSkillLinks, SKILLS_DIR, skillLayout, skillLinkProblems } from '../setup/skill-links.ts';
-import { COMMON_PREFIX, COMMON_SKILLS_DIR, commonSkillProblem, fixCommonSkills } from './common-skills.ts';
+import { ENTRY_DIR } from '../core/paths.ts';
+import { readSecretaryId } from '../core/secretary-id.ts';
+import { fixSkillLinks, skillLayout, skillLinkProblems } from '../setup/skill-links.ts';
+import { fixCharter } from './charter-blocks.ts';
+import { commonSkillProblem, commonSkillsDirOf, fixCommonSkills } from './common-skills.ts';
+import { blockBegin, renderMemory } from './rules-text.ts';
+import { LINK_FILE, MEMORY_FILE, PENDING_DIR, RUN_JOB_HOME, workspaceRootOf } from './workspace-paths.ts';
 
-export const LINK_FILE = 'secretary-link.local.json';
+export { commonSkillsDirOf, LINK_FILE, RUN_JOB_HOME, workspaceRootOf };
 /**
  * The file's name until 2026-11-10. Workspace tools that copied the old finding code read it, so while one is there the
- * secretary keeps it the same as the new one (writeLink; never makes a new one), and workspace-links rewrites the
- * charter's code to the new name (LINK_NAME_FIXES). Goes once 0.10.0 is out and the workspaces' tools read the new name.
+ * secretary keeps it the same as the new one (writeLink; never makes a new one). Goes once 0.10.0 is out and the
+ * workspaces' tools read the new name.
  */
 export const OLD_LINK_FILE = 'secretary.json'; // legacy-name: secretary-link-file
-/** The folder run-job works in when not given one (scripts/run-job/run-job.ps1); not a workspace in the database. */
-export const RUN_JOB_HOME = '_run-job-home';
 
 export interface SecretaryLink {
   about?: string;
   /** The secretary's entrance folder (<secretary folder>/bin). */
   bin: string;
-  /** Its secretary id (setup/secretary-id.ts); absent while it has none. */
+  /** Its secretary id (core/secretary-id.ts); absent while it has none. */
   id?: string;
 }
 
-const ABOUT = '비서가 써 두는 파일: 이 공간을 맡은 비서의 입구 폴더(bin)와 비서 고유 번호(id). 공간 도구는 이 bin 안의 이름으로만 비서 스크립트를 부른다. PC마다 달라 커밋하지 않는다(.gitignore).';
+const ABOUT = '비서가 써 두는 파일: 이 공간을 맡은 비서의 진입점 폴더(bin)와 비서 고유 번호(id). 공간 도구는 이 bin 안의 이름으로만 비서 스크립트를 부른다. PC마다 달라 커밋하지 않는다(.gitignore).';
 
 /** The file's text for the secretary at root. */
 const linkText = (root: string) => `${JSON.stringify(linkFor(root), null, 2)}\n`;
@@ -80,130 +81,68 @@ function staleOldLink(folder: string, text: string): boolean { // legacy-name: s
 }
 
 /**
- * The charter's finding code and sentence with the old file name (workspace/rules-text.ts findSecretaryCode,
- * renderFindSecretary, until 2026-11-10) → the new name; workspace-links rewrites them.
+ * Why folder's link is not right for the secretary at root, every problem joined with "; "; null when it is. All of them, not
+ * the first: a link pointing elsewhere hid an old charter sentence behind it (2026-11-10).
  */
-const LINK_NAME_FIXES: [string, string][] = [ // legacy-name: secretary-link-file
-  [`f = d / "${OLD_LINK_FILE}"`, `f = d / "${LINK_FILE}"`],
-  [`$f = Join-Path $d '${OLD_LINK_FILE}'`, `$f = Join-Path $d '${LINK_FILE}'`],
-  [`const f = path.join(d, '${OLD_LINK_FILE}');`, `const f = path.join(d, '${LINK_FILE}');`],
-  [`입구 폴더는 이 공간 맨 위 \`${OLD_LINK_FILE}\`의 \`bin\`이다`, `입구 폴더는 이 공간 맨 위 \`${LINK_FILE}\`의 \`bin\`이다`],
-];
-
-/** Why folder's link is not right for the secretary at root; null when it is. */
 export function linkProblem(folder: string, root: string): string | null {
   const file = path.join(folder, LINK_FILE);
   const link = readLink(folder);
   const want = linkFor(root);
-  if (!link) return fs.existsSync(file) ? `${LINK_FILE}을 못 읽음` : `${LINK_FILE} 없음`;
-  if (norm(link.bin) !== norm(want.bin)) return `다른 폴더를 가리킴: ${link.bin}`;
-  if ((link.id ?? null) !== (want.id ?? null)) return `번호가 다름: ${link.id ?? '(없음)'}`;
-  if (Object.keys(link).some((k) => !['about', 'bin', 'id'].includes(k))) return '다른 칸이 있음';
-  if (!ignores(folder)) return `.gitignore에 ${LINK_FILE} 없음`;
-  if (staleOldLink(folder, linkText(root))) return `옛 이름 ${OLD_LINK_FILE}이 새 파일과 다름`;
-  return skillProblem(folder, root);
+  const out: string[] = [];
+  if (!link) out.push(fs.existsSync(file) ? `${LINK_FILE}을 못 읽음` : `${LINK_FILE} 없음`);
+  else {
+    if (norm(link.bin) !== norm(want.bin)) out.push(`다른 폴더를 가리킴: ${link.bin}`);
+    if ((link.id ?? null) !== (want.id ?? null)) out.push(`번호가 다름: ${link.id ?? '(없음)'}`);
+    if (Object.keys(link).some((k) => !['about', 'bin', 'id'].includes(k))) out.push('다른 키가 있음');
+  }
+  if (!ignores(folder)) out.push(`.gitignore에 ${LINK_FILE} 없음`);
+  if (oldIgnoreComment(folder)) out.push('.gitignore 주석에 2026-11-11에 쉬운 말로 바꾼 옛 말이 남음');
+  if (staleOldLink(folder, linkText(root))) out.push(`옛 이름 ${OLD_LINK_FILE}이 새 파일과 다름`);
+  const skills = skillProblem(folder, root);
+  if (skills) out.push(skills);
+  return out.length ? out.join('; ') : null;
 }
 
-/** The skill layout (setup/skill-links.ts), the charter's skill path and the common skills of a workspace; null when right. */
+/** The skill layout (setup/skill-links.ts), the charter's secretary blocks and the common skills of a workspace; null when right. */
 export function skillProblem(folder: string, root: string): string | null {
   const out = skillLinkProblems(skillLayout(folder));
-  if (oldCharter(folder)) out.push('AGENTS.md에 옛 스킬 구조의 글(skills/ 경로, 스킬 목록 가리키기, 빈 스킬 목록, 스킬 만드는 법, common- 없는 공통 스킬 경로)이 남음');
-  if (oldFindText(folder, root)) out.push(`AGENTS.md의 비서 입구 찾는 글이 옛 꼴(옛 환경변수 ${LEGACY_SECRETARY_DIR_ENV}나 옛 파일 이름 ${OLD_LINK_FILE}, 또는 못 찾을 때 알림 없는 파이썬 코드)`);
+  const charter = charterProblem(folder, root);
+  if (charter) out.push(charter);
   const common = commonSkillProblem(folder, commonSkillsDirOf(root));
   if (common) out.push(common);
   return out.length ? out.join('; ') : null;
 }
 
-/**
- * What the workspace charter had before .agents/skills (workspace/rules-text.ts renderLearning, renderCharter): the skill
- * path, the start rule that pointed at the skill list, and the list the secretary kept itself (the CLIs now list skills by their
- * description). Only an empty list goes by itself; a list with skills is the secretary's to fold into the skills'
- * descriptions first.
- */
-/**
- * How a skill is made (agentskills.io, setup/skill-spec.ts checks it): the charter's "스킬과 기억" sentence
- * (workspace/rules-text.ts renderLearning); a charter with the sentence from before 2026-11-09 gets it (CHARTER_FIXES).
- */
-export const SKILL_FORMAT_RULE =
-  '새 스킬은 머리말에 name(폴더 이름과 같게, 소문자·숫자·하이픈, `common-`으로 시작하지 않음)과 description(무엇을 하고 언제 쓰는지 한 줄)을 넣어 만든다(agentskills.io 사양). SKILL.md는 500줄 미만으로 원칙과 "언제 어느 파일을 읽을지"만 두고, 스킬이 쓰는 코드는 그 폴더의 `scripts/`, 참고 문서는 `references/`, 템플릿·설정·데이터는 `assets/`에 둔다. 남이 만든 설치본·가상환경은 스킬에 넣지 않고 사용자 폴더 `%USERPROFILE%\\tools`에 둔다.';
-const CHARTER_FIXES: [string, string][] = [ // legacy-name: charter-skill-text
-  ['업무 종류별 스킬(`skills/<이름>/SKILL.md`', `업무 종류별 스킬(\`${SKILLS_DIR}/<이름>/SKILL.md\``],
-  ['아래 "스킬과 기억"의 목록에 맞는 스킬이 있으면', `맞는 스킬(\`${SKILLS_DIR}/\`, 공통 스킬은 \`${COMMON_PREFIX}<이름>\`)이 있으면`],
-  ['새 스킬은 머리말에 이름과 언제 쓰는지 한 줄(description)을 넣어 만든다.', SKILL_FORMAT_RULE],
-  // A charter from before the skill-making sentence: the "스킬과 기억" paragraph ends at the history files.
-  ['(업무별 항목)에 따로 둔다.\n', `(업무별 항목)에 따로 둔다. ${SKILL_FORMAT_RULE}\n`],
-  ['(업무별 항목)에 따로 둔다.\r\n', `(업무별 항목)에 따로 둔다. ${SKILL_FORMAT_RULE}\r\n`],
-];
-/**
- * The charter's lines on finding the secretary (workspace/rules-text.ts renderFindSecretary, findSecretaryCode) as written
- * until 2026-11-10, with the old SECRETARY_DIR read after this secretary's own variable, and as written now (old → new).
- * workspace-links rewrites them; the tools that copied the old code keep working while the scripts still set the old
- * variable (scripts/lib/common.ps1 Get-SecretaryDirVars). None for a copy without an id (its variable is the old name).
- */
-export function oldFindSecretaryFixes(root: string): [string, string][] { // legacy-name: charter-find-text
-  const env = secretaryDirEnv(readSecretaryId(root));
-  const old = LEGACY_SECRETARY_DIR_ENV;
-  if (env === old) return [];
-  return [
-    [`환경변수 \`${env}\` 아래 \`${ENTRY_DIR}\`, 그다음 환경변수 \`${old}\` 아래 \`${ENTRY_DIR}\`을 쓴다`, `환경변수 \`${env}\` 아래 \`${ENTRY_DIR}\`을 쓴다`],
-    [`os.environ.get("${env}") or os.environ.get("${old}")`, `os.environ.get("${env}")`],
-    [`@($env:${env}, $env:${old})`, `@($env:${env})`],
-    [`process.env.${env} || process.env.${old};`, `process.env.${env};`],
-    // Until 2026-11-10 the Python code ended on Path(<variable>) and stopped with a bare TypeError when neither was there.
-    [`    return Path(os.environ.get("${env}")) / "${ENTRY_DIR}"`, pythonFallbackLines(env).join('\n')],
-  ];
-}
+/** The lines .gitignore gets: the reason, then the file. */
+export const GITIGNORE_LINES = ['# 이 공간을 맡은 비서의 진입점 폴더(비서가 써 둔다, PC마다 다르다)', LINK_FILE];
+/** The comment line GITIGNORE_LINES[0] was until 2026-11-11 → what it is now: put right in place in a workspace's .gitignore. */
+const GITIGNORE_COMMENT_FIX: [string, string] = // legacy-name: link-gitignore-comment
+  ['# 이 공간을 맡은 비서의 입구 폴더(비서가 써 둔다, PC마다 다르다)', GITIGNORE_LINES[0]];
 
-/**
- * The end of the charter's Python finding code (workspace/rules-text.ts findSecretaryCode): with no link file found, this
- * secretary's variable, and a plain message rather than Path(None)'s TypeError when that is empty too.
- */
-export function pythonFallbackLines(env: string): string[] {
-  return [
-    `    d = os.environ.get("${env}")`,
-    `    if not d: raise SystemExit("비서 입구를 못 찾음: 위 폴더들에 비서 위치 파일이 없고 환경변수 ${env}도 비었다(비서에게 workspace-links를 부탁한다)")`,
-    `    return Path(d) / "${ENTRY_DIR}"`,
-  ];
-}
-
-/** A path to a common skill in its old folder (…\_skills\web-tools\…, before the common- prefix, 2026-11-09). */
-const OLD_COMMON_PATH = /([\\/]_skills[\\/]+)(?!common-)([a-z0-9][a-z0-9-]*)(?=[\\/])/g; // legacy-name: common-skill-prefix
-const EMPTY_LIST = /\n스킬 목록\(새 스킬이 생기면 비서가 이름과 한 줄 설명을 더한다\):\r?\n\r?\n- 아직 없음\r?\n/;
-const charterText = (folder: string) => {
+const ignoreText = (folder: string) => {
   try {
-    return fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8');
+    return fs.readFileSync(path.join(folder, '.gitignore'), 'utf8');
   } catch {
     return '';
   }
 };
-const oldCharter = (folder: string) => {
-  const text = charterText(folder);
-  return CHARTER_FIXES.some(([a]) => text.includes(a)) || EMPTY_LIST.test(text) || new RegExp(OLD_COMMON_PATH.source).test(text);
-};
-
-const oldFindText = (folder: string, root: string) => {
-  const text = charterText(folder);
-  return [...oldFindSecretaryFixes(root), ...LINK_NAME_FIXES].some(([a]) => text.includes(a));
-};
-
-/** The common skills folder for the secretary at root (workspace/common-skills.ts). */
-export const commonSkillsDirOf = (root: string) => path.join(workspaceRootOf(root), COMMON_SKILLS_DIR);
-
-/** The lines .gitignore gets: the reason, then the file. */
-export const GITIGNORE_LINES = ['# 이 공간을 맡은 비서의 입구 폴더(비서가 써 둔다, PC마다 다르다)', LINK_FILE];
+const oldIgnoreComment = (folder: string) => ignoreText(folder).includes(GITIGNORE_COMMENT_FIX[0]);
 
 /**
  * Writes folder's link for the secretary at root, and its .gitignore line first (so a worker's `git add -A` never
- * takes it). Returns whether anything changed.
+ * takes it), and puts its skill links, common skills and charter blocks right. addMissing: a charter without marks that
+ * lacks a section the template has gets it (workspace-links --add-missing, after the user said yes). Returns whether
+ * anything changed (or was tried: a charter left with a problem stays as it was).
  */
-export function writeLink(folder: string, root: string): boolean {
-  if (!linkProblem(folder, root)) return false;
+export function writeLink(folder: string, root: string, addMissing = false): boolean {
+  if (!linkProblem(folder, root) && !(addMissing && charterFix(folder, root, true))) return false;
   if (!ignores(folder)) {
     const file = path.join(folder, '.gitignore');
     const old = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
     const sep = old && !old.endsWith('\n') ? '\n' : '';
     fs.writeFileSync(file, `${old}${sep}${GITIGNORE_LINES.join('\n')}\n`);
   }
+  if (oldIgnoreComment(folder)) fs.writeFileSync(path.join(folder, '.gitignore'), ignoreText(folder).replaceAll(...GITIGNORE_COMMENT_FIX));
   const file = path.join(folder, LINK_FILE);
   const text = linkText(root);
   if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) fs.writeFileSync(file, text);
@@ -211,16 +150,42 @@ export function writeLink(folder: string, root: string): boolean {
   if (staleOldLink(folder, text)) fs.writeFileSync(path.join(folder, OLD_LINK_FILE), text); // legacy-name: secretary-link-file
   fixSkillLinks(folder);
   fixCommonSkills(folder, commonSkillsDirOf(root));
-  if (oldCharter(folder) || oldFindText(folder, root)) {
-    let text = charterText(folder);
-    for (const [a, b] of [...CHARTER_FIXES, ...oldFindSecretaryFixes(root), ...LINK_NAME_FIXES]) text = text.replaceAll(a, b);
-    fs.writeFileSync(path.join(folder, 'AGENTS.md'), text.replace(EMPTY_LIST, '').replace(OLD_COMMON_PATH, `$1${COMMON_PREFIX}$2`));
+  const charter = charterFix(folder, root, addMissing);
+  if (charter && 'text' in charter) {
+    fs.writeFileSync(path.join(folder, 'AGENTS.md'), charter.text);
+    // A charter that got the "스킬과 기억" block (addMissing) also gets the files it names, as a new workspace has them.
+    if (charter.text.includes(blockBegin('learning')) && !fs.existsSync(path.join(folder, MEMORY_FILE))) {
+      const title = charter.text.match(/^# (.+)$/m)?.[1] ?? path.basename(folder);
+      fs.writeFileSync(path.join(folder, MEMORY_FILE), renderMemory({ kind: 'solo', name: '', title, purpose: '' }));
+      fs.mkdirSync(path.join(folder, PENDING_DIR), { recursive: true });
+      if (!fs.readdirSync(path.join(folder, PENDING_DIR)).length) fs.writeFileSync(path.join(folder, PENDING_DIR, '.gitkeep'), '');
+    }
   }
   return true;
 }
 
-/** Where workspaces live for the secretary at root (core/config.ts WORKSPACE_ROOT, for any root). */
-export const workspaceRootOf = (root: string) => process.env.SECRETARY_WORKSPACE_ROOT ?? path.join(path.dirname(path.resolve(root)), 'workspaces');
+/**
+ * The charter (AGENTS.md) as the template wants it (workspace/charter-blocks.ts), only when that differs from the file, or why it
+ * is left; null when it is right or there is none. A charter goes out with LF line endings: git checks it out as CRLF
+ * (core.autocrlf) while the secretary writes LF, and stores LF either way.
+ */
+function charterFix(folder: string, root: string, addMissing = false): { text: string; moved: boolean } | { problem: string } | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8');
+  } catch {
+    return null;
+  }
+  const fix = fixCharter(text, folder, root, addMissing);
+  return 'text' in fix && fix.text === text ? null : fix;
+}
+
+function charterProblem(folder: string, root: string): string | null {
+  const fix = charterFix(folder, root);
+  if (!fix) return null;
+  if ('problem' in fix) return fix.problem;
+  return fix.moved ? 'AGENTS.md에 비서 표시가 없음(비서 관리 부분을 표시로 감싸 지금 틀로 옮길 수 있음)' : 'AGENTS.md의 비서 표시 안이 지금 틀과 다름';
+}
 
 /**
  * The folders that should carry a link: every workspace in the database that takes work and is on this PC, and

@@ -89,7 +89,7 @@ test('usage reader: one provider at a time, a reading under 150 s old (the guard
   assert.deepEqual(await first, ['subscription', 'subscription-b']);
   assert.deepEqual(order, ['subscription', 'subscription-b', 'bad']);
   assert.ok(BUSY_MS < POLL_MS);
-  await assert.rejects(runUsageScript('subscription'), /시험 중에는/, 'the real reading never runs in tests');
+  await assert.rejects(runUsageScript('subscription'), /테스트 중에는/, 'the real reading never runs in tests');
 });
 
 // 없으면 놓치는 실수: API 키로 로그인해 /usage가 사용량을 주지 않는(또는 claude가 없는) PC에서 조회기가 5분마다 영원히 실패를 되풀이하거나,

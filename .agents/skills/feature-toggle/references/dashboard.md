@@ -17,7 +17,7 @@
 ## 켜는 순서
 
 1. 기본값을 바꾸면 이 비서 설정 파일 `this-secretary.local.json`(비서 폴더 맨 위, 커밋하지 않음, 예시 `this-secretary.local.example.json`)의 `dashboard` 칸에 쓴다(칸 안의 값은 `src/dashboard/settings.ts` 첫 주석). 예: `"dashboard": { "port": 8790, "publicUrl": "https://<기기 이름>.<tailnet 이름>.ts.net", "share": { "inbox": null } }`. Tailscale 주소로 바로(http) 열려면 `"hosts": ["<이 PC의 Tailscale IP>"]`.
-2. `features.json`의 `dashboard`를 `"enabled": true`로, 아래 글을 AGENTS.md `## 모든 것은 대화 글로` 절의 "업무 세션의 [질문]·완료 보고를 전할 때는" 줄 바로 아래에 넣는다(폰에서 안 볼 거면 넣지 않는다).
+2. `features.json`의 `dashboard`를 `"enabled": true`로, 아래 글을 AGENTS.md `### 경로` 절의 "파일·폴더 경로는 복사하기 쉽게" 줄 바로 아래에 넣는다(폰에서 안 볼 거면 넣지 않는다).
 3. 비서 서버를 다시 켠다(`server-ops` 스킬, 서버 안 세션이 끊기니 먼저 묻는다). 켜진 뒤 `node bin/dashboard.mjs urls`의 주소를 이 PC 브라우저로 열어 확인한다.
 4. 폰에서 볼 때(정한 경우): 실행할 명령을 보여 주고 사용자 승인 뒤 `tailscale serve --bg http://127.0.0.1:<포트>`(이 PC 설정이 바뀐다). `tailscale serve status`에 나온 `https://…ts.net` 주소를 1번 `publicUrl`에 적고, 폰에서 열어 첫 화면과 `/share/ai-agent/`가 보이는지 사용자에게 봐 달라고 한다.
 

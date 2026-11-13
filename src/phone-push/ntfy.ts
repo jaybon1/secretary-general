@@ -3,9 +3,9 @@
  * answer's first line (the conclusion line) to this PC's ntfy server, which a phone subscribes to. No model call, every
  * turn, after the answer is written (the model's PushNotification arrived before the answer and cost a request).
  *
- * Not sent: a turn the answer checks send back (guards/stop-guard.ts: the rewritten answer ends the turn and is sent
+ * Not sent: a turn the answer checks send back (mistake-guards/stop-guard.ts: the rewritten answer ends the turn and is sent
  * then), a subagent's stop (Claude Code fires SubagentStop for those, and a hook input with agent_id is skipped too),
- * tests and eval runs (the no-model mark, core/no-model-calls.ts), and any copy without the settings section. Work sessions
+ * tests (the no-model mark, core/no-model-calls.ts), and any copy without the settings section. Work sessions
  * and run-jobs run in other folders, whose settings carry no secretary Stop hook.
  *
  * The POST runs in a detached child process (this file run directly), so the hook ends as fast as before; a failure or
@@ -34,7 +34,7 @@ import { readThisSecretary, THIS_SECRETARY_FILE } from '../core/this-secretary.t
 import { formatLocal } from '../core/kst-time.ts';
 import { NO_MODEL_ENV } from '../core/no-model-calls.ts';
 import { secretaryLogDir } from '../core/paths.ts';
-import { featureOn, readFeatures } from '../setup/features.ts';
+import { featureOn, readFeatures } from '../core/features.ts';
 import { FEATURE } from '../core/names.ts';
 import { readLastTurn } from '../mistake-guards/last-turn.ts';
 
@@ -84,7 +84,7 @@ export function readNotifySettings(root = PROJECT_ROOT): { settings: NotifySetti
   if (v.enabled === false) return { settings: null, problem: null };
   const problems: string[] = [];
   const url = typeof v.url === 'string' && /^https?:\/\/[^\s/]+(\/[^\s]*)?$/.test(v.url) ? v.url.replace(/\/+$/, '') : null;
-  if (!url) problems.push('url은 http(s)://주소 꼴');
+  if (!url) problems.push('url은 http(s)://주소 형식');
   const topic = typeof v.topic === 'string' && /^[-_A-Za-z0-9]{1,64}$/.test(v.topic) ? v.topic : null;
   if (!topic) problems.push('topic은 영문·숫자·-·_ 64자 안');
   const int = (k: string, def: number, min: number, max: number) => {
@@ -242,7 +242,7 @@ export interface PlanDeps {
 export function planNotice(input: StopNotifyInput, verdict: { block?: string; answer?: string }, deps: PlanDeps = {}): { notice: Notice; settings: NotifySettings } | { skip: string } {
   const env = deps.env ?? process.env;
   const root = deps.root ?? PROJECT_ROOT;
-  if (env[NO_MODEL_ENV]) return { skip: 'test or eval run' };
+  if (env[NO_MODEL_ENV]) return { skip: 'test run' };
   if (verdict.block) return { skip: 'turn sent back' };
   if (input.agent_id || (input.hook_event_name && input.hook_event_name !== 'Stop')) return { skip: 'not the main session' };
   if (!notifyOn(root)) return { skip: 'feature off' };

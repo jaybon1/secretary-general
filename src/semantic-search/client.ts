@@ -1,5 +1,5 @@
 /**
- * 의미 검색의 입구: 의미 검색 서버를 띄우고(ensureServer) 묻는 쪽(semanticClient). 장애 기록·알림은 semantic-search/outage.ts,
+ * 의미 검색의 진입점: 의미 검색 서버를 띄우고(ensureServer) 묻는 쪽(semanticClient). 장애 기록·알림은 semantic-search/outage.ts,
  * 의미 검색 서버 프로세스(모델 받기·서버)는 semantic-search/semantic-search-server.ts, 이름과 파일 위치는 semantic-search/config.ts에 있고, 바깥은 여기서만 가져다 쓴다.
  *
  * Semantic search: finds memories that mean the same thing in different words.
@@ -10,13 +10,16 @@
  *
  * The secretary server (scripts/remote-server/remote-server.ps1) starts the server bound to itself:
  * it stays up as long as the server does and stops with it. Without the server, the
- * first caller starts it in the background (getting no semantic results that time),
- * and it exits after SECRETARY_SEMANTIC_SEARCH_IDLE_MIN minutes without requests.
+ * first caller on the secretary's side (allowServerStart) starts it in the background, and
+ * it exits after SECRETARY_SEMANTIC_SEARCH_IDLE_MIN minutes without requests. Callers wait
+ * for it (semanticClient: START_WAIT_MS to come up, SEARCH_TIMEOUT_MS to answer) rather
+ * than fall back to word search at once.
  *
  * The server owns the vectors: before each search it embeds any memory that has
  * none yet, so memories saved from anywhere get picked up.
  *
- * Any caller that finds the server gone starts it again at once; the state file doubles
+ * A caller on the secretary's side that finds the server gone starts it again at once (the
+ * others wait: allowServerStart); the state file doubles
  * as the start lock, so simultaneous prompts start one. A clean exit (idle, server gone)
  * removes the state file and is restarted silently. A real failure (the model would not
  * load, or a state file left behind by a crash) leaves a down file next to the database,
@@ -39,6 +42,7 @@ import fs from 'node:fs';
 import { scriptPath } from '../core/paths.ts';
 import { disabled, readState, STATE_FILE } from './config.ts';
 import { isModelCause, logLine, modelFingerprint, noteFailure, readDown, writeDown } from './outage.ts';
+import { noteAnswered, noteMiss } from './misses.ts';
 import { pidAlive } from '../core/windows-process.ts';
 import { CLI } from '../core/names.ts';
 
@@ -73,6 +77,7 @@ export {
   type DownState,
 } from './outage.ts';
 export { runServer, searchWith } from './semantic-search-server.ts';
+export { missLogFile, missNotice, MISS_LOG_ENV, noteMiss } from './misses.ts';
 
 export interface SemanticHits {
   /** Median similarity over all memories searched: the baseline a real match must clear. */
@@ -127,7 +132,27 @@ function startServer(refetch: boolean): number | undefined {
   return child.pid;
 }
 
-export type ServerStatus = 'off' | 'ready' | 'loading' | 'started' | 'stopped' | 'low-memory';
+export type ServerStatus = 'off' | 'ready' | 'loading' | 'started' | 'stopped' | 'low-memory' | 'absent';
+
+/**
+ * Who starts the server again (2026-11-13 the user's call): only the secretary's side — its prompt hook
+ * (hooks/run-hook.ts), its own memory MCP server (not --readonly, not a staff member's: mcp/server.ts), the secretary
+ * server (scripts/remote-server, --parent) and the watch script the secretary runs. A run-job's or work session's
+ * read-only server, the memory consolidation and the evaluation runner (its own test database starts its own server)
+ * only wait. Before this every caller started it, and a start from deep inside a run-job is what once held the run-job's
+ * output pipe open (startServerArgs). Off until the process says so.
+ */
+let startAllowed = false;
+export function allowServerStart(on = true): void {
+  startAllowed = on;
+}
+export const serverStartAllowed = () => startAllowed;
+
+/** How long one search waits for a server that is up (every feature but the consolidation's, which waits on its own). */
+export const SEARCH_TIMEOUT_MS = 30_000;
+/** How long a feature waits for a server that is gone or still loading (the secretary's side starts it at once). */
+export const START_WAIT_MS = 90_000;
+const START_POLL_MS = 1_000;
 
 /**
  * Starts the server at once if it is gone. 'ready' carries the port; 'loading' means a
@@ -135,10 +160,15 @@ export type ServerStatus = 'off' | 'ready' | 'loading' | 'started' | 'stopped' |
  * or the server); 'stopped' means it failed even after a download, 'low-memory' that it ran
  * out of memory; both wait for the user.
  */
-export function ensureServer(now = Date.now(), start: (refetch: boolean) => number | undefined = startServer): { status: ServerStatus; port?: number } {
+export function ensureServer(now = Date.now(), start: (refetch: boolean) => number | undefined = startServer, may = true): { status: ServerStatus; port?: number } {
   if (disabled()) return { status: 'off' };
   const state = readState();
   if (state && pidAlive(state.pid)) return state.port === null ? { status: 'loading' } : { status: 'ready', port: state.port };
+  // A caller that does not start the server leaves its files to the one that does, and waits.
+  if (!may) {
+    const down = readDown();
+    return { status: down?.lowMemory ? 'low-memory' : down?.stoppedAt && modelFingerprint() === down.stoppedAt ? 'stopped' : 'absent' };
+  }
   if (state) {
     // A clean exit removes the state file; one left behind means the server died (crash, killed).
     if (readState()?.pid === state.pid) {
@@ -171,30 +201,82 @@ export function ensureServer(now = Date.now(), start: (refetch: boolean) => numb
   return { status: 'started' };
 }
 
+const firstLine = (s: string) => s.split(/\r?\n/)[0].slice(0, 120);
+
+/** Why a status that is not 'ready' gives no semantic results, as the miss record says it. */
+const STATUS_MISS: Record<Exclude<ServerStatus, 'ready' | 'off'>, string> = {
+  started: '서버가 꺼져 있어 지금 띄움',
+  loading: '서버가 모델을 불러오는 중',
+  stopped: '서버 멈춤(모델 파일 문제, 사용자 확인 필요)',
+  'low-memory': '서버 멈춤(메모리 부족, 사용자 확인 필요)',
+  absent: '서버가 꺼져 있음(여기서는 띄우지 않고 비서 쪽이 띄우기를 기다림)',
+};
+/** Statuses that end the wait at once: only the user can bring the server back. */
+const FINAL: ReadonlySet<ServerStatus> = new Set(['stopped', 'low-memory']);
+
+/** Whether the server answers now (starting it when it is gone), without a search: the consolidation's wait polls it. */
+export function semanticReady(): boolean {
+  try {
+    return ensureServer(Date.now(), startServer, startAllowed).status === 'ready';
+  } catch {
+    return false;
+  }
+}
+
+export interface WaitOptions {
+  /** How long to wait for a server that is gone or loading (polling; the secretary's side starts it first). 0: not at all. */
+  waitMs?: number;
+  pollMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /**
- * Client side. Returns null (callers fall back to word search) whenever the server
- * isn't ready: not running yet, still loading, down, or too slow to answer.
+ * Client side. Waits up to `wait.waitMs` for a server that is gone (started at once when this process may: allowServerStart)
+ * or still loading, then up to `timeoutMs` for its answer. Returns null (callers fall back to word search) when it never
+ * answers: stopped for the user (no wait), still not up, too slow, an error. Each such miss is recorded with `feature`, the
+ * caller's name (misses.ts), and told to `onMiss`; semantic search turned off by setting is no miss.
  */
-export function semanticClient(timeoutMs: number): SemanticSearch {
+export function semanticClient(timeoutMs: number, feature: string, onMiss?: (reason: string) => void, wait: WaitOptions = {}): SemanticSearch {
+  const miss = (reason: string) => {
+    noteMiss(feature, reason);
+    onMiss?.(reason);
+    return null;
+  };
+  const sleep = wait.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   return async (query, opts) => {
     let status: ServerStatus;
     let port: number | undefined;
-    try {
-      ({ status, port } = ensureServer());
-    } catch {
-      // A state file we could not write (locked, permissions): word search this time.
-      return null;
+    const started = Date.now();
+    for (;;) {
+      try {
+        ({ status, port } = ensureServer(Date.now(), startServer, startAllowed));
+      } catch (err) {
+        // A state file we could not write (locked, permissions): word search this time.
+        return miss(`상태 파일을 못 씀(${firstLine((err as Error).message)})`);
+      }
+      if (status === 'off' || status === 'ready' || FINAL.has(status)) break;
+      const left = (wait.waitMs ?? 0) - (Date.now() - started);
+      if (left <= 0) break;
+      await sleep(Math.min(wait.pollMs ?? START_POLL_MS, left));
     }
-    if (status !== 'ready') return null;
+    if (status === 'off') return null;
+    if (status !== 'ready') {
+      const waited = Date.now() - started;
+      return miss(`${STATUS_MISS[status]}${waited >= 1000 ? `, ${Math.round(waited / 1000)}초 기다림` : ''}`);
+    }
     try {
       const res = await fetch(`http://127.0.0.1:${port}/search`, {
         method: 'POST',
         body: JSON.stringify({ query, ...opts }),
         signal: AbortSignal.timeout(timeoutMs),
       });
-      return res.ok ? ((await res.json()) as SemanticHits) : null;
-    } catch {
-      return null;
+      if (!res.ok) return miss(`오류(HTTP ${res.status})`);
+      const hits = (await res.json()) as SemanticHits;
+      noteAnswered(feature);
+      return hits;
+    } catch (err) {
+      const e = err as Error;
+      return miss(e.name === 'TimeoutError' || e.name === 'AbortError' ? `시간 초과(${timeoutMs}ms)` : `오류(${firstLine(e.message)})`);
     }
   };
 }

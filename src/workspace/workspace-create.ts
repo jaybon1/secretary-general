@@ -60,7 +60,7 @@ export function createWorkspaceFolder(spec: WorkspaceSpec, now = nowIso(), secre
   fs.mkdirSync(folder);
   const files: string[] = [];
   const write = (rel: string, content: string) => writeNew(folder, rel, content, files);
-  write('AGENTS.md', renderCharter(spec));
+  write('AGENTS.md', renderCharter(spec, secretaryRoot));
   write('CLAUDE.md', CLAUDE_IMPORT);
   for (const a of agents) write(path.join('.claude', 'agents', `${a.name}.md`), renderAgent(a));
   if (spec.kind !== 'quick') {
@@ -105,7 +105,7 @@ export function createTaskFolder(workspaceFolder: string, task: TaskSpec, now = 
   checkSlug(task.name, '업무 이름');
   if (task.product !== undefined) checkSlug(task.product, '제품 이름');
   if (task.doneCriteria.length === 0) throw new Error('완료 기준이 하나 이상 필요합니다.');
-  if (task.proof.length === 0) throw new Error('증거가 하나 이상 필요합니다.');
+  if (task.proof.length === 0) throw new Error('완료 확인 방법(proof)이 하나 이상 필요합니다.');
   if (!fs.existsSync(workspaceFolder)) throw new Error(`작업 공간 폴더가 없습니다: ${workspaceFolder}`);
 
   const base = task.product ? path.join(OUTPUT_DIR, RECORDS_DIR, task.product) : path.join(OUTPUT_DIR, RESEARCH_DIR);

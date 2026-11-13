@@ -11,12 +11,13 @@ import { allSecretariesFile } from '../src/core/this-secretary.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { ENTRY_POINTS, entryPath, entryText, LEGACY_SECRETARY_DIR_ENV, legacySecretaryLogDir, secretaryDirEnv, secretaryLogDir, scriptPath, type EntryName } from '../src/core/paths.ts';
 import { LOG_FILE as NOTIFY_LOG_FILE } from '../src/phone-push/ntfy.ts';
-import { baseTaskNames, offFeatureChecks, readFeatures, scheduledTaskNames } from '../src/setup/features.ts';
+import { baseTaskNames, offFeatureChecks, readFeatures, scheduledTaskNames } from '../src/core/features.ts';
 import { usageHookState } from '../src/setup/check-items.ts';
 import { hookKind, ownerOf, scriptInCommand } from '../src/setup/other-secretaries.ts';
-import { ensureSecretaryId, SECRETARY_ID_ALPHABET, SECRETARY_ID_FILE, newSecretaryId, readSecretaryId, taskNameWith } from '../src/setup/secretary-id.ts';
+import { ensureSecretaryId, SECRETARY_ID_ALPHABET, SECRETARY_ID_FILE, newSecretaryId, readSecretaryId, taskNameWith } from '../src/core/secretary-id.ts';
 import { MODEL_FILES } from '../src/semantic-search/client.ts';
 import { cutLink, fixSkillLinks } from '../src/setup/skill-links.ts';
+import { fillSubscriptionPersonalData } from '../src/setup/provider-personal-data.ts';
 import {
   CHECKS,
   checkSetup,
@@ -219,8 +220,42 @@ test('no check kept yet means no reminder; a turned-off check says nothing', asy
   // Every item but the model (semantic search is off in tests) and the provider key (feature 'external-providers' ships off).
   assert.deepEqual(
     readCache(opts.cacheFile!)?.results.map((r) => r.id),
-    ['features', 'db', 'npm-packages', 'skills', 'entry-points', 'renamed-local-files', 'secretary-dir-env', 'workspace-links', 'workspace-aux-folders', 'server-task', 'server-running', 'backup-task', 'idle-jobs-task', 'usage-hooks'],
+    ['features', 'db', 'npm-packages', 'skills', 'entry-points', 'renamed-local-files', 'secretary-dir-env', 'workspace-links', 'workspace-aux-folders', 'provider-personal-data', 'server-task', 'server-running', 'backup-task', 'idle-jobs-task', 'usage-hooks'],
   );
+});
+
+// 없으면 놓치는 실수: 공급자를 더하며 personalDataAllowed를 빠뜨린 것을 아무도 몰라 run-job·업무 세션에 기억 도구가 조용히 빠진다.
+// 또는 업데이트가 값을 넣으며 사용자가 쓴 providers.json의 다른 줄·형식을 바꾸거나, 구독이 아닌 공급자(게이트웨이 등)에 true를 넣는다.
+test('providers without personalDataAllowed: the check tells the Claude Code ones; the fill gives subscriptions true and nothing else', async () => {
+  const { opts, root } = fixture();
+  const file = scriptPath('providers', root);
+  const item = async () => (await checkSetup(opts)).results.find((r) => r.id === 'provider-personal-data')!;
+  assert.equal((await item()).status, 'ok', 'no providers: nothing to tell');
+  const text =
+    '﻿{\r\n  "default": "subscription",\r\n  "providers": {\r\n    "subscription": {\r\n      "type": "claude-subscription",\r\n      "usage": "claude-usage"\r\n    },\r\n' +
+    '    "subscription-b": { "type": "claude-subscription", "note": "b" },\r\n    "gw": { "type": "claude-gateway" },\r\n    "cli": { "type": "copilot-cli" },\r\n' +
+    '    "set": { "type": "claude-api-key", "personalDataAllowed": false },\r\n    "odd": { "type": "claude-subscription", "personalDataAllowed": "true" }\r\n  }\r\n}\r\n';
+  write(file, text);
+  const r = await item();
+  assert.equal(r.status, 'missing');
+  assert.equal(r.detail, 'subscription(claude-subscription), subscription-b(claude-subscription), gw(claude-gateway), odd(claude-subscription)', 'Claude Code ones only; false is a value');
+  assert.match(r.fix!, /true를 추천.*false/);
+  assert.deepEqual(fillSubscriptionPersonalData(file, { dryRun: true }).filled, ['subscription', 'subscription-b']);
+  assert.equal(fs.readFileSync(file, 'utf8'), text, 'a dry run writes nothing');
+  const filled = fillSubscriptionPersonalData(file);
+  assert.deepEqual(filled, { filled: ['subscription', 'subscription-b'], left: [{ name: 'gw', type: 'claude-gateway' }, { name: 'cli', type: 'copilot-cli' }, { name: 'odd', type: 'claude-subscription' }] });
+  assert.equal(
+    fs.readFileSync(file, 'utf8'),
+    text
+      .replace('"type": "claude-subscription",\r\n      "usage"', '"type": "claude-subscription",\r\n      "personalDataAllowed": true,\r\n      "usage"')
+      .replace('{ "type": "claude-subscription", "note": "b" }', '{ "type": "claude-subscription", "personalDataAllowed": true, "note": "b" }'),
+    'the file keeps its BOM, line ends and layout; one key more per subscription',
+  );
+  assert.equal((await item()).detail, 'gw(claude-gateway), odd(claude-subscription)');
+  assert.deepEqual(fillSubscriptionPersonalData(file).filled, [], 'again: nothing more');
+  write(file, '{ not json');
+  assert.equal((await item()).status, 'unknown');
+  assert.match(fillSubscriptionPersonalData(file).problem!, /JSON을 못 읽음/);
 });
 
 test('items the user goes without are left out and stay out across checks', async () => {
@@ -290,7 +325,7 @@ test('skills: real folders in .agents/skills, .claude/skills one link to it, the
   write(path.join(root, 'skills', 'handoff', 'SKILL.md'), handoff);
   let r = await item();
   assert.equal(r.status, 'missing');
-  assert.equal(r.detail, '연결 없음: .claude/skills / 옛 자리에서 옮길 것: skills/handoff');
+  assert.equal(r.detail, '링크 없음: .claude/skills / 옛 위치에서 옮길 것: skills/handoff');
   assert.match(r.fix!, /^비서 폴더에서 `node src\/cli\.ts skill-links` \(먼저 보기만: `--dry-run`\)/);
   fixSkillLinks(root);
   assert.equal((await item()).status, 'ok');
@@ -499,7 +534,7 @@ test('bin entries: a missing entry or one whose script moved away is missing', a
   assert.equal(item.detail, 'bin/run-job.ps1의 scripts/run-job/run-job.ps1 없음, bin/ego-grab.mjs 없음');
   // A file item: the reminder sees a fix at once.
   saveReport(await checkSetup(opts), opts.cacheFile!);
-  assert.match(setupReminder(opts), /바깥용 입구\(bin\/\)/);
+  assert.match(setupReminder(opts), /바깥용 진입점 스크립트\(bin\/\)/);
   write(entryPath('ego-grab.mjs', root), entryText('ego-grab.mjs'));
   write(scriptPath('runJob', root));
   assert.equal(setupReminder(opts), '');
@@ -719,7 +754,7 @@ test('secretary id: made once (4 letters, no look-alikes), kept, read back; a br
   assert.equal(first.created, true);
   assert.match(first.id!, /^[A-Z0-9]{4}$/);
   for (const ch of first.id!) assert.ok(SECRETARY_ID_ALPHABET.includes(ch));
-  // 없으면 놓치는 실수: 새 번호가 모음으로 낱말(KEYS, USAGE…)을 이뤄 ~/.secretary에 함께 쓰는 이름과 겹치거나, 모음 든 옛 번호를 못 읽는다.
+  // 없으면 놓치는 실수: 새 번호가 모음으로 단어(KEYS, USAGE…)를 이뤄 ~/.secretary에 함께 쓰는 이름과 겹치거나, 모음 든 옛 번호를 못 읽는다.
   assert.ok(![...SECRETARY_ID_ALPHABET].some((ch) => 'AEIOUY01L'.includes(ch)), 'no vowels, no look-alikes');
   for (let k = 0; k < 24; k++) assert.doesNotMatch(newSecretaryId(), /[AEIOUY]/);
   assert.ok(fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'lib', 'common.ps1'), 'utf8').includes(`$SecretaryIdAlphabet = '${SECRETARY_ID_ALPHABET}'`), 'the PowerShell side makes ids from the same letters');
@@ -901,7 +936,7 @@ test('install-scheduled-tasks.ps1 names tasks with the secretary id, makes the i
   assert.match(out, /건너뜀: Secretary DB Backup \(AB12\) - 이 비서 이름\(번호 포함\)의 작업이 이 PC의 다른 비서/);
   assert.doesNotMatch(out, /새로 만들었어요/);
   // 없으면 놓치는 실수: 이름이 바뀐 예약 작업(옮기기 표 scheduledTasks)의 옛 작업이 남아 같은 일이 두 번 돌거나(ntfy 서버 둘이 한 포트를 다툼),
-  // 다른 비서의 옛 이름 작업을 지우거나, 옮기면서 ntfy.exe·server.yml 자리를 기본값으로 바꾼다.
+  // 다른 비서의 옛 이름 작업을 지우거나, 옮기면서 ntfy.exe·server.yml 위치를 기본값으로 바꾼다.
   const moves = path.join(dir, 'moves.json');
   fs.writeFileSync(moves, JSON.stringify({ scheduledTasks: { 'v0.10.0': { 'Secretary Old Backup': 'Secretary DB Backup', 'Secretary ntfy': 'Secretary ntfy Server' } } }));
   const allOn = path.join(dir, 'features.json');

@@ -75,6 +75,10 @@ test('the memory MCP config in %TEMP% is named per secretary (secretary id, else
   const server = JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.secretary;
   assert.deepEqual(server.args, [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts'), '--readonly']);
   assert.equal(server.env.SECRETARY_DB, process.env.SECRETARY_DB);
+  // Without it: the consolidation's server is started without --staff and counts nothing for its report (memory/consolidate-tally.ts).
+  const [staffFile] = ps(`$env:TEMP = '${temp}'; New-MemoryMcpConfig -Writable -Staff memory-consolidation`);
+  assert.match(path.basename(staffFile), /^secretary-memory-write-memory-consolidation-/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(staffFile, 'utf8')).mcpServers.secretary.args, [path.join(PROJECT_ROOT, 'src', 'mcp', 'server.ts'), '--staff', 'memory-consolidation']);
 });
 test('run-job stats leave out the calls tests made (Haiku in a %TEMP% folder) unless asked, and only read the file', { skip: process.platform !== 'win32' }, () => {
   const home = tempDir();
@@ -96,9 +100,32 @@ test('run-job stats leave out the calls tests made (Haiku in a %TEMP% folder) un
       encoding: 'utf8',
       env: { ...process.env, USERPROFILE: home },
     });
-  assert.match(stats(), /^최근 호출 2개 · 시험 호출 2개 뺌/);
+  assert.match(stats(), /^최근 호출 2개 · 테스트 호출 2개 뺌/);
   assert.match(stats('-WithTests'), /^최근 호출 4개\r?\n/);
   assert.equal(fs.readFileSync(file, 'utf8'), text, 'the record is left as it is');
+});
+
+// 없으면 놓치는 실수: 2026-11-11에 말을 바꾼 뒤 옛 기록의 새로 시작한 이유('문맥 초과', '이어 부르기 실패', '문맥 모름')가 새 이유와 따로 세어져, 재사용 기준값을 고칠 때 숫자가 갈라져 보인다.
+test('run-job stats count the reasons and labels written before the 2026-11-11 wording with the new ones', { skip: process.platform !== 'win32' }, () => {
+  const home = tempDir();
+  const records = secretaryStateDir(PROJECT_ROOT, path.join(home, '.secretary'), path.join(home, '.secretary', 'usage'));
+  fs.mkdirSync(records, { recursive: true });
+  const call = (reason: string | null) =>
+    JSON.stringify({ at: '2026-11-06T00:00:00Z', provider: 'subscription', model: 'sonnet', folder: 'C:\\ai\\workspaces\\_run-job-home', resumed: !reason, new_reason: reason, total_sec: 1, cost_usd: 0.01, context: 1 });
+  const calls = [call('문맥 초과'), call('컨텍스트 초과'), call('이어 부르기 실패'), call('재사용 실패'), call(null)].join('\n') + '\n';
+  fs.writeFileSync(path.join(records, 'run-job-calls.jsonl'), calls);
+  const start = (reason: string) => JSON.stringify({ at: '2026-11-06T00:00:00Z', reused: false, new_reason: reason, minutes_since_done: 1, context: null });
+  fs.writeFileSync(path.join(records, 'worker-reuse.jsonl'), [start('문맥 모름'), start('컨텍스트 모름'), start('문맥 초과')].join('\n') + '\n');
+  const out = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(PROJECT_ROOT, 'scripts', 'run-job', 'run-job-stats.ps1')], {
+    encoding: 'utf8',
+    env: { ...process.env, USERPROFILE: home },
+  });
+  assert.match(out, /새로 시작한 이유: [^\n]*컨텍스트 초과 2/);
+  assert.match(out, /새로 시작한 이유: [^\n]*재사용 실패 2/);
+  assert.match(out, /새로 시작한 이유: [^\n]*컨텍스트 모름 2/);
+  assert.match(out, /^재사용\s+1\s/m, 'the reused calls under the new label');
+  assert.doesNotMatch(out, /문맥|이어 부/);
+  assert.equal(fs.readFileSync(path.join(records, 'run-job-calls.jsonl'), 'utf8'), calls, 'the record is left as it is');
 });
 
 // Without it: two secretaries on one PC read and write each other's work sessions and run-jobs (resuming the other's run-job

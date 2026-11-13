@@ -54,6 +54,6 @@ export function duplicateMessage(similar: DuplicateCheck['similar'], formatDate:
   return [
     `비슷한 기억이 최근 ${DUP_WINDOW_MS / 86_400_000}일 안에 있어 저장하지 않았어요(뜻 점수 ${DUP_MIN_SIM} 이상):`,
     ...similar.map(({ memory: m, sim }) => `#${m.id} ${m.kind} ${formatDate(m.created_at)} (점수 ${sim.toFixed(3)}): ${m.content}`),
-    '같은 내용이면 저장하지 마세요. 내용이 바뀌었으면 supersedes에 그 번호를 넣어 다시 저장하고, 정말 다른 사실이면 allow_similar: true로 다시 저장하세요.',
+    '같은 내용이면 그대로 두세요(이미 저장돼 있어요). 내용이 바뀌었으면 supersedes에 그 번호를 넣어 다시 저장하고, 정말 다른 사실이면 allow_similar: true로 다시 저장하세요.',
   ].join('\n');
 }

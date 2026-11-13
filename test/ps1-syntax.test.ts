@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { tempDir } from './helpers.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
-import { readFeatures } from '../src/setup/features.ts';
+import { readFeatures } from '../src/core/features.ts';
 import { RELEASE_FILES, readReleaseFiles } from '../src/setup/release-files.ts';
 
 /** Every .ps1 under bin/ and scripts/, subfolders too (relative, forward slashes). */
@@ -86,6 +86,7 @@ function ps1Problems(root: string): { failures: string[]; warnings: string[] } {
   return { failures, warnings };
 }
 
+// [늘 남김] 없으면 놓치는 실수: PowerShell 5.1에서 구문 오류가 나거나 BOM 없는 한국어 .ps1이 들어가, 예약 작업·훅이 조용히 안 돈다(2026-11-12 늘 남김으로 올림).
 test('every .ps1 under bin/ and scripts/ parses in Windows PowerShell 5.1, and one with Korean text has a BOM (a script the user added only warns)', { skip: process.platform !== 'win32' }, (t) => {
   assert.ok(ps1Files(PROJECT_ROOT).length > 10, 'found too few .ps1 files');
   const { failures, warnings } = ps1Problems(PROJECT_ROOT);

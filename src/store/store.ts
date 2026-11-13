@@ -1,10 +1,10 @@
 /**
- * 비서 DB의 입구: Store 클래스가 갈래별 파일(기억 memories, 대화 기록 conversation-log, 큰 일 big-work,
+ * 비서 DB의 진입점: Store 클래스가 갈래별 파일(기억 memories, 대화 기록 conversation-log, 주요 현안 main-agenda,
  * 공간·업무 workspaces-tasks, meta·사용량 meta-usage)의 함수를 메서드로 묶는다. 바깥은 여기서만 가져다 쓴다.
  */
 import type { DatabaseSync } from 'node:sqlite';
-import * as bigWorkDb from './big-work.ts';
-import type { BigWork, BigWorkState } from './big-work.ts';
+import * as mainAgendaDb from './main-agenda.ts';
+import type { MainAgenda, MainAgendaState } from './main-agenda.ts';
 import * as logDb from './conversation-log.ts';
 import type { LogEntry, LogRowInfo } from './conversation-log.ts';
 import * as memoryDb from './memories.ts';
@@ -27,7 +27,7 @@ export {
   type NewMemory,
   type Profile,
 } from './memories.ts';
-export { BIG_WORK_CHECK, BIG_WORK_LIMITS, BIG_WORK_STATES, renderBigWork, type BigWork, type BigWorkState } from './big-work.ts';
+export { MAIN_AGENDA_CHECK, MAIN_AGENDA_LIMITS, MAIN_AGENDA_STATES, renderMainAgenda, type MainAgenda, type MainAgendaState } from './main-agenda.ts';
 export type { LogEntry, LogRowInfo } from './conversation-log.ts';
 export {
   MISTAKE_CAUSES,
@@ -78,6 +78,14 @@ export class Store {
   forget(id: number, reason: string): boolean {
     return memoryDb.forget(this.db, id, reason);
   }
+  /** The consolidation judge's writes in one transaction (memories.ts rememberJudged). */
+  rememberJudged(w: memoryDb.JudgedWrite): ReturnType<typeof memoryDb.rememberJudged> {
+    return memoryDb.rememberJudged(this.db, w);
+  }
+
+  supersedeWith(id: number, byId: number): boolean {
+    return memoryDb.supersedeWith(this.db, id, byId);
+  }
 
   getMemory(id: number): Memory | undefined {
     return memoryDb.getMemory(this.db, id);
@@ -115,6 +123,15 @@ export class Store {
     return memoryDb.topics(this.db);
   }
 
+  /** Active memories of a topic made after a summary of it (its created_at): what the summary does not know yet. */
+  newerInTopic(topic: string, after: string, limit = 20): number[] {
+    return memoryDb.newerInTopic(this.db, topic, after, limit);
+  }
+
+  endedInTopic(topic: string, after: string, limit = 20): Array<{ id: number; by: number | null }> {
+    return memoryDb.endedInTopic(this.db, topic, after, limit);
+  }
+
   vectors(model: string, includeInvalid?: boolean): Array<{ id: number; vector: Float32Array }> {
     return memoryDb.vectors(this.db, model, includeInvalid);
   }
@@ -138,24 +155,24 @@ export class Store {
     return memoryDb.updateProfile(this.db, content, reason);
   }
 
-  // ---- big work (store/big-work.ts) ----------------------------------------
+  // ---- main agenda (store/main-agenda.ts) -------------------------------------
 
   /** The board: each work's latest row, off-board states left out, in order of first appearance. */
-  bigWork(): BigWork[] {
-    return bigWorkDb.bigWork(this.db);
+  mainAgenda(): MainAgenda[] {
+    return mainAgendaDb.mainAgenda(this.db);
   }
 
   /** Every change to one work, oldest first. */
-  bigWorkHistory(name: string): BigWork[] {
-    return bigWorkDb.bigWorkHistory(this.db, name);
+  mainAgendaHistory(name: string): MainAgenda[] {
+    return mainAgendaDb.mainAgendaHistory(this.db, name);
   }
 
   /**
    * Adds, changes or removes (끝남/지움) one line of the board; the rest is untouched. Each call
    * appends a row, so the history stays. Returns null when nothing changed.
    */
-  setBigWork(input: { name: string; state: BigWorkState; note?: string; sourceLogId?: number; seenId?: number }): BigWork | null {
-    return bigWorkDb.setBigWork(this.db, input);
+  setMainAgenda(input: { name: string; state: MainAgendaState; note?: string; sourceLogId?: number; seenId?: number }): MainAgenda | null {
+    return mainAgendaDb.setMainAgenda(this.db, input);
   }
 
   // ---- raw log (store/conversation-log.ts) ----------------------------------------------
@@ -267,8 +284,7 @@ export class Store {
     return workDb.listWorkspaces(this.db);
   }
 
-  /** review: the plan said "검수 대기: 예" (the user sees the result before it is done). */
-  createTask(t: { workspaceId: number; name: string; title: string; goal: string; outputDir: string; review?: boolean }): Task {
+  createTask(t: { workspaceId: number; name: string; title: string; goal: string; outputDir: string }): Task {
     return workDb.createTask(this.db, t);
   }
 
@@ -277,18 +293,13 @@ export class Store {
   }
 
   /** Only the given fields change; returns undefined if there is no such task. */
-  updateTask(id: number, patch: { status?: TaskStatus; sessionRef?: string; result?: string; review?: boolean }): TaskWithWorkspace | undefined {
+  updateTask(id: number, patch: { status?: TaskStatus; sessionRef?: string; result?: string }): TaskWithWorkspace | undefined {
     return workDb.updateTask(this.db, id, patch);
   }
 
   /** Most recently updated first. */
   listTasks(opts?: { status?: TaskStatus; workspaceId?: number; limit?: number }): TaskWithWorkspace[] {
     return workDb.listTasks(this.db, opts);
-  }
-
-  /** In 'review' since before `before` (ISO), longest waiting first. */
-  reviewWaiting(before: string): TaskWithWorkspace[] {
-    return workDb.reviewWaiting(this.db, before);
   }
 
   // ---- the user's title (store/user-title.ts) --------------------------------------
@@ -372,11 +383,15 @@ export class Store {
     return guardDb.turnTools(this.db, opts);
   }
 
+  guardHitSummary(since: string): ReturnType<typeof guardDb.guardHitSummary> {
+    return guardDb.guardHitSummary(this.db, since);
+  }
+
   recordMistake(m: NewMistake): Mistake {
     return guardDb.recordMistake(this.db, m);
   }
 
-  updateMistake(id: number, patch: { guard?: string; evalIds?: string[]; recurred?: boolean; harm?: string; ruleRef?: string }): Mistake | undefined {
+  updateMistake(id: number, patch: { group?: string; guard?: string; recurred?: boolean; harm?: string; ruleRef?: string }): Mistake | undefined {
     return guardDb.updateMistake(this.db, id, patch);
   }
 

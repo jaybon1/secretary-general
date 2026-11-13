@@ -1,6 +1,6 @@
 ﻿# run-job.ps1이 dot-source 한다: Claude Code가 아닌 다른 회사 CLI 공급자(providers.json의 copilot-cli, antigravity-cli)로
 # 지시 하나를 돌린다. 기능 'external-providers'(처음엔 꺼짐, feature-toggle 스킬로 켠다)의 일부로, providers.json에 그 공급자를 넣어야 쓰인다.
-# 결과 글은 화면으로 바로 내보내고 종료 코드를 돌려준다(이어 부르기·호출 기록·기억 MCP 없음).
+# 결과 글은 화면으로 바로 내보내고 종료 코드를 돌려준다(재사용·호출 기록·기억 MCP 없음).
 
 $OtherCliTypes = @('copilot-cli', 'antigravity-cli')
 

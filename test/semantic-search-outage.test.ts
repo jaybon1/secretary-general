@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import type { SemanticSearch } from '../src/semantic-search/client.ts';
 
 // The server's files sit next to SECRETARY_DB, read once when core/config.ts loads: point it at a temp folder
 // before anything imports core/config.ts (helpers.ts does too), so these tests never touch the real server's files.
@@ -49,7 +50,7 @@ const DEAD_PID = spawnSync(process.execPath, ['-e', '']).pid!;
 function fresh(): void {
   delete process.env.SECRETARY_SEMANTIC_SEARCH;
   process.env.SECRETARY_TEST_FREE_MB = '8000';
-  for (const f of [STATE, DOWN, FAILURE_LOG, MEMORY]) fs.rmSync(f, { force: true });
+  for (const f of [STATE, DOWN, FAILURE_LOG, MEMORY, `${dbPath}.semantic-search-misses.json`]) fs.rmSync(f, { force: true });
 }
 
 /** A fake start: "spawns" a server that is this (live) process, and counts, noting which starts download the model first. */
@@ -292,6 +293,7 @@ test('each session is told once per real outage, and again in the next one', () 
   assert.notEqual(outageNotice('A'), '');
 });
 
+// [늘 남김] 없으면 놓치는 실수: 의미 검색 서버의 고장 기록 파일이 깨졌을 때 질문 훅이 죽어 기억 주입이 통째로 빠진다(기억 주입).
 test('a broken down file never breaks the prompt hook', () => {
   fresh();
   fs.writeFileSync(DOWN, JSON.stringify({ since: 1, told: null }));
@@ -307,10 +309,125 @@ test('the prompt hook puts the notice ahead of the memories, once', async () => 
   noteFailure('boom');
   const s = tempStore();
   s.remember({ kind: 'fact', content: '사용자는 치과 예약을 했다.' });
-  const first = await promptContext(s, '치과 예약', 'S1');
+  // The searches themselves are not under test here (waiting: below): they give nothing and report no miss.
+  const quiet = () => [async () => null, async () => null] as [SemanticSearch, SemanticSearch];
+  const first = await promptContext(s, '치과 예약', 'S1', undefined, quiet);
   assert.match(first, /^<secretary-semantic-search-server>.*<\/secretary-semantic-search-server>\n<secretary-memory>/);
-  const second = await promptContext(s, '치과 예약 언제였지', 'S1');
+  const second = await promptContext(s, '치과 예약 언제였지', 'S1', undefined, quiet);
   assert.doesNotMatch(second, /secretary-semantic-search-server/);
   // With nothing to recall, the notice still goes out on its own.
-  assert.match(await promptContext(s, '아무 상관 없는 말', 'S2'), /^<secretary-semantic-search-server>.*<\/secretary-semantic-search-server>$/);
+  assert.match(await promptContext(s, '아무 상관 없는 말', 'S2', undefined, quiet), /^<secretary-semantic-search-server>.*<\/secretary-semantic-search-server>$/);
+});
+
+// 없으면 놓치는 실수: 의미 검색 서버가 답하지 않을 때 기능마다 조용히 단어 검색으로 넘어가, 비서가 원인을 모른 채 뜻이 같은 기억을 놓친다
+// (출처 재검토 C9를 넓힘, 2026-11-13 사용자 결정): 실패는 기능 이름·이유·시각과 함께 한 파일에 쌓이고, 2분 넘게 이어지면 세션마다 한 번 알린다.
+test('every search the server does not answer is recorded with the feature and why, and a long streak is told once per session', async () => {
+  fresh();
+  const { missLogFile, missNotice, semanticClient } = await import('../src/semantic-search/client.ts');
+  const log = missLogFile();
+  assert.equal(log, process.env.SECRETARY_SEMANTIC_SEARCH_MISS_LOG, 'tests write into their own file');
+  fs.rmSync(log, { force: true });
+  const lines = () => fs.readFileSync(log, 'utf8').trimEnd().split('\n').map((l) => JSON.parse(l) as { feature: string; reason: string; at: string });
+  const reasons: string[] = [];
+  // Loading (this live process holds the state file without a port): no results, one line, the caller told why.
+  fs.writeFileSync(STATE, JSON.stringify({ pid: process.pid, port: null }));
+  assert.equal(await semanticClient(500, 'recall 도구', (r) => reasons.push(r))('치과', { limit: 5 }), null);
+  assert.deepEqual(reasons, ['서버가 모델을 불러오는 중']);
+  assert.deepEqual(lines().map((l) => [l.feature, l.reason]), [['recall 도구', '서버가 모델을 불러오는 중']]);
+  // A server that takes too long: a timeout, recorded the same way.
+  const http = await import('node:http');
+  const slow = http.createServer(() => {});
+  await new Promise<void>((r) => slow.listen(0, '127.0.0.1', () => r()));
+  const port = (slow.address() as { port: number }).port;
+  fs.writeFileSync(STATE, JSON.stringify({ pid: process.pid, port }));
+  assert.equal(await semanticClient(100, '질문마다 기억 자동 주입(질문)')('치과', { limit: 5 }), null);
+  slow.closeAllConnections();
+  slow.close();
+  assert.deepEqual(lines().at(-1)!.reason, '시간 초과(100ms)');
+  // Short streaks tell nobody; past two minutes each session once, and not while the outage notice speaks.
+  const streak = `${dbPath}.semantic-search-misses.json`;
+  const since = Date.parse(JSON.parse(fs.readFileSync(streak, 'utf8')).since);
+  assert.equal(missNotice('S1', false, since + 60_000), '');
+  const told = missNotice('S1', false, since + 3 * 60_000);
+  assert.match(told, /^<secretary-semantic-search-server>의미 검색이 [^<]*약 3분째 답하지 않아 단어 검색만 쓰고 있어요\(이유: [^)]*서버가 모델을 불러오는 중 1번[^)]*시간 초과\(100ms\) 1번 · 기능: [^)]*recall 도구 1번[^<]*비서 할 일:[^<]*semantic-search-misses\.jsonl/);
+  assert.equal(missNotice('S1', false, since + 4 * 60_000), '', 'once per session');
+  assert.equal(missNotice('S2', true, since + 4 * 60_000), '', 'the outage notice speaks instead');
+  assert.match(missNotice('S2', false, since + 4 * 60_000), /secretary-semantic-search-server/);
+  // Turned off by setting: no miss at all.
+  process.env.SECRETARY_SEMANTIC_SEARCH = 'off';
+  const before = lines().length;
+  assert.equal(await semanticClient(100, 'recall 도구')('치과', { limit: 5 }), null);
+  assert.equal(lines().length, before);
+  // The server answers: the streak ends with a line saying so.
+  delete process.env.SECRETARY_SEMANTIC_SEARCH;
+  const ok = http.createServer((_q, res) => res.end(JSON.stringify({ median: 0.3, hits: [] })));
+  await new Promise<void>((r) => ok.listen(0, '127.0.0.1', () => r()));
+  fs.writeFileSync(STATE, JSON.stringify({ pid: process.pid, port: (ok.address() as { port: number }).port }));
+  assert.deepEqual(await semanticClient(2000, 'recall 도구')('치과', { limit: 5 }), { median: 0.3, hits: [] });
+  ok.close();
+  assert.match(lines().at(-1)!.reason, /^회복: 응답함\(실패 2번/);
+  assert.equal(fs.existsSync(streak), false);
+  fs.rmSync(log, { force: true });
+  fresh();
+});
+
+// 없으면 놓치는 실수: 의미 검색 서버가 늦거나 꺼져 있으면 기능마다 바로 단어 검색으로 넘어가 뜻이 같은 기억을 놓치고(2026-11-13 사용자 결정), run-job·업무 세션·정리 담당이 서버를 띄워 그 수명이 엉뚱한 프로세스에 묶인다.
+test('waiting: a server coming up is waited for; only a process allowed to (the secretary\'s side) starts it; a stopped one ends the wait at once', async () => {
+  fresh();
+  const { allowServerStart, semanticClient, serverStartAllowed } = await import('../src/semantic-search/client.ts');
+  const http = await import('node:http');
+  assert.equal(serverStartAllowed(), false, 'off until the process says so');
+  // Not allowed: a gone server is not started, and the wait ends with why.
+  let started = 0;
+  assert.equal(ensureServer(Date.now(), () => (started++, 1), false).status, 'absent');
+  assert.equal(started, 0);
+  assert.equal(fs.existsSync(STATE), false);
+  const reasons: string[] = [];
+  const t0 = Date.now();
+  assert.equal(await semanticClient(1000, 'recall 도구', (r) => reasons.push(r), { waitMs: 300, pollMs: 50 })('치과', { limit: 5 }), null);
+  assert.ok(Date.now() - t0 >= 280, 'it waited');
+  assert.match(reasons[0], /^서버가 꺼져 있음\(여기서는 띄우지 않고/);
+  // Loading, then up within the wait: the search is answered.
+  const ok = http.createServer((_q, res) => res.end(JSON.stringify({ median: 0.2, hits: [{ id: 1, sim: 0.9 }] })));
+  await new Promise<void>((r) => ok.listen(0, '127.0.0.1', () => r()));
+  fs.writeFileSync(STATE, JSON.stringify({ pid: process.pid, port: null }));
+  setTimeout(() => fs.writeFileSync(STATE, JSON.stringify({ pid: process.pid, port: (ok.address() as { port: number }).port })), 150);
+  assert.deepEqual(await semanticClient(2000, 'recall 도구', undefined, { waitMs: 3000, pollMs: 50 })('치과', { limit: 5 }), { median: 0.2, hits: [{ id: 1, sim: 0.9 }] });
+  ok.close();
+  // Stopped for the user: no wait at all, even when allowed to start.
+  fs.rmSync(STATE, { force: true });
+  allowServerStart();
+  fs.writeFileSync(DOWN, JSON.stringify({ since: new Date().toISOString(), error: 'x', told: [], lowMemory: { needMb: 1500, freeMb: 100 } }));
+  const t1 = Date.now();
+  const why: string[] = [];
+  assert.equal(await semanticClient(1000, 'recall 도구', (r) => why.push(r), { waitMs: 5000, pollMs: 50 })('치과', { limit: 5 }), null);
+  assert.ok(Date.now() - t1 < 2000);
+  assert.match(why[0], /메모리 부족/);
+  allowServerStart(false);
+  fresh();
+});
+
+// 없으면 놓치는 실수: 기다려도 의미 검색이 안 되면 비서가 아무 말 없이 단어 검색 결과로 답하거나, 질문 훅이 질문을 막아 대화가 멈춘다. 사용자가 "단어 검색으로 답해"라고 하면 그 대화에서는 다시 묻지 않는다.
+test('the prompt: a failed search asks first (not blocked); "단어 검색으로 답해" goes on with word search in that conversation only', async () => {
+  fresh();
+  const s = tempStore();
+  s.remember({ kind: 'fact', content: '치과는 매달 첫째 주에 간다.' });
+  let called = 0;
+  const failing = (onMiss: (why: string) => void) => {
+    const f = async () => (called++, onMiss('서버가 꺼져 있음, 90초 기다림'), null);
+    return [f, f] as [typeof f, typeof f];
+  };
+  const asked = await promptContext(s, '치과 언제 가?', 'W1', undefined, failing);
+  assert.match(asked, /^<secretary-semantic-search-server>의미 검색 서버가 기다려도 답하지 않아\(이유: 서버가 꺼져 있음, 90초 기다림\)[^<]*원래 질문에 답하기 전에[^<]*단어 검색으로 답해/);
+  assert.match(asked, /치과는 매달 첫째 주/, 'the word-search memories still come');
+  called = 0;
+  const words = await promptContext(s, '단어 검색으로 답해', 'W1', undefined, failing);
+  assert.equal(called, 0);
+  assert.doesNotMatch(words, /secretary-semantic-search-server/);
+  assert.doesNotMatch(await promptContext(s, '치과 또 언제?', 'W1', undefined, failing), /secretary-semantic-search-server/);
+  assert.equal(called, 0, 'that conversation stays on word search');
+  assert.match(await promptContext(s, '치과 언제?', 'W2', undefined, failing), /원래 질문에 답하기 전에/, 'another conversation still asks');
+  await promptContext(s, '의미 검색 다시 켜', 'W1', undefined, failing);
+  assert.ok(called > 0, 'asking for the server back ends it');
+  fresh();
 });

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { CHECK, CLI, FEATURE, NOTICE, STAFF, TAG, TASK } from '../src/core/names.ts';
-import { readFeatures } from '../src/setup/features.ts';
+import { readFeatures } from '../src/core/features.ts';
 import { STAFF_NAMES } from '../src/staff/staff.ts';
 import { PROMPT_NOTICES } from '../src/hooks/prompt-notices.ts';
 import { CHECKS } from '../src/setup/check-items.ts';
@@ -81,7 +81,7 @@ test('names.ts: every staff member is a real one (src/staff), every feature id i
   for (const id of Object.values(FEATURE)) assert.ok(ids.has(id), id);
 });
 
-// 없으면 놓치는 실수: 예약 작업 id를 names.ts에서만(또는 features.json에서만) 바꿔 설치 점검이 없는 작업을 찾는다.
+// 없으면 놓치는 실수: 예약 작업 id를 names.ts에서만(또는 features.json에서만) 바꿔 설치 상태 점검이 없는 작업을 찾는다.
 test('names.ts: the scheduled task ids are the ones in features.json, each once', () => {
   const ids = (readFeatures(PROJECT_ROOT) ?? []).flatMap((f) => (f.scheduledTasks ?? []).map((t) => t.id));
   assert.deepEqual(new Set(ids), new Set(Object.values(TASK)));

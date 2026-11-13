@@ -11,7 +11,7 @@
 1. `features.json`의 `usage-poll`을 `"enabled": true`로.
 2. 비서 서버를 다시 켠다(`server-ops` 스킬, 서버 안 세션이 끊기니 먼저 묻는다). 다시 켜기 전에 바로 띄우려면 비서 폴더에서 `Start-Process node -ArgumentList '--no-warnings','src/cli.ts','usage-poll' -WindowStyle Hidden`(비서 서버와 묶이지 않아 PC를 끌 때까지 돈다).
 3. 약 15초 뒤 `%USERPROFILE%\.secretary\usage\subscription-<계정>.json`(로그인 계정을 못 읽으면 `subscription.json`)의 `updated_at`이 새로 바뀌었는지 본다.
-4. 공급자를 고르라고 하면 `this-secretary.local.json`의 `usage-poll` 칸을 위 꼴로 쓴다(다른 칸은 그대로 둔다)(이름은 `providers.json`에 있는 것만). 다음 조회부터 바로 따른다.
+4. 공급자를 고르라고 하면 `this-secretary.local.json`의 `usage-poll` 키를 위 형식으로 쓴다(다른 키는 그대로 둔다)(이름은 `providers.json`에 있는 것만). 다음 조회부터 바로 따른다.
 
 ## AGENTS.md에 넣을 글
 

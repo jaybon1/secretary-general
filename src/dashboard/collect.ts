@@ -20,9 +20,8 @@ import { labeler, providerLabel, readProviders, type ProviderInfo } from '../usa
 import { readUsageChoice } from '../usage/usage-settings.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// review: waits for the user's own look at the result (the user's turn), so it stands next to running.
-const STATUSES = ['ready', 'running', 'review', 'failed', 'done', 'cancelled'] as const;
-const STATUS_KO: Record<string, string> = { ready: '대기', running: '진행 중', review: '검수 대기(사용자 차례)', failed: '실패', done: '끝남', cancelled: '취소' };
+const STATUSES = ['ready', 'running', 'failed', 'done', 'cancelled'] as const;
+const STATUS_KO: Record<string, string> = { ready: '대기', running: '진행 중', failed: '실패', done: '끝남', cancelled: '취소' };
 const STALE_MIN = 30;
 /** A run-job-active file that cannot be read as JSON this many minutes after its last write is deleted (runJobsActive). */
 const BROKEN_RUNJOB_MIN = 10;

@@ -1,6 +1,6 @@
 ﻿# -Detach로 띄운 run-job(scripts/lib/detached-job.ps1)을 기다린다. AI를 부르지 않는 단순 확인이라 기다리는 동안 토큰이 들지 않는다.
 # 일이 끝나거나, 끝 기록 없이 프로세스가 사라지거나, -MaxMinutes(기본 55분, common.ps1의 $CacheWakeMinutes)가 지나면 끝나며 비서를 깨운다.
-# 55분인 까닭은 업무 세션 감시(watch-worker.ps1)와 같다: 구독 대화 캐시가 1시간이라, 그 안에 깨어 읽으면 캐시가 살아 있고 다시 1시간 늘어난다.
+# 55분인 까닭은 업무 세션 모니터링(watch-worker.ps1)와 같다: 구독 대화 캐시가 1시간이라, 그 안에 깨어 읽으면 캐시가 살아 있고 다시 1시간 늘어난다.
 # 비서는 이 명령을 백그라운드 명령(시간제한 3600000ms)으로 띄우고, "아직 도는 중"이 오면 알림 없이 같은 명령을 다시 띄운다.
 # 끝나면 그 일의 출력 전부(out.txt, 오류 출력이 있으면 err.txt)를 내고, 그 일의 종료 코드로 끝난다.
 #
@@ -25,7 +25,12 @@ $errFile = Join-Path $dir 'err.txt'
 $started = Get-Date
 $deadline = $started.AddMinutes($MaxMinutes)
 
-function Get-Text([string]$Path) { if (Test-Path $Path) { [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) } else { '' } }
+# 일이 아직 out.txt에 쓰는 중이어도 읽는다(ReadAllText는 쓰기 잠금과 부딪혀 IOException으로 기다리기를 먼저 끝냈다, 2026-11-13).
+function Get-Text([string]$Path) {
+  if (-not (Test-Path $Path)) { return '' }
+  $fs = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+  try { $r = [IO.StreamReader]::new($fs, [Text.Encoding]::UTF8); $r.ReadToEnd() } finally { $fs.Dispose() }
+}
 # 숨은 창의 PowerShell은 오류 출력을 CLIXML로 쓰기도 한다. 진행 표시는 버리고 오류 글만 남긴다.
 function Get-ErrText([string]$Path) {
   $t = (Get-Text $Path) -replace '#< CLIXML\r?\n?', ''

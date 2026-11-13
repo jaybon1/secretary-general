@@ -155,7 +155,7 @@ export function lowMemoryNotice(needMb: number, freeMb: number): string {
 // What the secretary does with the notice. It rides along with the notice so the rule
 // costs nothing in AGENTS.md while the server is healthy.
 export const RESTART_GUIDE = `비서 할 일: 이 문구를 답 맨 위 한 줄로 알리고, \`node ${SCRIPTS.watchSemanticSearchServer}\`를 백그라운드 명령으로 띄워 두었다가 끝나면 그 출력 한 줄로 보고한다.`;
-export const ASK_GUIDE = `비서 할 일: 이 문구를 답 맨 위 한 줄로 알리고, 감시는 띄우지 않고 다시 켤지 묻는다. 켜라고 하면 \`node ${SCRIPTS.watchSemanticSearchServer} --retry\`를 백그라운드로 띄운다.`;
+export const ASK_GUIDE = `비서 할 일: 이 문구를 답 맨 위 한 줄로 알리고 다시 켤지 묻는다. 켜라고 하면 \`node ${SCRIPTS.watchSemanticSearchServer} --retry\`를 백그라운드로 띄운다.`;
 const CAUSE_GUIDE = ' 원인을 물으면 `secretary.db.semantic-search-server-failures.log`를 읽어 정리해 답한다(모델 파일 문제면 의미 검색 서버가 모델을 한 번 다시 받고(약 1분) 그래도 실패하면 멈춘다. 메모리가 부족하면 바로 멈춘다).';
 
 export function noticeTag(text: string, guide: string): string {

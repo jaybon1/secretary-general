@@ -12,7 +12,7 @@ backups/
 # scripts/*.local.json files below were merged into it on 2026-11-10 (node src/cli.ts this-secretary-merge): their lines stay
 # until no PC has them, so a file not yet merged is never committed.
 /this-secretary.local.json
-# This install's own id (src/setup/secretary-id.ts): made on first use, kept across updates, never in git or a release
+# This install's own id (src/core/secretary-id.ts): made on first use, kept across updates, never in git or a release
 .secretary-id
 
 # Embedding model download and the semantic-search server's files beside the database (state, outage, failure log, memory)
@@ -21,6 +21,8 @@ models/
 *.semantic-search-server-down.json
 *.semantic-search-server-failures.log
 *.semantic-search-server-memory.json
+# Semantic-search misses in a row (src/semantic-search/config.ts MISS_STREAK_FILE)
+*.semantic-search-misses.json
 # Last install check (src/setup/setup-check.ts), read by the prompt hook
 *.db.setup-check.json
 # This PC's dashboard settings (src/dashboard/settings.ts: addresses, port, share folders)

@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { planFromProfile, planProblems, type MovePlan } from '../src/upgrade/big-work-move.ts';
+import { planFromProfile, planProblems, type MovePlan } from '../src/upgrade/main-agenda-move.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { tempDir, testStore } from './helpers.ts';
 // @ts-expect-error plain .mjs script without types
@@ -24,7 +24,7 @@ const PROFILE = [
   '- 비싼 작업은 run-job으로 넘긴다.',
 ].join('\n');
 
-test('big-work move: a grouped section becomes one plan row per work, the profile keeps the rest', () => {
+test('main-agenda move: a grouped section becomes one plan row per work, the profile keeps the rest', () => {
   const plan = planFromProfile(PROFILE, 40);
   assert.deepEqual(plan.section[0], '## 큰 일 상태');
   assert.deepEqual(
@@ -46,7 +46,7 @@ test('big-work move: a grouped section becomes one plan row per work, the profil
   assert.throws(() => planFromProfile('# 민지님\n- 디자이너', 1), /찾지 못했어요/);
 });
 
-test('big-work move over the CLI: preview writes a plan without touching data, --apply fills the board once', () => {
+test('main-agenda move over the CLI: preview writes a plan without touching data, --apply fills the board once', () => {
   const dir = tempDir();
   const db = path.join(dir, 'move.db');
   const before = testStore(db);
@@ -54,23 +54,23 @@ test('big-work move over the CLI: preview writes a plan without touching data, -
   before.db.close();
   const planFile = path.join(dir, 'plan.json');
   const cli = (...args: string[]) =>
-    execFileSync(process.execPath, [path.join(PROJECT_ROOT, 'src', 'cli.ts'), 'big-work-from-profile', planFile, ...args], {
+    execFileSync(process.execPath, [path.join(PROJECT_ROOT, 'src', 'cli.ts'), 'main-agenda-from-profile', planFile, ...args], {
       env: { ...process.env, SECRETARY_DB: db, SECRETARY_SEMANTIC_SEARCH: 'off', SECRETARY_SETUP_CHECK: 'off' },
       encoding: 'utf8',
     });
-  assert.match(cli(), /프로필 v1의 큰 일 칸 5줄 → 판 4줄[\s\S]*고칠 것 없음/);
+  assert.match(cli(), /프로필 v1의 큰 일 칸 5줄 → 주요 현안 4줄[\s\S]*고칠 것 없음/);
   const s = testStore(db);
   assert.equal(s.getProfile()?.version, 1, 'preview changes nothing');
-  assert.deepEqual(s.bigWork(), []);
+  assert.deepEqual(s.mainAgenda(), []);
 
   // The secretary checks each line here; a fix is an edit of the JSON.
   const plan = JSON.parse(fs.readFileSync(planFile, 'utf8')) as MovePlan;
   plan.rows[1].note = '분류 중';
   fs.writeFileSync(planFile, JSON.stringify(plan));
-  assert.match(cli('--apply'), /큰 일 판 4줄 넣음, 프로필 v2 저장/);
+  assert.match(cli('--apply'), /주요 현안 4줄 넣음, 프로필 v2 저장/);
   const after = testStore(db);
-  assert.deepEqual(after.bigWork().map((r) => [r.name, r.note]).slice(0, 2), [['카페 소개 페이지', '시안 2차'], ['비서 기억 정리', '분류 중']]);
-  assert.equal(after.bigWork().length, 4);
+  assert.deepEqual(after.mainAgenda().map((r) => [r.name, r.note]).slice(0, 2), [['카페 소개 페이지', '시안 2차'], ['비서 기억 정리', '분류 중']]);
+  assert.equal(after.mainAgenda().length, 4);
   assert.doesNotMatch(after.getProfile()?.content ?? '', /큰 일/);
   assert.throws(() => cli('--apply'), /v1에서 만들었는데 지금은 v2/);
 });

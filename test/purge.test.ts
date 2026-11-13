@@ -70,6 +70,7 @@ function conversation(): { s: Store; id: (uuid: string) => number; rows: Row[] }
 const uuids = (plan: PurgePlan | { error: string }) => ('error' in plan ? plan.error : plan.rows.map((r) => r.message_uuid));
 const sessionUuids = (s: Store, sid: string) => s.sessionTail(sid, 50).map((e) => e.message_uuid);
 
+// [늘 남김] 없으면 놓치는 실수: 지우라는 말이 섞인 보통 대화가 삭제 문구로 읽혀 대화가 지워진다(대화 지우기).
 test('the phrase: only the whole message "비서 대화 삭제 N턴 | #번호 | #번호-#번호", spaces anywhere aside; the old "대화 지워" and anything around it are plain talk', () => {
   assert.deepEqual(parsePurgeCommand('비서 대화 삭제 2턴'), { spec: { kind: 'turns', n: 2 } });
   assert.deepEqual(parsePurgeCommand('비서대화삭제2턴'), { spec: { kind: 'turns', n: 2 } });
@@ -124,6 +125,7 @@ test('choosing rows: turns skip the compaction summary and other sessions; a tur
   assert.match((planPurge(s, { kind: 'turns', n: 21 }) as { error: string }).error, /1~20/);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 삭제 문구만으로(승인 코드 없이) 대화가 지워지거나, 지운 글이 격리 파일 밖에 남는다(대화 지우기).
 test('the hook: the phrase gets only the preview order, the code deletes, and the text goes only to the quarantine file', async () => {
   const { s, id, rows } = conversation();
   const [first, last] = [id('p2'), id('a3')];
@@ -133,7 +135,7 @@ test('the hook: the phrase gets only the preview order, the code deletes, and th
   // Linked to the turn only by a race: saved long after it.
   const late = s.remember({ kind: 'fact', content: '나중 기억', sourceLogId: id('p2') }).id;
   s.db.prepare('UPDATE memories SET created_at = ? WHERE id = ?').run(new Date(Date.now() + 3600_000).toISOString(), late);
-  s.setBigWork({ name: '시험 일', state: '진행 중', sourceLogId: id('p2') });
+  s.setMainAgenda({ name: '시험 일', state: '진행 중', sourceLogId: id('p2') });
   s.setJson('situation_board', { text: `요약: ${BAD} 이야기`, lastLogId: id('y1'), updatedAt: new Date().toISOString() });
   s.setJson('open_questions', {
     lastLogId: id('a3'),
@@ -150,9 +152,9 @@ test('the hook: the phrase gets only the preview order, the code deletes, and th
 
   const preview2 = preview(s, { kind: 'turns', n: 2 });
   assert.match(preview2, /^\[대화 지우기 미리 보기\] 아직 안 지웠어요\./);
-  assert.match(preview2, new RegExp(`^#${id('p2')} 사용자 \\d+자 · \\d+낱말 — \\S( \\S)*$`, 'm'));
-  assert.match(preview2, new RegExp(`^#${id('a2')} 비서 \\d+자 · \\d+낱말 — \\S( \\S)*$`, 'm'));
-  assert.match(preview2, new RegExp(`^무효 처리할 기억\\(그 턴에 저장된 것\\) 1개:\n기억 #${doomed} 8자 · 3낱말 — 지 턴 기$`, 'm'));
+  assert.match(preview2, new RegExp(`^#${id('p2')} 사용자 \\d+자 · \\d+단어 — \\S( \\S)*$`, 'm'));
+  assert.match(preview2, new RegExp(`^#${id('a2')} 비서 \\d+자 · \\d+단어 — \\S( \\S)*$`, 'm'));
+  assert.match(preview2, new RegExp(`^무효 처리할 기억\\(그 턴에 저장된 것\\) 1개:\n기억 #${doomed} 8자 · 3단어 — 지 턴 기$`, 'm'));
   assert.match(preview2, /상황판: 이 대화를 이미 읽었으니/);
   assert.match(preview2, /남은 질문에서 뺄 것: A$/m);
   assert.match(preview2, /남은 질문에서 뺄 것: A\n승인 코드: [0-9a-z]{6}\n지우려면 30분 안에 이 코드만 보내세요/);
@@ -174,7 +176,7 @@ test('the hook: the phrase gets only the preview order, the code deletes, and th
   assert.equal(s.getMemory(doomed)?.invalid_reason, PURGE_REASON);
   assert.equal(s.getMemory(old)?.valid_to, null);
   assert.equal(s.getMemory(late)?.valid_to, null);
-  assert.equal(s.bigWork()[0].source_log_id, null);
+  assert.equal(s.mainAgenda()[0].source_log_id, null);
   const board = s.getJson<{ text: string; lastLogId: number }>('situation_board')!;
   assert.equal(board.text, '');
   assert.ok(board.lastLogId < id('y1'), 'the rewrite reads the remaining rows again');
@@ -217,6 +219,7 @@ test('a deletion run directly (purge-log --confirm) is told once on the next pro
   assert.equal(purgeNotice(s), '');
 });
 
+// [늘 남김] 없으면 놓치는 실수: 지난 코드나 다른 줄의 코드, 글 속에 섞인 코드로 대화가 지워진다(대화 지우기).
 test('the approval code: the whole message only (spaces around it aside), within 30 minutes, for the very rows and memories it was made for', async () => {
   const { s, id } = conversation();
   const code = codeIn(preview(s, { kind: 'turns', n: 1 }));
@@ -315,7 +318,7 @@ test('a turn that ended in an error: its memories are found from the remember re
   const file = path.join(dir, 'e1.jsonl');
   assert.match(ctx(purgeHook(s, '비서 대화 삭제 1턴', 'e1', file, noCatchUp)), /preview 1턴 --here e1/);
   const shown = runPreview(s, { kind: 'turns', n: 1 }, { here: 'e1', dirs: [dir] });
-  assert.match(shown, new RegExp(`무효 처리할 기억\\(그 턴에 저장된 것\\) 1개:\n기억 #${memory} \\d+자 · \\d+낱말 — .+$`, 'm'));
+  assert.match(shown, new RegExp(`무효 처리할 기억\\(그 턴에 저장된 것\\) 1개:\n기억 #${memory} \\d+자 · \\d+단어 — .+$`, 'm'));
   assert.match(done(purgeHook(s, codeIn(shown), 'e1', file, { ...noCatchUp, dirs: [dir] })), /지웠어요/);
   assert.deepEqual(sessionUuids(s, 'e1'), ['q1', 'r1']);
   assert.equal(s.getMemory(memory)?.invalid_reason, PURGE_REASON);
@@ -325,6 +328,7 @@ test('a turn that ended in an error: its memories are found from the remember re
   assert.deepEqual(sessionUuids(s, 'e1'), ['q1', 'r1']);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 격리 파일을 덮어써 앞서 지운 대화를 되살릴 수 없게 된다(대화 지우기).
 test('the quarantine grows by appending, may be deleted any time, and rows can be put back', () => {
   const { s, id } = conversation();
   const p1 = id('p1');
@@ -359,6 +363,7 @@ test('the quarantine grows by appending, may be deleted any time, and rows can b
   assert.equal(count(), 3);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 지운 대화의 id가 새 대화에 다시 쓰여, 기억 정리·상황판이 읽은 자리가 어긋나 새 대화를 건너뛴다(대화 지우기).
 test('deleting the newest rows: their ids are not handed out again, so watermarks stay where they are', () => {
   clock = Date.now() - 30_000;
   const s = tempStore();
@@ -407,7 +412,7 @@ test('cli: the phrase reaches the model with only the preview order, the preview
   assert.match(context, /^<secretary-purge-preview>[^]*purge-log preview 1턴 --here s1\n<\/secretary-purge-preview>$/);
   assert.doesNotMatch(context, /<secretary-(memory|board|continuity|usage|consolidate)/, 'nothing else on this prompt');
   const shown = cli(['purge-log', 'preview', '1턴', '--here', 's1']);
-  assert.match(shown, /^#\d+ 사용자 \d+자 · \d+낱말 — \S( \S)*$/m, 'first letters, no model call');
+  assert.match(shown, /^#\d+ 사용자 \d+자 · \d+단어 — \S( \S)*$/m, 'first letters, no model call');
   assert.doesNotMatch(shown, new RegExp(BAD));
   const second = JSON.parse(run(` ${codeIn(shown)} `));
   assert.equal(second.decision, undefined, 'not blocked: the secretary passes the result on');

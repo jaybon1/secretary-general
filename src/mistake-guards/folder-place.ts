@@ -25,7 +25,7 @@ const SCRATCH = 'temp';
 
 const placeHint = 'workspaces/_run-job-home/output/research/<날짜-일>/(단건 조사·시험), workspaces/quick-outputs(작은 결과물), 맡긴 일은 그 업무 공간 안';
 const newTopReason = (root: string, seg: string) =>
-  `${path.basename(root)} 바로 아래에는 새 폴더·파일을 만들지 않는다(${seg}). ${placeHint}에 둔다. 꼭 그 자리여야 하면 먼저 사용자에게 묻는다.`;
+  `새 폴더·파일은 ${placeHint}에 둔다(${path.basename(root)} 바로 아래(${seg})가 아니라). 꼭 그 자리여야 하면 먼저 사용자에게 묻는다.`;
 const scratchReason = (root: string) =>
   `${path.basename(root)}/${SCRATCH}는 사용자의 임시 작업 폴더라 쓰지 않는다. ${placeHint}에 둔다.`;
 

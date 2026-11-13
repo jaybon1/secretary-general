@@ -44,5 +44,5 @@ test('wording: no vague who-does-it word (Korean or English) anywhere but the ru
       found.push(`${rel}:${i + 1}`);
     });
   }
-  assert.deepEqual(found, [], `"${VAGUE}"(영어 주석은 ${VAGUE_EN.source}) 대신 "비서가 직접", "사용자가 직접"(원본은 호칭으로), "프로그램이 저절로"처럼 주어로 쓴다`);
+  assert.deepEqual(found, [], `"${VAGUE}"(영어 주석은 ${VAGUE_EN.source}) 대신 "비서가 직접", "사용자가 직접"(원본은 호칭으로), "프로그램이 자동으로"처럼 주어로 쓴다`);
 });

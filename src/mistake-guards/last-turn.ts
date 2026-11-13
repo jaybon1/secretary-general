@@ -41,7 +41,7 @@ export interface Line {
 /** The transcript's last part read for a turn (a turn longer than this is read from where this starts). */
 const TAIL_BYTES = 8 * 1024 * 1024;
 
-function tailLines(file: string): string[] {
+export function tailLines(file: string): string[] {
   const size = fs.statSync(file).size;
   const start = Math.max(0, size - TAIL_BYTES);
   const fd = fs.openSync(file, 'r');
@@ -58,8 +58,12 @@ function tailLines(file: string): string[] {
 
 export const blocks = (content: unknown): Block[] => (Array.isArray(content) ? (content as Block[]) : typeof content === 'string' ? [{ type: 'text', text: content }] : []);
 
-/** What a Stop hook that sent the turn back says to the model (the app's own words, or this hook's reason). */
-export const HOOK_FEEDBACK = /^\s*(Stop hook feedback|\[답 검사\])/;
+/**
+ * What a Stop hook that sent the turn back says to the model (the app's own words, or this hook's reason). The head is
+ * "[답변 검사·Stop 훅]"; it was the shorter form without 변 until 2026-11-11 and "[답변 검사]" for a day after, and a
+ * session open across a change still has the older head in its transcript.
+ */
+export const HOOK_FEEDBACK = /^\s*(Stop hook feedback|\[답(?:변)? 검사(?:·Stop 훅)?\])/; // legacy-name: answer-check-head
 
 /**
  * A user line that starts a turn: not a tool result, not text the app adds inside a turn (isMeta, e.g. a loaded skill),

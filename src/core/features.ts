@@ -9,8 +9,8 @@
  * install check says so (item 'features').
  */
 import path from 'node:path';
-import { PROJECT_ROOT } from '../core/config.ts';
-import { readJson, readJsonFile } from '../core/json-file.ts';
+import { PROJECT_ROOT } from './config.ts';
+import { readJson, readJsonFile } from './json-file.ts';
 import { readSecretaryId, taskNameWith } from './secretary-id.ts';
 
 export const FEATURES_FILE = 'features.json';
@@ -112,7 +112,7 @@ export function baseTaskNames(root = PROJECT_ROOT): Record<string, string> {
 
 /**
  * Scheduled task id → the name it is registered under: the features.json name with root's secretary id, e.g.
- * 'Secretary Idle Jobs (A3F9)' (setup/secretary-id.ts; the name alone while root has no id yet). Empty without the file
+ * 'Secretary Idle Jobs (A3F9)' (core/secretary-id.ts; the name alone while root has no id yet). Empty without the file
  * (the install check then can't look the tasks up).
  */
 export function scheduledTaskNames(root = PROJECT_ROOT, id: string | null = readSecretaryId(root)): Record<string, string> {

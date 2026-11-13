@@ -1,13 +1,13 @@
 ---
 name: consolidate
-description: 아직 정리되지 않은 대화 로그를 기억(memories)과 핵심 프로필·큰 일 판으로 정리하는 기억 정리 담당을 띄운다. 평소에는 쉬는 시간 작업이 저절로 띄우고, 사용자가 /consolidate를 실행하거나 "기억 정리해줘"라고 할 때도 사용.
+description: 아직 정리되지 않은 대화 로그를 기억(memories)과 핵심 프로필·주요 현안으로 정리하는 기억 정리 담당을 띄운다. 평소에는 쉬는 시간 작업이 자동으로 띄우고, 사용자가 /consolidate를 실행하거나 "기억 정리해줘"라고 할 때도 사용.
 ---
 
 # 기억 정리 띄우기
 
-기억 정리는 비서 대화 안에서 하지 않는다. 기억 정리 담당(설정 `src/staff/memory-consolidation.json`, 절차 `references/procedure.md`)이 비서 대화 밖 빈 폴더(`workspaces/_staff/memory-consolidation`)에서 따로 돈다. 쉬는 시간 정리와 같은 길이다.
+기억 정리는 기억 정리 담당(설정 `src/staff/memory-consolidation.json`, 절차 `references/procedure.md`)이 비서 대화 밖 빈 폴더(`workspaces/_staff/memory-consolidation`)에서 따로 한다. 쉬는 시간 정리와 같은 길이다. 쉬는 시간 정리는 정리 안 된 대화가 60건 이상이고 30분 동안 대화가 없으면 예약 작업 'Secretary Idle Jobs (비서 고유 번호)'가 자동으로 돌린다.
 
-1. 비서 폴더에서 `node src/cli.ts memory-consolidation --detach`를 한 번 돌린다. 정리를 떼어 띄우고 바로 끝난다.
+1. 비서 폴더에서 `node src/cli.ts memory-consolidation --detach`를 한 번 돌린다. 정리를 `--detach`로 백그라운드에 띄우고 바로 끝난다.
    - "이미 도는 정리가 있어요"가 나오면 새로 띄우지 않은 것이다. 그 정리가 끝나기를 기다린다.
 2. 사용자에게 한 줄로 알린다: 정리를 뒤에서 시작했고(길면 수십 분), 끝나면 다음 답에 "기억 정리 확인" 안내 줄이 붙으니 그때 "기억 정리 확인"만 보내면 결과를 함께 본다.
-3. 절차를 직접 따라 하거나 기억 도구로 정리하지 않는다. 결과는 화면이 아니라 "기억 정리 확인"으로 본다.
+3. 절차를 직접 따라 하거나 기억 도구로 정리하지 않는다(정리 담당의 모델·허용 도구는 그 담당 설정 한 곳에서 정하기 때문이다). 결과는 화면이 아니라 "기억 정리 확인"으로 본다.

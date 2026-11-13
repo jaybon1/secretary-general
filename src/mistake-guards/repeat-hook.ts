@@ -25,6 +25,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { repeatLimit } from './mistake-guard-settings.ts';
 import { blocks, startsTurn, type Line } from './last-turn.ts';
+import { noteToolHookHit } from './tool-hook-hits.ts';
 
 /** Where the per-session counts live; tests point it elsewhere. */
 export const STATE_DIR_ENV = 'SECRETARY_TEST_REPEAT_HOOK_STATE_DIR';
@@ -239,7 +240,7 @@ export function reminder(hits: Array<{ kind: string; count: number }>): string {
   return hits
     .map(
       (h) =>
-        `[되풀이 점검] 같은 조작(${h.kind})을 이 턴에서 ${h.count}번 되풀이 중. 도구·스크립트로 한꺼번에 처리할 수 있는지 따져 보고, 남은 건수와 예상 시간(한 건 시간 × 남은 건수)을 계산하라. 훨씬 나은 길이 있으면 방법을 바꾸거나 묻고, 없으면 그대로 계속한다(막지 않는 알림이다).`,
+        `[반복 작업 알림] 같은 조작(${h.kind})을 이 턴에서 ${h.count}번 되풀이 중. 도구·스크립트로 한꺼번에 처리할 수 있는지 따져 보고, 남은 건수와 예상 시간(한 건 시간 × 남은 건수)을 계산하라. 훨씬 나은 길이 있으면 방법을 바꾸거나 묻고, 없으면 그대로 계속한다(막지 않는 알림이다).`,
     )
     .join('\n');
 }
@@ -296,6 +297,7 @@ function dropOld(dir: string, now = Date.now()): void {
 
 export interface HookInput {
   session_id?: string;
+  tool_name?: string;
   transcript_path?: string;
 }
 
@@ -325,7 +327,10 @@ async function main(): Promise<void> {
   for await (const c of process.stdin) chunks.push(c as Buffer);
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as HookInput;
   const note = runRepeatHook(input, { limit: repeatLimit() });
-  if (note) process.stdout.write(hookOutput(note));
+  if (!note) return;
+  process.stdout.write(hookOutput(note));
+  // Noted for the secretary's turn record only (tool-hook-hits.ts: a work session or run-job notes nothing).
+  noteToolHookHit(input.session_id, { hook: 'PostToolUse', check: 'repeat', level: 'warn', tool: input.tool_name ?? '' });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

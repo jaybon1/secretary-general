@@ -13,8 +13,8 @@ const shell = (command: string) => ({ command });
 
 test('writes stay inside the workspace, and test files only when tests are not locked', () => {
   assert.equal(check('Write', write(path.join(WS, 'output', 'a', 'x.md')), WS), null);
-  assert.match(check('Edit', write(path.join(WS, '..', 'other', 'x.md')), WS), /공간 폴더 밖/);
-  assert.match(check('Write', write(path.join(PROJECT_ROOT, 'AGENTS.md')), WS), /공간 폴더 밖/);
+  assert.match(check('Edit', write(path.join(WS, '..', 'other', 'x.md')), WS), /공간 폴더 안에만/);
+  assert.match(check('Write', write(path.join(PROJECT_ROOT, 'AGENTS.md')), WS), /공간 폴더 안에만/);
   const spec = path.join(WS, 'src', 'app.test.ts');
   assert.equal(check('Edit', write(spec), WS), null);
   assert.match(check('Edit', write(spec), WS, { lockTests: true }), /테스트 잠금/);
@@ -22,6 +22,7 @@ test('writes stay inside the workspace, and test files only when tests are not l
   assert.equal(check('Edit', write(path.join(WS, 'src', 'latest.ts')), WS, { lockTests: true }), null);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 업무 세션의 보통 명령까지 막아 일이 멈추거나, 공개·push·폴더째 지우기가 그대로 통과한다(훅이 도구를 잘못 막음).
 test('publishing, pushing and recursive deletes are blocked; ordinary commands pass', () => {
   for (const cmd of ['git push origin main', 'npm publish', 'gh release create v1', 'npx vercel --prod', 'rm -rf build', 'Remove-Item out -Recurse -Force', 'curl -F file=@a.mp4 https://x']) {
     assert.ok(check('Bash', shell(cmd), WS), cmd);
@@ -32,6 +33,7 @@ test('publishing, pushing and recursive deletes are blocked; ordinary commands p
   assert.equal(check('Read', write('C:/anything'), WS), null);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 막지 않을 때도 훅이 거부 결정을 내어 업무 세션의 모든 명령이 막힌다(훅이 도구를 잘못 막음).
 test('as a hook it prints a deny decision only when blocking', () => {
   const run = (input: object) =>
     execFileSync('node', [path.join(PROJECT_ROOT, 'scripts', 'worker', 'worker-folder-guard.mjs'), WS], { input: JSON.stringify(input), encoding: 'utf8' });
@@ -71,8 +73,8 @@ test('the secretary folder: only its bin entries may be called; anything else in
     'Get-ChildItem $env:SECRETARY_DIR',
     `node ..\\..\\${path.basename(sec)}\\src\\cli.ts memory-stats`,
   ])
-    assert.match(run(cmd) ?? '', /비서 폴더는 입구\(bin\\<이름>\)를 부르는 것만 된다/, cmd);
-  assert.match(run(`cat ${path.join(sec, 'README.md').replace(/\\/g, '/')}`, 'Bash') ?? '', /입구/);
+    assert.match(run(cmd) ?? '', /비서 폴더는 진입점\(bin\\<이름>\)을 부르는 것만 된다/, cmd);
+  assert.match(run(`cat ${path.join(sec, 'README.md').replace(/\\/g, '/')}`, 'Bash') ?? '', /진입점/);
   // A folder that only starts like it is another folder; without --secretary nothing of this applies.
   assert.equal(run(`Get-Content "${sec}-2\\notes.md"`), null);
   assert.equal(check('PowerShell', shell(`node "${path.join(sec, 'src', 'cli.ts')}"`), WS), null);

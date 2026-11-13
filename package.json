@@ -11,6 +11,7 @@
     "mcp": "node src/mcp/server.ts",
     "cli": "node src/cli.ts",
     "test": "node test/run-tests.mjs",
+    "test:changed": "node test/run-changed.ts",
     "typecheck": "tsc -p ."
   },
   "dependencies": {

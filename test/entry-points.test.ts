@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { tempDir, write } from './helpers.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { ENTRY_DIR, ENTRY_POINTS, entryPath, entryText, secretaryDirEnv, scriptPath, SCRIPTS, type EntryName } from '../src/core/paths.ts';
-import { readSecretaryId } from '../src/setup/secretary-id.ts';
+import { readSecretaryId } from '../src/core/secretary-id.ts';
 import { usageHookProblems } from '../src/setup/setup-check.ts';
 import { renderCharter, renderFindSecretary } from '../src/workspace/rules-text.ts';
 
@@ -47,8 +47,9 @@ test('workspace rules name ego-grab by its bin entry and say how to reach the se
   assert.ok(charter.includes(`\`${entryPath('ego-grab.mjs').replace(/\\/g, '/')}\``));
   // The entrance folder: the workspace's secretary-link.local.json first, then bin under this secretary's own variable (its install
   // id in the name); not the old SECRETARY_DIR any more. Nothing else of the secretary folder.
-  assert.ok(charter.includes(`비서 스크립트는 비서의 입구 폴더(\`${ENTRY_DIR}\`)에 있는 이름으로만 부르고, 비서 폴더의 다른 파일은 열거나 실행하지 않는다`));
-  assert.ok(charter.includes('입구 폴더는 이 공간 맨 위 `secretary-link.local.json`의 `bin`이다'));
+  assert.ok(charter.includes(`비서 스크립트는 비서의 진입점 폴더(\`${ENTRY_DIR}\`)에 있는 이름으로만 부른다`));
+  assert.match(charter, /다른 파일은 업무 세션에서 막힌다/);
+  assert.ok(charter.includes('진입점 폴더는 이 공간 맨 위 `secretary-link.local.json`의 `bin`이다'));
   assert.ok(charter.includes(renderFindSecretary().join('\n')), 'the charter carries this copy\'s lines');
   // The variable comes from the secretary id; with none yet, only the old name.
   const linesFor = (root: string) => renderFindSecretary(secretaryDirEnv(readSecretaryId(root))).join('\n');
@@ -146,7 +147,7 @@ test('install-usage-guard writes the bin entries, moves old-path ones over, and 
     hooks: { PreToolUse: [other, { hooks: [{ type: 'command', command: oldCmd('usage-guard.mjs'), timeout: 5 }] }] },
     model: 'opus',
   }));
-  assert.match(run(moved), /상태줄을 입구로 고침 \(전: node "C:\/old\/secretary\/scripts\/usage-statusline\.mjs"\)\n- 정지 훅을 입구로 고침/);
+  assert.match(run(moved), /상태줄을 진입점으로 고침 \(전: node "C:\/old\/secretary\/scripts\/usage-statusline\.mjs"\)\n- 정지 훅을 진입점으로 고침/);
   const after = JSON.parse(read(path.join(moved, 'settings.json')));
   assert.deepEqual(usageHookProblems(moved, PROJECT_ROOT), []);
   assert.deepEqual(after.hooks.PreToolUse[0], other);
@@ -182,6 +183,6 @@ test('install-usage-guard leaves another secretary’s hook and status line alon
   assert.deepEqual(JSON.parse(read(path.join(shared, 'settings.json'))), settings(other));
   // No secretary there any more (this copy was moved from there): this copy's old path, moved over.
   fs.rmSync(path.join(other, 'package.json'));
-  assert.match(run(shared), /상태줄을 입구로 고침[^\n]*\n- 정지 훅을 입구로 고침/);
+  assert.match(run(shared), /상태줄을 진입점으로 고침[^\n]*\n- 정지 훅을 진입점으로 고침/);
   assert.deepEqual(usageHookProblems(shared, PROJECT_ROOT), []);
 });

@@ -4,8 +4,8 @@
  * - A row's text, and each memory the deletion would invalidate, is split into words at whitespace; each word
  *   shows as its first letter or digit ("테스트해보자." → "테", "Seoul" → "S", "(점심" → "점"), joined by spaces,
  *   at most INITIALS_MAX (40). A chunk with no letter or digit (punctuation, symbols, emoji alone) is skipped
- *   and not counted. More words than that: " …(앞 40낱말)" follows.
- * - The word count goes beside the character count; a text with no word shows "(낱말 없음)".
+ *   and not counted. More words than that: " …(앞 40단어)" follows.
+ * - The word count goes beside the character count; a text with no word shows "(단어 없음)".
  * - A row or memory whose text cannot be read is "에러" only.
  */
 import { formatPreview, issuePurgeCode, LIST_ROWS, planPurge, USAGE, type PreviewLines, type PreviewOrigin, type PurgePlan, type PurgeSpec } from './purge.ts';
@@ -26,12 +26,12 @@ export function wordInitials(text: string): string[] {
   return out;
 }
 
-/** What follows the character count on a preview line: "6낱말 — 대 삭 테 임 점 추". */
+/** What follows the character count on a preview line: "6단어 — 대 삭 테 임 점 추". */
 export function initialsText(text: string, max = INITIALS_MAX): string {
   const all = wordInitials(text);
-  if (!all.length) return '0낱말 — (낱말 없음)';
+  if (!all.length) return '0단어 — (단어 없음)';
   const shown = all.slice(0, max).join(' ');
-  return `${all.length}낱말 — ${shown}${all.length > max ? ` …(앞 ${max}낱말)` : ''}`;
+  return `${all.length}단어 — ${shown}${all.length > max ? ` …(앞 ${max}단어)` : ''}`;
 }
 
 /** The texts of a plan: its listed rows, then its memories (undefined when not found). */

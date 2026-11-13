@@ -38,7 +38,7 @@ import { isShieldedLocal, NO_LOCAL_ENV, writeLocalJson } from './local-settings.
 import { formatLocal } from './kst-time.ts';
 import { findTailscaleDevice, parseTailscaleStatus, readTailscaleStatus, type TailscaleDevice } from './tailscale.ts';
 import { knownSecretaryIds, newDeviceId } from './device-ids.ts';
-import { featureOn, readFeatures, type Feature, type ThisSecretaryColumn, type ThisSecretarySource } from '../setup/features.ts';
+import { featureOn, readFeatures, type Feature, type ThisSecretaryColumn, type ThisSecretarySource } from './features.ts';
 
 export const THIS_SECRETARY_FILE = 'this-secretary.local.json';
 export const THIS_SECRETARY_EXAMPLE = 'this-secretary.local.example.json';
@@ -76,13 +76,13 @@ function readAll(place: Place, root: string): JsonRead<Sections> {
   if (shielded(place, root)) return { ok: true, value: {} };
   const r = readJson<Sections>(fileOf(place, root));
   if (!r.ok) return r.missing ? { ok: true, value: {} } : r;
-  if (!r.value || typeof r.value !== 'object' || Array.isArray(r.value)) return { ok: false, missing: false, error: `${nameOf(place)}: 맨 위가 { 칸 이름: 값 }이 아님` };
+  if (!r.value || typeof r.value !== 'object' || Array.isArray(r.value)) return { ok: false, missing: false, error: `${nameOf(place)}: 맨 위가 { 키 이름: 값 }이 아님` };
   return r;
 }
 
 /**
  * Whether a section is read in this copy: paths always; a feature's while one of `features` (default: the section's own
- * id) is on. As everywhere (setup/features.ts), no features.json, or a feature it does not list, counts as on; a copy that
+ * id) is on. As everywhere (core/features.ts), no features.json, or a feature it does not list, counts as on; a copy that
  * leaves a feature out has no code that reads its section.
  */
 export function sectionOn(section: string, root = PROJECT_ROOT, features: string[] = [section]): boolean {
@@ -109,7 +109,7 @@ export function readThisSecretary<T>(section: string, { root = PROJECT_ROOT, fea
   const place: Place = shared ? 'shared' : 'secretary';
   const all = readAll(place, root);
   if (!all.ok) return all;
-  if (!(section in all.value) || all.value[section] === undefined) return { ok: false, missing: true, error: `${nameOf(place)}에 '${section}' 칸 없음` };
+  if (!(section in all.value) || all.value[section] === undefined) return { ok: false, missing: true, error: `${nameOf(place)}에 '${section}' 키 없음` };
   return { ok: true, value: all.value[section] as T };
 }
 
@@ -126,7 +126,7 @@ export function writeThisSecretary(section: string, value: unknown, root = PROJE
 }
 
 function writeSections(place: Place, root: string, sections: Sections): void {
-  if (shielded(place, root)) throw new Error(`시험 중에는 이 설정 파일을 쓰지 않음: ${fileOf(place, root)}`);
+  if (shielded(place, root)) throw new Error(`테스트 중에는 이 설정 파일을 쓰지 않음: ${fileOf(place, root)}`);
   const all = readAll(place, root);
   if (!all.ok) throw new Error(`${nameOf(place)}을 못 읽어 쓰지 않음(고친 뒤 다시): ${all.error}`);
   writeLocalJson(fileOf(place, root), { ...all.value, ...sections });
@@ -354,7 +354,7 @@ const STATE_TEXT: Record<State, string> = {
   same: '이미 같은 값',
   differs: '이미 다른 값이 있어 그대로 둠',
   empty: '옮길 값 없음',
-  held: '같은 파일의 다른 칸 때문에 옮기지 않음',
+  held: '같은 파일의 다른 키 때문에 옮기지 않음',
   unresolved: '옮기지 못해 그대로 둠',
 };
 
@@ -376,7 +376,7 @@ export function mergeThisSecretaryFiles(root = PROJECT_ROOT, opts: MergeOptions 
   const stamp = `${digits.slice(0, 8)}-${digits.slice(8, 14)}`;
   const left: string[] = [];
   for (const it of plan.items) {
-    const parts = it.parts.map((p) => `${nameOf(p.place)}의 '${p.section}' 칸 ${STATE_TEXT[p.state]}${p.why ? `: ${p.why}` : ''}${p.note ? ` (${p.note})` : ''}`).join(', ');
+    const parts = it.parts.map((p) => `${nameOf(p.place)}의 '${p.section}' 키 ${STATE_TEXT[p.state]}${p.why ? `: ${p.why}` : ''}${p.note ? ` (${p.note})` : ''}`).join(', ');
     if (it.error) {
       lines.push(`${pre}그대로 둠: ${it.file} (JSON으로 못 읽음: ${it.error.slice(0, 80)})`);
       left.push(it.file);

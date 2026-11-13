@@ -1,6 +1,6 @@
 /**
- * Several subscriptions (feature multi-subscription, "다중 구독"): the prompt hook's line (notice 'subscription-routing') telling the secretary
- * how much to hand off and to which account, and the account `auto` resolves to for run-job and work sessions
+ * Several subscriptions (feature multi-subscription, "다중 구독"): the prompt hook's line (notice 'subscription-routing') showing the secretary
+ * every subscription's 5-hour % and the account work goes to (the -Provider to pass when that is not the default), and the account `auto` resolves to for run-job and work sessions
  * (`node src/cli.ts subscription-pick`, called by Use-Provider in scripts/lib/providers.ps1).
  * Account a ('subscription') is the chat account. Every other "claude-subscription" in scripts/lib/providers.json (b, c, …)
  * is one work can be handed to; the one with the most room is picked (pickSubscription). With one such account (a and b only)
@@ -15,26 +15,11 @@ import { chatProvider, readUsage, USAGE_DIR, type UsageState } from './usage-fil
 import { providerLabel, readProviders, type ProviderInfo } from './provider-usage.ts';
 import { TAG } from '../core/names.ts';
 
-/** Account a's 5-hour % at which each routing level (넘기기 단계) starts (level 1 below the first). */
-export const LEVEL_STARTS = [20, 40, 60];
-
 /** The chat account: never handed to (it is the one being spared). */
 export const CHAT_ACCOUNT = 'subscription';
 
 /** The provider name that means "pick the account with the most room" (providers.json default, or -Provider auto). */
 export const AUTO_PROVIDER = 'auto';
-
-export function routingLevel(pct: number): number {
-  return 1 + LEVEL_STARTS.filter((start) => pct >= start).length;
-}
-
-/**
- * While the account handed to (b, or the one picked) has used less than twice account a's %, hand off even small jobs;
- * otherwise go by a's level. `id` names it in the note ("b 우선").
- */
-export function routingNote(aPct: number, bPct: number, id = 'b'): string {
-  return bPct < 2 * aPct ? `${id} 우선(작은 일도 넘김)` : `넘기기 ${routingLevel(aPct)}단계`;
-}
 
 /** The usage guard's limit (scripts/usage/usage-guard.mjs reads the same variable): an account at it is not picked. */
 export function pauseLimit(env = process.env): number {
@@ -137,25 +122,27 @@ export function subscriptionPick(now = Date.now(), provider = chatProvider(), de
   return pickSubscription(targets, now, deps.limit ?? pauseLimit(), def)?.provider ?? CHAT_ACCOUNT;
 }
 
+/**
+ * The usage line (2026-11-12: only the numbers and where work goes; the routing levels and what to hand off at each are gone,
+ * AGENTS.md "비싼 작업은 run-job으로" says what to hand off). '' when the chat's own account has no reading.
+ */
 export function routingContext(now = Date.now(), provider = chatProvider(), deps: RoutingDeps = {}): string {
   const { def, a, targets } = load(deps);
   const limit = deps.limit ?? pauseLimit();
-  // Chatting on an account handed to (a ran out): no cheaper account to hand off to, so work sessions and run-job stay on it
-  // and its % sets the level.
+  // Chatting on an account handed to (a ran out): no cheaper account to hand off to, so work sessions and run-job stay on it.
   const self = targets.find((t) => t.provider === provider);
   if (self) {
     if (!self.usage) return '';
-    const id = shortId(self.label);
     const others = [a, ...targets.filter((t) => t !== self)].map((t) => describe(t.label, t.usage, now)).join(' · ');
-    return `<${TAG.usage}>이 세션은 ${self.label}. 5시간 사용량: ${describe(self.label, self.usage, now)} · ${others} → 넘기기 ${routingLevel(currentPct(self.usage, now))}단계(${id} 기준, 넘기는 일도 ${id})</${TAG.usage}>`;
+    return `<${TAG.usage}>이 세션은 ${self.label}. 5시간 사용량: ${describe(self.label, self.usage, now)} · ${others} → 보내는 일도 ${shortId(self.label)}</${TAG.usage}>`;
   }
   if (!a.usage) return '';
-  const picked = pickSubscription(targets, now, limit, def) ?? targets[0];
   const all = [a, ...targets].map((t) => describe(t.label, t.usage, now)).join(' · ');
-  const note = routingNote(currentPct(a.usage, now), currentPct(picked.usage, now), shortId(picked.label));
-  // One account to hand to (a and b): the line as it always was. More: which one was picked, and how to reach it.
-  if (targets.length < 2) return `<${TAG.usage}>5시간 사용량: ${all} → ${note}</${TAG.usage}>`;
-  const full = targets.every((t) => isFull(t.usage, now, limit)) ? `(넘길 구독 모두 ${limit}% 이상)` : '';
+  // Every account handed to at the guard's limit: ask before going to another account or provider (the delegate skill's order).
+  const full = targets.every((t) => isFull(t.usage, now, limit)) ? `보낼 구독 모두 ${limit}% 이상, 다른 계정·공급자로 돌릴지 먼저 묻는다` : '';
+  // One account to hand to (a and b): the numbers. More: which one was picked, and how to reach it.
+  if (targets.length < 2) return `<${TAG.usage}>5시간 사용량: ${all}${full ? ` → ${full}` : ''}</${TAG.usage}>`;
+  const picked = pickSubscription(targets, now, limit, def) ?? targets[0];
   const how = def === AUTO_PROVIDER || def === picked.provider ? '' : ` (run-job·업무 세션은 기본 공급자 ${def ?? '(없음)'}로 도니 -Provider ${picked.provider}를 준다)`;
-  return `<${TAG.usage}>5시간 사용량: ${all} → ${picked.label}에 넘김${full}, ${note}${how}</${TAG.usage}>`;
+  return `<${TAG.usage}>5시간 사용량: ${all} → ${picked.label}로 보냄${full ? `(${full})` : ''}${how}</${TAG.usage}>`;
 }

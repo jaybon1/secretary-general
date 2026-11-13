@@ -4,7 +4,8 @@
  * --detach`, by 'manual'). It runs as the staff member memory-consolidation (src/staff/memory-consolidation.json:
  * model, tools, time limit; its steps in the skill's references/procedure.md) in its own empty folder
  * (workspaces/_staff/memory-consolidation), through run-job -Staff memory-consolidation. Its report waits in the DB until "기억 정리 확인"
- * (memory/consolidate-notice.ts); a line per run goes to the folder's runs-<secretary id>.jsonl.
+ * (memory/consolidate-notice.ts), with the counts of what it wrote under it (memory/consolidate-tally.ts: counted by the
+ * program, not the model); a line per run goes to the folder's runs-<secretary id>.jsonl.
  *
  * Only one runs at a time: the start is claimed in one DB transaction (checked and recorded together), and a record
  * whose process is gone does not hold the next one off (staff/job-record.ts).
@@ -25,6 +26,7 @@ import { transaction } from '../store/schema.ts';
 import type { Store } from '../store/store.ts';
 import { fixStaffFolder, readStaff, recordStaffRun, staffInstructions, type StaffConfig } from '../staff/staff.ts';
 import { saveConsolidateReport, type ConsolidateReport } from './consolidate-notice.ts';
+import { readTally, startTally, tallyLine } from './consolidate-tally.ts';
 import { CLI, STAFF } from '../core/names.ts';
 
 export const CONSOLIDATE_STAFF = STAFF.memoryConsolidation;
@@ -87,6 +89,8 @@ export async function runConsolidate(
   const job = claimConsolidate(store, by);
   if (!job) return { report: null, running: consolidateJob(store) };
   const fromLogId = store.consolidatedThrough();
+  // What this run writes is counted by its own memory server (memory/consolidate-tally.ts) and put under its report.
+  startTally(store);
   const file = path.join(os.tmpdir(), `secretary-consolidate-${process.pid}.txt`);
   let report: ConsolidateReport;
   try {
@@ -104,6 +108,7 @@ export async function runConsolidate(
   } finally {
     fs.rmSync(file, { force: true });
   }
+  report.text += `\n\n${tallyLine(readTally(store))}`;
   const done = finishJob(store, CONSOLIDATE_JOB_KEY, job, report.ok, report.ok ? undefined : report.text.slice(0, 300));
   saveConsolidateReport(store, report);
   recordStaffRun(w, { at: report.at, by, ok: report.ok, fromLogId, throughLogId: report.throughLogId, ms: done.ms, pid: process.pid });

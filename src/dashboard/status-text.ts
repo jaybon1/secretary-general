@@ -33,7 +33,7 @@ export function statusText(d: Collected): string {
   );
   section('업무 칸반', d.kanban, (cols) => {
     L.push('  ' + cols.map((c) => `${c.label} ${c.total}`).join(' · '));
-    for (const c of cols) if (c.status === 'ready' || c.status === 'running' || c.status === 'review' || c.status === 'failed') c.items.forEach((x) => L.push(`  - ${c.label}: #${x.id} ${x.title} (${x.ws})`));
+    for (const c of cols) if (c.status === 'ready' || c.status === 'running' || c.status === 'failed') c.items.forEach((x) => L.push(`  - ${c.label}: #${x.id} ${x.title} (${x.ws})`));
     cols
       .filter((c) => c.status === 'done')
       .flatMap((c) => c.items.slice(0, 3))

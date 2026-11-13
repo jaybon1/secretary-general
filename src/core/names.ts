@@ -3,7 +3,7 @@
  * scheduled tasks and skills), the prompt hook's notice ids (features.json notices, hooks/prompt-notices.ts), the install
  * check's item ids (features.json checks, a user's skip list, setup/check-items.ts), the scheduled tasks' ids
  * (features.json scheduledTasks, install-scheduled-tasks.ps1 -Task) and the tags the hooks inject
- * (`<secretary-…>`, read by AGENTS.md and the eval set). Code takes them from here, never as a string of its own, so a
+ * (`<secretary-…>`, read by AGENTS.md). Code takes them from here, never as a string of its own, so a
  * rename is one line here plus its readers outside the code (AGENTS.md, skills, scripts, features.json); npm test
  * (test/names.test.ts) finds one written out again anywhere else in src/.
  */
@@ -32,8 +32,8 @@ export const CLI = {
   memoryConsolidation: 'memory-consolidation',
   sessionHandoffWake: 'session-handoff-wake',
   archiveWorkspace: 'archive-workspace',
-  /** Once, updating from v7: the profile's 큰 일 칸 → the big-work board (upgrade/big-work-move.ts). */
-  bigWorkFromProfile: 'big-work-from-profile',
+  /** Once, updating from v7: the profile's 큰 일 칸 → the main-agenda board (upgrade/main-agenda-move.ts). */
+  mainAgendaFromProfile: 'main-agenda-from-profile',
   thisSecretaryMerge: 'this-secretary-merge',
 } as const;
 
@@ -66,6 +66,7 @@ export const CHECK = {
   secretaryDirEnv: 'secretary-dir-env',
   workspaceLinks: 'workspace-links',
   workspaceAuxFolders: 'workspace-aux-folders',
+  providerPersonalData: 'provider-personal-data',
   serverTask: 'server-task',
   serverRunning: 'server-running',
   backupTask: 'backup-task',
@@ -103,7 +104,7 @@ export const FEATURE = {
 /** The tags the hooks wrap what they inject in: `<secretary-…>` (AGENTS.md says what each asks of the secretary). */
 export const TAG = {
   profile: 'secretary-profile',
-  bigWork: 'secretary-big-work',
+  mainAgenda: 'secretary-main-agenda',
   status: 'secretary-status',
   resultPaths: 'secretary-paths',
   situationBoard: 'secretary-board',

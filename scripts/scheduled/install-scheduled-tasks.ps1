@@ -8,7 +8,7 @@
 #                 관리자 불필요(이 사용자, 로그온한 경우에만 실행). -Task ntfy로 고를 때만 등록한다(기본 목록에 없음). ntfy.exe가 없으면
 #                 건너뛴다. server.yml 만들기와 함께 하려면 scripts/phone-push/install-ntfy.ps1.
 # 작업 이름은 비서 폴더의 features.json(기능마다 tasks의 id·name)의 이름 뒤에 이 비서의 고유 번호(.secretary-id, 없으면 여기서 만든다)를
-# 붙인 것이다. 예: 'Secretary Idle Jobs (A3F9)'. 한 PC에 비서가 여럿이어도 작업 이름이 겹치지 않는다(설치 점검 src/setup/check-items.ts도
+# 붙인 것이다. 예: 'Secretary Idle Jobs (A3F9)'. 한 PC에 비서가 여럿이어도 작업 이름이 겹치지 않는다(설치 상태 점검 src/setup/check-items.ts도
 # 같은 이름으로 찾는다). 위 설명의 이름은 번호를 뺀 것이다.
 # 꺼진 기능(enabled false)의 작업은 -Task로 골라도 건너뛰고(-DryRun에서도), 어느 기능 때문인지와 켜는 법을 한 줄로 찍는다
 # (파일이 없거나 못 읽으면 작업 이름을 몰라 등록하지 않는다).
@@ -26,7 +26,7 @@
 # 한 PC에 비서가 여럿이면: 이 비서 이름(번호 포함)으로 이미 등록된 작업이 이 PC의 다른 비서 폴더의 파일을 부르면(그 경로 위에 번호가 다른
 # 비서 폴더가 있으면) 덮어쓰지 않고 건너뛴다(-DryRun에서도). 그래도 이 비서로 가져오려면 -TakeOver.
 # -FeaturesFile: features.json 대신 읽을 파일, -MovesFile: 옮기기 표, -IdFile: .secretary-id 대신 읽고 만들 파일, -FakeTasksFile: 지금 등록된 작업을 작업 스케줄러 대신
-# 이 JSON({"<이름>": {"execute","arguments","workingDirectory","state","startBoundary","interval"}})에서 읽는다(셋 다 시험용, -DryRun과 함께).
+# 이 JSON({"<이름>": {"execute","arguments","workingDirectory","state","startBoundary","interval"}})에서 읽는다(셋 다 테스트용, -DryRun과 함께).
 #
 # 예: 한 작업은 -File로  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/scheduled/install-scheduled-tasks.ps1 -Task server [-At 22:30] [-EveryMinutes 5] [-DryRun]
 #     여러 작업은 -Command로  powershell -NoProfile -ExecutionPolicy Bypass -Command "& 'scripts\scheduled\install-scheduled-tasks.ps1' -Task server,backup [-DryRun]"
@@ -51,7 +51,7 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch {}
 . "$PSScriptRoot\..\lib\common.ps1"
 $root = $SecretaryRoot
-# 작업은 실제 스크립트가 아니라 고정 입구(bin\<이름>, src/core/paths.ts ENTRY_POINTS)를 부른다: 스크립트를 옮겨도 다시 등록하지 않아도 된다.
+# 작업은 실제 스크립트가 아니라 고정 진입점(bin\<이름>, src/core/paths.ts ENTRY_POINTS)를 부른다: 스크립트를 옮겨도 다시 등록하지 않아도 된다.
 $bin = Join-Path $root 'bin'
 
 # 이 비서의 고유 번호(없으면 지금 만든다).
@@ -76,7 +76,7 @@ try {
 } catch { throw "features.json을 못 읽어 작업 이름을 몰라요($FeaturesFile): $($_.Exception.Message)" }
 if ($NtfyTaskName) { $names['ntfy'] = $NtfyTaskName }
 
-# 지금 등록된 작업(없으면 $null). -FakeTasksFile이면 그 파일에서 작업 스케줄러가 주는 꼴로 만든다(시험용).
+# 지금 등록된 작업(없으면 $null). -FakeTasksFile이면 그 파일에서 작업 스케줄러가 주는 형식으로 만든다(테스트용).
 $fake = if ($FakeTasksFile) { Get-Content -LiteralPath $FakeTasksFile -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
 function Find-Task([string]$Name) {
   if (-not $FakeTasksFile) { return Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue }
@@ -186,7 +186,7 @@ $defs = [ordered]@{
     Settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
       -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
     RunLevel = 'Limited'
-    Description = "끝 알림 ntfy 서버 ($NtfyConfig). 비서 끝 훅이 답 첫 줄을 보낸다 (src/phone-push/ntfy.ts)"
+    Description = "끝 알림 ntfy 서버 ($NtfyConfig). 비서 Stop 훅이 답 첫 줄을 보낸다 (src/phone-push/ntfy.ts)"
     Done = "등록됨: $($names['ntfy']) (로그인할 때 실행). 지금 바로 시작: Start-ScheduledTask -TaskName '$($names['ntfy'])'"
   }
 }

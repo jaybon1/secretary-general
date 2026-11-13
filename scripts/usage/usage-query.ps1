@@ -3,8 +3,8 @@
 # claude -p "/usage"는 모델을 부르지 않는다(토큰 0). 빈 폴더에서 MCP 없이 돌려 다른 설정이 끼지 않게 한다.
 # agy(antigravity)도 /usage로 토큰 없이 조회한다. 나머지는 무료 조회 명령이 없어 건너뛴다(Copilot의 /usage는 -p에서
 # 일반 질문으로 처리돼 크레딧을 쓰고, Bedrock은 AWS CLI가 있어야 조회된다).
-# 어떻게 조회할지는 providers.json의 공급자마다 "usage" 칸이 정한다: "claude-usage"(구독 /usage), "agy"(Antigravity),
-# 없거나 "none"이면 조회 안 됨(src/usage/provider-usage.ts). 공급자가 늘면 그 칸만 채운다.
+# 어떻게 조회할지는 providers.json의 공급자마다 "usage" 키가 정한다: "claude-usage"(구독 /usage), "agy"(Antigravity),
+# 없거나 "none"이면 조회 안 됨(src/usage/provider-usage.ts). 공급자가 늘면 그 키만 채운다.
 # 기능 usage-poll(비서 서버와 같이 뜨는 조회기, src/usage/usage-poller.ts)이 설정에서 고른 공급자를 5분마다 이 스크립트로 조회한다.
 # usage-guard.mjs도 기록이 5분 넘게 오래되면 이 스크립트를 몰래 띄워 갱신한다(대시보드가 꺼졌을 때의 예비).
 # 사용량을 못 읽으면(/usage가 사용량을 주지 않는 API 키 로그인, claude 없음, 시간 초과) <같은 이름>.fail에 실패 횟수를 적고, 읽으면 지운다.
@@ -81,7 +81,7 @@ foreach ($name in $names) {
   $p = $config.providers.$name
   if (-not $p) { Write-Output "${name}: providers.json에 없는 공급자"; continue }
   if ($p.usage -eq 'agy') { Save-AntigravityUsage $name; continue }
-  if ($p.usage -ne 'claude-usage') { Write-Output "${name}: 조회 안 됨(providers.json의 usage 칸)"; continue }
+  if ($p.usage -ne 'claude-usage') { Write-Output "${name}: 조회 안 됨(providers.json의 usage 키)"; continue }
   if (-not $claude) { Save-UsageFailure (Get-UsageKey $name -Clean) "claude 없음: $claudeError"; Write-Output "${name}: 사용량을 읽지 못했어요 — $claudeError"; continue }
 
   # 공급자 환경은 자식 프로세스 안에서만 바꾼다(다른 계정의 설정 폴더·토큰이 이 창에 남지 않게).

@@ -28,11 +28,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cutLink, makeDirLink, SKILLS_DIR } from '../setup/skill-links.ts';
+import { workspaceRootOf } from './workspace-paths.ts';
 
 export const COMMON_SKILLS_FILE = 'common-skills.json';
 export const COMMON_PREFIX = 'common-';
 /** Where the common skills are, in the workspaces folder. */
 export const COMMON_SKILLS_DIR = '_skills';
+/** The common skills folder for the secretary at root. */
+export const commonSkillsDirOf = (root: string) => path.join(workspaceRootOf(root), COMMON_SKILLS_DIR);
 /** The about line a new common-skills.json gets. */
 export const COMMON_SKILLS_ABOUT =
   '이 공간이 쓰는 공통 스킬(workspaces/_skills/common-<이름>) 목록. 이름은 common-까지 적는다(폴더 이름 = 스킬 name). 비서가 이 목록대로 .agents/skills에 같은 이름의 연결(Claude Code·Codex가 읽는다)과 .agents/skills.json(Antigravity가 읽는다)을 만든다(node src/cli.ts workspace-links). 고칠 때는 비서에게 말한다.';
@@ -238,12 +241,12 @@ export function commonSkillProblem(folder: string, commonDir: string): string | 
   if (p.staleAbout) out.push(`${COMMON_SKILLS_FILE}의 about이 옛 설명`);
   if (p.rename.length) out.push(`옛 이름 폴더의 공통 스킬(${COMMON_PREFIX}을 붙여 옮김): ${p.rename.map((r) => `${COMMON_SKILLS_DIR}/${r.from}`).join(', ')}`);
   if (p.unknown.length) out.push(`공통 스킬 없음: ${p.unknown.join(', ')}`);
-  if (p.adopt.length) out.push(`목록에 넣을 공통 스킬 연결: ${p.adopt.map((a) => a.rel).join(', ')}`);
-  if (p.make.length) out.push(`공통 스킬 연결 없음·틀림: ${p.make.map((m) => m.rel).join(', ')}`);
-  if (p.remove.length) out.push(`목록에 없는 공통 스킬 연결: ${p.remove.join(', ')}`);
-  if (p.kept.length) out.push(`연결 대신 실제 폴더(지우지 않음): ${p.kept.join(', ')}`);
+  if (p.adopt.length) out.push(`목록에 넣을 공통 스킬 링크: ${p.adopt.map((a) => a.rel).join(', ')}`);
+  if (p.make.length) out.push(`공통 스킬 링크 없음·틀림: ${p.make.map((m) => m.rel).join(', ')}`);
+  if (p.remove.length) out.push(`목록에 없는 공통 스킬 링크: ${p.remove.join(', ')}`);
+  if (p.kept.length) out.push(`링크 대신 실제 폴더(지우지 않음): ${p.kept.join(', ')}`);
   if (p.agy !== undefined) out.push(`${AGY_SKILLS_FILE}이 목록과 다름`);
-  if (p.clash.length) out.push(`이름이 ${COMMON_PREFIX}으로 시작하는 공간 스킬(공통 스킬 이름 자리라 공간 스킬 이름을 바꾼다): ${p.clash.join(', ')}`);
+  if (p.clash.length) out.push(`이름이 ${COMMON_PREFIX}으로 시작하는 공간 스킬(공통 스킬에만 쓰는 이름이라 공간 스킬 이름을 바꾼다): ${p.clash.join(', ')}`);
   return out.length ? out.join('; ') : null;
 }
 

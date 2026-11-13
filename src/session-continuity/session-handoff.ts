@@ -24,7 +24,7 @@ export async function sessionHandoffWake(store: Store, oldSessionId: string): Pr
   const added = files.reduce((n, f) => n + ingestTranscript(store, f).added, 0);
   await waitForJob(store, BOARD_WAIT_MS);
   // Archiving happens before this call and is not in any transcript, so tell the rewrite.
-  const job = await runBoardUpdate(store, [`${formatLocal(nowIso())} 새 세션이 옛 세션(대화 기록 ${oldSessionId.slice(0, 8)})이 멈춘 것을 확인하고 보관했다. 넘기기는 끝났다.`]);
+  const job = await runBoardUpdate(store, [`${formatLocal(nowIso())} 새 세션이 옛 세션(대화 기록 ${oldSessionId.slice(0, 8)})이 멈춘 것을 확인하고 보관했다. 세션 이관은 끝났다.`]);
   const board = readBoard(store);
   if (!board || !job.ok) return `상황판 갱신 실패: ${job.error ?? '상황판 없음'}`;
   return `(옛 세션 대화 ${added}개를 새로 저장함)\n${boardBlock(store, board)}`;

@@ -1,6 +1,7 @@
 /**
- * 비서 기억을 Claude Code에 내놓는 MCP 서버(stdio). 서버를 만들고 도구 파일(기억 memory-tools, 큰 일 big-work-tools,
- * 위임 delegate-tools, 실수 기록 mistake-tools)의 등록 함수를 부른다. --readonly면 recall·search_log만 등록한다.
+ * 비서 기억을 Claude Code에 내놓는 MCP 서버(stdio). 서버를 만들고 도구 파일(기억 memory-tools, 주요 현안 main-agenda-tools,
+ * 위임 delegate-tools, 실수 기록 mistake-tools, 정리 담당 판정 consolidate-tools)의 등록 함수를 부른다. --readonly면 recall·search_log만
+ * 등록하고, 정리 담당 판정 도구는 --staff memory-consolidation일 때만 등록한다.
  *
  * MCP server exposing the secretary's memory to Claude Code (stdio transport).
  * Register it via .mcp.json; Claude Code launches it on demand.
@@ -13,12 +14,17 @@ import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH, PROJECT_ROOT } from '../core/config.ts';
 import { moveRenamedLocalFiles } from '../core/local-settings.ts';
 import { openDb } from '../store/schema.ts';
-import { registerBigWorkTools } from './big-work-tools.ts';
+import { registerMainAgendaTools } from './main-agenda-tools.ts';
 import { fail, ok, type ToolContext } from './tool-common.ts';
 import { registerDelegateTools } from './delegate-tools.ts';
 import { registerLogTools, registerMemoryTools } from './memory-tools.ts';
 import { registerMistakeTools } from './mistake-tools.ts';
+import { registerConsolidateTools } from './consolidate-tools.ts';
 import { Store } from '../store/store.ts';
+import { addToTally } from '../memory/consolidate-tally.ts';
+import { CandidateBook, nearbySearch, SEMANTIC_WAIT_MS } from '../memory/consolidate-verdicts.ts';
+import { allowServerStart, noteMiss, semanticClient, semanticReady } from '../semantic-search/client.ts';
+import { STAFF } from '../core/names.ts';
 
 /**
  * `--readonly`: memory reading for work sessions and run-jobs on subscription providers.
@@ -29,6 +35,11 @@ import { Store } from '../store/store.ts';
  */
 const READONLY = process.argv.includes('--readonly');
 const READONLY_TOOLS = new Set(['recall', 'search_log']);
+/**
+ * `--staff <name>`: the staff member this server was started for (run-job -Staff, scripts/lib/memory-mcp.ps1). The memory
+ * consolidation's server counts its writes for the report (memory/consolidate-tally.ts); the secretary's own has none.
+ */
+const STAFF_ARG = process.argv.includes('--staff') ? process.argv[process.argv.indexOf('--staff') + 1] : undefined;
 
 function openStore(): Store {
   if (!READONLY) {
@@ -42,6 +53,10 @@ function openStore(): Store {
   db.exec('PRAGMA busy_timeout = 5000');
   return new Store(db);
 }
+
+// Only the secretary's own memory server starts the semantic-search server again; a run-job's or work session's
+// read-only one and a staff member's (the consolidation) wait for it (semantic-search/client.ts allowServerStart).
+if (!READONLY && !STAFF_ARG) allowServerStart();
 
 const store = openStore();
 const { version } = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8')) as { version: string };
@@ -61,9 +76,38 @@ server.registerTool = ((name: string, config: unknown, handler: (...args: unknow
 }) as typeof server.registerTool;
 
 // The order here is the order of the tool list clients see.
-const ctx: ToolContext = { server, store, readonly: READONLY };
+const consolidation = !READONLY && STAFF_ARG === STAFF.memoryConsolidation;
+const ctx: ToolContext = {
+  server,
+  store,
+  readonly: READONLY,
+  // The close memories wait for the semantic-search server; never answering, the run stops (C9, memory/consolidate-verdicts.ts).
+  candidates: consolidation
+    ? new CandidateBook(store, nearbySearch((onMiss) => semanticClient(5000, '정리 담당 가까운 기억 찾기', onMiss)), {
+        ms: SEMANTIC_WAIT_MS,
+        pollMs: 5_000,
+        ready: semanticReady,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        onStop: (reason) => {
+          noteMiss('정리 담당 가까운 기억 찾기', reason);
+          try {
+            addToTally(store, { halted: [reason] });
+          } catch {}
+        },
+      })
+    : undefined,
+  // A count that fails to save leaves the write itself standing (a failed answer would have the model write it again).
+  tally: consolidation
+    ? (part) => {
+        try {
+          addToTally(store, part);
+        } catch {}
+      }
+    : undefined,
+};
 registerMemoryTools(ctx);
-registerBigWorkTools(ctx);
+registerConsolidateTools(ctx);
+registerMainAgendaTools(ctx);
 registerLogTools(ctx);
 registerDelegateTools(ctx);
 registerMistakeTools(ctx);

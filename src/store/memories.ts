@@ -12,7 +12,7 @@ import { ftsQuery, indexText, queryTerms } from '../memory/search-terms.ts';
 import { nowIso } from '../core/kst-time.ts';
 import { redactSecrets } from '../core/secret-mask.ts';
 
-export const MEMORY_KINDS = ['fact', 'preference', 'decision', 'event', 'task', 'person', 'note', 'summary'] as const;
+export const MEMORY_KINDS = ['fact', 'preference', 'decision', 'event', 'action', 'person', 'note', 'summary'] as const;
 
 /** A topic (first tag) gets a summary memory once it has this many active memories. */
 export const SUMMARY_MIN_MEMORIES = 10;
@@ -68,6 +68,10 @@ export class MemoryRaceError extends Error {}
 // ---- memories -------------------------------------------------------------
 
 export function remember(db: DatabaseSync, input: NewMemory): { id: number; superseded: number[] } {
+  return transaction(db, () => rememberInTx(db, input));
+}
+
+function rememberInTx(db: DatabaseSync, input: NewMemory): { id: number; superseded: number[] } {
   const content = redactSecrets(input.content.trim());
   if (!content) throw new Error('content is empty');
   assertNoThreat(content, '기억', userWords(db));
@@ -78,34 +82,84 @@ export function remember(db: DatabaseSync, input: NewMemory): { id: number; supe
   if (Number.isNaN(t)) throw new Error(`valid_from is not a date: ${input.validFrom}`);
   const validFrom = new Date(t).toISOString();
 
-  return transaction(db, () => {
-    if (input.expectMaxId !== undefined && maxMemoryId(db) > input.expectMaxId) {
-      throw new MemoryRaceError(`memory saved by another writer after #${input.expectMaxId}`);
-    }
-    const { lastInsertRowid } = db
-      .prepare(
-        `INSERT INTO memories (kind, content, tags, importance, valid_from, source_session, source_log_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        input.kind,
-        content,
-        tags,
-        input.importance ?? 3,
-        validFrom,
-        input.sourceSession ?? null,
-        input.sourceLogId ?? null,
-        now,
-      );
-    const id = Number(lastInsertRowid);
-    db.prepare('INSERT INTO memories_fts (rowid, terms) VALUES (?, ?)').run(id, indexText(content, tags));
+  if (input.expectMaxId !== undefined && maxMemoryId(db) > input.expectMaxId) {
+    throw new MemoryRaceError(`memory saved by another writer after #${input.expectMaxId}`);
+  }
+  const { lastInsertRowid } = db
+    .prepare(
+      `INSERT INTO memories (kind, content, tags, importance, valid_from, source_session, source_log_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.kind,
+      content,
+      tags,
+      input.importance ?? 3,
+      validFrom,
+      input.sourceSession ?? null,
+      input.sourceLogId ?? null,
+      now,
+    );
+  const id = Number(lastInsertRowid);
+  db.prepare('INSERT INTO memories_fts (rowid, terms) VALUES (?, ?)').run(id, indexText(content, tags));
 
+  const superseded: number[] = [];
+  for (const oldId of input.supersedes ?? []) {
+    if (oldId === id) continue;
+    if (invalidateInTx(db, oldId, `superseded by #${id}`, id, now)) superseded.push(oldId);
+  }
+  return { id, superseded };
+}
+
+/** What the consolidation's judge writes for one candidate (memory/consolidate-verdicts.ts applyPlan). */
+export interface JudgedWrite {
+  /** The new memory (the candidate, or what it adds to a memory it repeats), replacing its `supersedes`. */
+  save?: NewMemory;
+  /** Old memories replaced by an existing one that already says the candidate. */
+  replaceWith?: { by: number; ids: number[] };
+  /** Replaced memories whose other part still holds: that part becomes a memory of its own. */
+  rests: Array<{ id: number; content: string }>;
+}
+
+/**
+ * The judge's writes in one transaction, so a replaced memory never ends without the part that still held (fix C4 of the
+ * 2026-11-13 source review: many live memories hold several decisions, and one changing must not end the others). A
+ * remainder takes the old memory's kind, tags, importance, valid_from, session and conversation row; the old one keeps
+ * pointing at what replaced it (superseded_by) and its invalid_reason names the remainder, so the history reads both ways.
+ */
+export function rememberJudged(db: DatabaseSync, w: JudgedWrite): { saved?: number; superseded: number[]; rests: Array<{ old: number; id: number }> } {
+  return transaction(db, () => {
     const superseded: number[] = [];
-    for (const oldId of input.supersedes ?? []) {
-      if (oldId === id) continue;
-      if (invalidateInTx(db, oldId, `superseded by #${id}`, id, now)) superseded.push(oldId);
+    let saved: number | undefined;
+    if (w.save) {
+      const r = rememberInTx(db, w.save);
+      saved = r.id;
+      superseded.push(...r.superseded);
     }
-    return { id, superseded };
+    if (w.replaceWith) {
+      const by = getMemory(db, w.replaceWith.by);
+      if (by && by.valid_to === null) {
+        for (const id of w.replaceWith.ids) if (id !== by.id && invalidateInTx(db, id, `superseded by #${by.id}`, by.id, nowIso())) superseded.push(id);
+      }
+    }
+    const rests: Array<{ old: number; id: number }> = [];
+    for (const r of w.rests) {
+      const old = getMemory(db, r.id);
+      // Only a memory this write replaced: one replaced by someone else meanwhile keeps its own history.
+      if (!old || !superseded.includes(r.id)) continue;
+      const { id } = rememberInTx(db, {
+        kind: old.kind,
+        content: r.content,
+        tags: old.tags ? old.tags.split(' ') : undefined,
+        importance: old.importance,
+        validFrom: old.valid_from,
+        sourceSession: old.source_session ?? undefined,
+        sourceLogId: old.source_log_id ?? undefined,
+      });
+      db.prepare(`UPDATE memories SET invalid_reason = invalid_reason || ? WHERE id = ?`).run(` · 바뀌지 않은 나머지 → #${id}`, r.id);
+      rests.push({ old: r.id, id });
+    }
+    return { saved, superseded, rests };
   });
 }
 
@@ -130,6 +184,18 @@ export function recentMemories(db: DatabaseSync, ids: number[], sinceIso: string
 /** Marks a memory as no longer true. History is kept; it just stops being recalled. */
 export function forget(db: DatabaseSync, id: number, reason: string): boolean {
   return transaction(db, () => invalidateInTx(db, id, reason, null, nowIso()));
+}
+
+/**
+ * Marks a memory as replaced by one already saved (`byId`, active): the memory consolidation's judge, when a memory
+ * saved in the chat already says what the candidate says and an old one it changes or ends is still live.
+ */
+export function supersedeWith(db: DatabaseSync, id: number, byId: number): boolean {
+  return transaction(db, () => {
+    const by = db.prepare('SELECT valid_to FROM memories WHERE id = ?').get(byId) as { valid_to: string | null } | undefined;
+    if (!by || by.valid_to !== null || id === byId) return false;
+    return invalidateInTx(db, id, `superseded by #${byId}`, byId, nowIso());
+  });
 }
 
 function invalidateInTx(db: DatabaseSync, id: number, reason: string, supersededBy: number | null, at: string): boolean {
@@ -243,6 +309,37 @@ export function topics(
     by.set(topic, t);
   }
   return [...by.values()].sort((a, b) => b.count - a.count);
+}
+
+/** Active memories of a topic (first tag) made after `after` (a summary's created_at), summaries left out, oldest first. */
+export function newerInTopic(db: DatabaseSync, topic: string, after: string, limit: number): number[] {
+  const t = topic.trim().toLowerCase();
+  if (!t) return [];
+  const rows = db
+    .prepare(
+      `SELECT id FROM memories WHERE valid_to IS NULL AND kind != 'summary' AND created_at > ?
+       AND (tags = ? OR substr(tags, 1, length(?) + 1) = ? || ' ') ORDER BY id LIMIT ?`,
+    )
+    .all(after, t, t, t, limit) as Array<{ id: number }>;
+  return rows.map((r) => r.id);
+}
+
+/**
+ * The topic's memories that stopped holding after `after` (a topic summary's time): replaced or marked untrue since the
+ * summary was written, so the summary may still say them (fix C11 of the 2026-11-13 source review; hindsight keeps
+ * "retractions" apart from new memories because a vanished memory raises no "newer" mark). Summaries are left out.
+ */
+export function endedInTopic(db: DatabaseSync, topic: string, after: string, limit: number): Array<{ id: number; by: number | null }> {
+  const t = topic.trim().toLowerCase();
+  if (!t) return [];
+  return (
+    db
+      .prepare(
+        `SELECT id, superseded_by AS by FROM memories WHERE valid_to IS NOT NULL AND valid_to > ? AND kind != 'summary'
+         AND (tags = ? OR substr(tags, 1, length(?) + 1) = ? || ' ') ORDER BY id LIMIT ?`,
+      )
+      .all(after, t, t, t, limit) as Array<{ id: number; by: number | null }>
+  ).map((r) => ({ id: r.id, by: r.by }));
 }
 
 export function vectors(db: DatabaseSync, model: string, includeInvalid = false): Array<{ id: number; vector: Float32Array }> {

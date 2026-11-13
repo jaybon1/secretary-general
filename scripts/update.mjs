@@ -19,6 +19,7 @@
 //   node <받은 저장소>/scripts/update.mjs apply   --user <비서 폴더> --repo <받은 저장소> --base <tag> --work <백업 폴더>
 //   node <받은 저장소>/scripts/update.mjs resolve --user <비서 폴더> --work <백업 폴더> --file <경로> --take keep|new|merge|merge-mine|merge-new|edited
 //   node <받은 저장소>/scripts/update.mjs resolve --user <비서 폴더> --work <백업 폴더> --rest      (남은 것을 모두 추천대로)
+//   node <받은 저장소>/scripts/update.mjs finish  --user <비서 폴더>      (npm install 뒤: 구독 공급자 personalDataAllowed, workspace-links)
 // 타입은 JSDoc으로 단다(원본의 npm run test:release-build가 배포판에서 이 파일을 checkJs strict로 검사한다).
 import { execFileSync } from 'node:child_process';
 import { createHash, randomInt } from 'node:crypto';
@@ -28,8 +29,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fixSkillLinks, formatSkillLinkFix, isEmptyTree, OLD_SKILLS_DIR, SKILLS_DIR } from '../src/setup/skill-links.ts';
 import { featureSkillPath, featureSkills, fixFeatureSkills, formatFeatureSkills, skillPlace } from '../src/setup/feature-skills.ts';
-import { readFeatures } from '../src/setup/features.ts';
+import { readFeatures } from '../src/core/features.ts';
 import { mergeThisSecretaryFiles } from '../src/core/this-secretary.ts';
+import { scriptPath } from '../src/core/paths.ts';
+import { fillSubscriptionPersonalData } from '../src/setup/provider-personal-data.ts';
 
 /** @typedef {Buffer | undefined} Raw A file's bytes; undefined when the file is not there. */
 /** @typedef {'same' | 'add' | 'ask-add' | 'delete' | 'ask-delete' | 'ask-missing' | 'replace' | 'keep' | 'merge' | 'move' | 'move-keep' | 'ask-binary'} Action */
@@ -55,7 +58,7 @@ import { mergeThisSecretaryFiles } from '../src/core/this-secretary.ts';
 /** Never read or written by an update: personal data, downloads, local settings, keys, backups, the install's own id. */
 export const PROTECTED = /(^|\/)(node_modules|backups|models|\.git|keys)(\/|$)|\.db(-wal|-shm|-journal)?$|\.db\.|\.local\.(?!example\.)|\.env$|(^|\/)\.secretary-id$/;
 /**
- * The secretary's own id (src/setup/secretary-id.ts): made once, kept for good, in upper case. An update never replaces it;
+ * The secretary's own id (src/core/secretary-id.ts): made once, kept for good, in upper case. An update never replaces it;
  * one coming from v7 (before ids) gets it at the end of apply, and one written in lower case is written again in upper
  * case. Same letters and length as secretary-id.ts (a test compares): no vowels, so a new id never spells a word. An id
  * made before (with vowels) still reads (ID_PATTERN is wider).
@@ -182,6 +185,8 @@ const CODE = /\.(ts|mjs|js|ps1|json)$/;
  * What the script recommends for a file it has to ask about (the secretary may recommend otherwise).
  * A clash in a code file takes the new version's side: there the user's side is often old code that no longer fits
  * (a file split into several clashes almost whole), and the user's change is kept in user-diffs for the secretary to carry over itself.
+ * features.json too: whatever is chosen, the features the user turned on or off get the user's value back (carryFeatureStates),
+ * so the new version's side only brings its descriptions, files and checks.
  * @param {Action} action
  * @param {string} filePath
  */
@@ -799,9 +804,51 @@ export function moveLocalFiles(userDir) {
 }
 
 /**
- * Carries "enabled" of renamed features from the user's old features.json (<work>/files/features.json, the backup copy)
- * to the same features under their new ids in the user's features.json now. Only the "enabled" line of that feature
- * changes (the rest of the file is the user's or the new version's as settled). Returns lines for the output.
+ * Each feature entry of a features.json text: its id and where its object starts and ends (strings skipped, so a brace or
+ * an "id" in a description or in a scheduled task does not count).
+ * @param {string} text
+ * @returns {{ id: string, start: number, end: number }[]}
+ */
+export function featureSpans(text) {
+  const at = text.search(/"features"\s*:\s*\[/);
+  if (at < 0) return [];
+  /** @type {{ id: string, start: number, end: number }[]} */
+  const spans = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = text.indexOf('[', at) + 1; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++;
+    } else if (c === '{' || c === '[') {
+      if (depth++ === 0 && c === '{') start = i;
+    } else if (c === '}' || c === ']') {
+      if (depth === 0) break;
+      if (--depth === 0 && c === '}' && start >= 0) {
+        /** @type {unknown} */
+        let id;
+        try {
+          id = JSON.parse(text.slice(start, i + 1)).id;
+        } catch {
+          id = undefined;
+        }
+        if (typeof id === 'string') spans.push({ id, start, end: i + 1 });
+        start = -1;
+      }
+    }
+  }
+  return spans;
+}
+
+/**
+ * What the user turned on or off in features.json stays the user's, whatever was chosen for the file (keep, new, a merge):
+ * the other columns (description, files, checks …) follow the new version as settled. Reads the user's features.json from
+ * before the update (<work>/files/features.json, the backup copy) and the installed version's (<work>/base/features.json,
+ * written by apply): a feature whose "enabled" the user changed from the installed version gets the user's value back in the
+ * user's features.json now; one the user left as shipped follows the new version. A feature renamed in v0.10.0
+ * (FEATURE_ID_MOVES) takes the user's value under its new id, and a features.json the user kept with the old ids or column
+ * names gets the new ones. Only those "enabled" lines (and ids, column names) change; the result is read back as JSON and
+ * left unwritten (with a line saying so) when it does not parse or a carried value is not there. Returns lines for the output.
  * @param {string} userDir
  * @param {string} workDir
  */
@@ -843,21 +890,42 @@ export function carryFeatureStates(userDir, workDir) {
     text = text.replace(at, `"${to}"$1`);
     lines.push(`기능 목록 칸 이름 ${from} → ${to}`);
   }
+  // The installed version's values (apply keeps a copy): a value the user never changed is the new version's to set.
+  /** @type {Map<string, unknown> | null} */
+  let shipped = null;
+  try {
+    const baseText = read(path.join(workDir, 'base', 'features.json'));
+    if (baseText !== null) shipped = new Map((JSON.parse(baseText).features ?? []).map((/** @type {{ id?: string, enabled?: unknown }} */ f) => [f?.id, f?.enabled]));
+  } catch {
+    shipped = null;
+  }
+  /** @type {{ id: string, enabled: boolean }[]} */
+  const want = [];
   for (const f of old) {
-    const to = f && typeof f.id === 'string' ? /** @type {Record<string, string>} */ (FEATURE_ID_MOVES)[f.id] : undefined;
-    if (!to || typeof f.enabled !== 'boolean') continue;
-    // The new entry, from its id to the next entry: its "enabled" line, if it has one (a core feature has none).
-    const start = text.search(new RegExp(`"id"\\s*:\\s*"${to}"`));
-    if (start < 0) continue;
-    const next = text.slice(start + 1).search(/"id"\s*:/);
-    const end = next < 0 ? text.length : start + 1 + next;
-    const entry = text.slice(start, end);
+    if (!f || typeof f.id !== 'string' || typeof f.enabled !== 'boolean') continue;
+    const renamed = /** @type {Record<string, string>} */ (FEATURE_ID_MOVES)[f.id];
+    // Not renamed and as the installed version had it: not the user's choice (without the copy every value counts as the user's).
+    if (!renamed && shipped && shipped.get(f.id) === f.enabled) continue;
+    const to = renamed ?? f.id;
+    // Its "enabled" line, if it has one (a core feature has none, a dropped feature is gone).
+    const span = featureSpans(text).find((s) => s.id === to);
+    if (!span) continue;
+    const entry = text.slice(span.start, span.end);
     const m = /"enabled"\s*:\s*(true|false)/.exec(entry);
     if (!m || m[1] === String(f.enabled)) continue;
-    text = text.slice(0, start) + entry.replace(m[0], m[0].replace(m[1], String(f.enabled))) + text.slice(end);
-    lines.push(`${f.id} → ${to}: "enabled": ${f.enabled} (사용자가 정해 둔 대로)`);
+    text = text.slice(0, span.start) + entry.replace(m[0], m[0].replace(m[1], String(f.enabled))) + text.slice(span.end);
+    want.push({ id: to, enabled: f.enabled });
+    lines.push(`${renamed ? `${f.id} → ${to}` : to}: "enabled": ${f.enabled} (사용자가 정해 둔 대로)`);
   }
-  if (text !== raw) fs.writeFileSync(file, text);
+  if (text === raw) return lines;
+  // Read back: every carried value is there, and the file is still JSON.
+  try {
+    const now = JSON.parse(normalize(text)).features ?? [];
+    for (const w of want) if (now.find((/** @type {{ id?: string }} */ f) => f?.id === w.id)?.enabled !== w.enabled) throw new Error(w.id);
+  } catch (e) {
+    return [`features.json을 고치지 못해 그대로 둠(${/** @type {Error} */ (e).message}): 사용자가 켜고 끈 값을 비서가 직접 맞춘다 — ${lines.join(', ')}`];
+  }
+  fs.writeFileSync(file, text);
   return lines;
 }
 
@@ -1013,6 +1081,8 @@ function cmdApply(opts) {
   for (const i of items) {
     /** @type {Result} */
     const r = { path: i.path, ...(i.from ? { from: i.from } : {}), action: i.action, status: 'done' };
+    // The installed version's features.json: what the user turned on or off is told from it (carryFeatureStates).
+    if (i.path === 'features.json' && i.base !== undefined) keepCopy('base', i.path, i.base);
     /** @param {string} t */
     const style = (t) => restyle(t, i.user?.toString('utf8'), i.theirs?.toString('utf8'));
     // replace, add and move have the new version's file, move-keep the user's, and a move its old path (makePlan).
@@ -1087,7 +1157,7 @@ function cmdApply(opts) {
   // The old marker line in a file the comparison took as unchanged (it reads past the line) goes too.
   const unmarked = removeOffMarkers(o.user).map((f) => `옛 머리말 줄(disable-model-invocation)을 뺌: ${f}`);
   const featureSkillLines = [...formatFeatureSkills(placedBefore.plan, true), ...formatFeatureSkills(placedAfter.plan, true), ...placedBefore.failed, ...placedAfter.failed, ...unmarked];
-  // Renamed features keep what the user set (features.json written now; resolve does it again for one settled later),
+  // What the user turned on or off in features.json stays (written now; resolve does it again for one settled later),
   // and this PC's own files under renamed names follow.
   const featureIds = carryFeatureStates(o.user, o.work);
   const localFiles = moveLocalFiles(o.user);
@@ -1106,7 +1176,7 @@ function cmdApply(opts) {
   );
   printSkills(skillMove, links);
   for (const line of featureSkillLines) console.log(`선택 기능 스킬 자리: ${line}`);
-  for (const line of featureIds) console.log(`이름이 바뀐 기능(features.json): ${line}`);
+  for (const line of featureIds) console.log(`기능 목록(features.json): ${line}`);
   for (const line of localFiles) console.log(`이름이 바뀐 이 PC 파일: ${line}`);
   if (thisSecretaryMerge.left.length || thisSecretaryMerge.lines.some((l) => l.includes(' → '))) for (const line of thisSecretaryMerge.lines) console.log(`이 비서 설정 한 파일로(this-secretary.local.json): ${line}`);
   printOpen(state);
@@ -1122,7 +1192,7 @@ function printSkills(move, links) {
     console.log(`스킬 자리: 옛 자리(${OLD_SKILLS}/, ${OLD_SKILLS_DIR}/)에서 ${SKILLS_DIR}/로 옮긴 폴더 ${move.folders?.length ?? 0}개, 파일 ${move.moved.length}개${made}`);
   for (const k of move.kept) console.log(`  - 같은 자리에 내용이 다른 파일이 있어 옮기지 않고 따로 둠: ${k}`);
   for (const line of formatSkillLinkFix(links, false)) console.log(line);
-  if (links.failed.length || links.kept.length) console.log('  → 업데이트를 마친 뒤 사용자 폴더에서 `node src/cli.ts skill-links`로 다시 만든다(설치 점검 항목 skills가 알린다)');
+  if (links.failed.length || links.kept.length) console.log('  → 업데이트를 마친 뒤 사용자 폴더에서 `node src/cli.ts skill-links`로 다시 만든다(설치 상태 점검 항목 skills가 알린다)');
 }
 
 /** @param {Result} r */
@@ -1175,7 +1245,7 @@ function settle(o, r, take) {
   }
   if (r.from && r.from !== r.path) removeOld(o.user, r.from, r.path);
   Object.assign(r, { status: 'resolved', take });
-  if (r.path === 'features.json') for (const line of carryFeatureStates(o.user, o.work)) console.log(`이름이 바뀐 기능(features.json): ${line}`);
+  if (r.path === 'features.json') for (const line of carryFeatureStates(o.user, o.work)) console.log(`기능 목록(features.json): ${line}`);
 }
 
 /** @param {Options} opts */
@@ -1202,12 +1272,52 @@ function cmdResolve(opts) {
   console.log(`남은 부딪힘: ${left.length ? left.join(', ') : '없음'}`);
 }
 
+/**
+ * After the files are settled and npm install has run: what a person used to do after an update, done by the program
+ * (v0.11.0). Only what needs no choice is done; what does is listed for the secretary to ask about.
+ * - providers.json: a Claude subscription (type claude-subscription, the user's own account) without personalDataAllowed
+ *   gets true. Any other provider without it (a gateway, an API key, another CLI) is left as it is, which counts as "no",
+ *   and is listed ("물어볼 공급자").
+ * - The workspaces: the user's own `node src/cli.ts workspace-links` (the new code, the user's database) puts each
+ *   workspace's rules and links right; one it could not fix ("못 고침") is listed ("물어볼 공간").
+ * Safe to run again. Exit 1 when a step failed.
+ * @param {Options} opts
+ */
+function cmdFinish(opts) {
+  const o = need(opts, 'user');
+  const p = fillSubscriptionPersonalData(scriptPath('providers', o.user));
+  if (p.problem) {
+    console.log(`공급자 개인정보 값(providers.json): 못 함 — ${p.problem}`);
+    process.exitCode = 1;
+  } else console.log(`공급자 개인정보 값(providers.json): ${p.filled.length ? `구독 공급자에 "personalDataAllowed": true를 넣음: ${p.filled.join(', ')}` : '넣을 구독 공급자 없음'}`);
+  const askProviders = p.left.map((x) => `${x.name}(${x.type || 'type 없음'})`);
+  console.log(`물어볼 공급자(personalDataAllowed 없음, 그동안 개인정보를 보내지 않음): ${askProviders.join(', ') || '없음'}`);
+  /** @type {string[]} */
+  let lines = [];
+  try {
+    const out = execFileSync(process.execPath, ['--no-warnings', path.join('src', 'cli.ts'), 'workspace-links'], { cwd: o.user, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    lines = out.split(/\r?\n/).filter((l) => l.trim());
+    for (const l of lines) console.log(`작업 공간(workspace-links): ${l}`);
+  } catch (e) {
+    const err = /** @type {{ stdout?: string, stderr?: string, message: string }} */ (e);
+    for (const l of `${err.stdout ?? ''}`.split(/\r?\n/).filter((x) => x.trim())) console.log(`작업 공간(workspace-links): ${l}`);
+    const first = `${err.stderr ?? ''}`.split(/\r?\n/).find((x) => x.trim()) ?? err.message;
+    console.log(`작업 공간(workspace-links): 실패 — ${first} (사용자 폴더에서 \`node src/cli.ts workspace-links\`를 다시 돌려 출력을 본다)`);
+    process.exitCode = 1;
+  }
+  const askWorkspaces = lines.filter((l) => l.startsWith('못 고침: ')).map((l) => l.slice('못 고침: '.length));
+  console.log(`물어볼 공간(workspace-links가 못 고침): ${askWorkspaces.length ? '' : '없음'}`);
+  for (const w of askWorkspaces) console.log(`  - ${w}`);
+  console.log(`ASK_PROVIDERS=${askProviders.length}`);
+  console.log(`ASK_WORKSPACES=${askWorkspaces.length}`);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   /** @type {Record<string, (o: Options) => void>} */
-  const cmds = { backup: cmdBackup, detect: cmdDetect, plan: cmdPlan, apply: cmdApply, resolve: cmdResolve };
+  const cmds = { backup: cmdBackup, detect: cmdDetect, plan: cmdPlan, apply: cmdApply, resolve: cmdResolve, finish: cmdFinish };
   const cmd = cmds[process.argv[2]];
   try {
-    if (!cmd) throw new Error('usage: node scripts/update.mjs backup|detect|plan|apply|resolve --user <비서 폴더> [--repo <받은 저장소>] [--base <tag>] [--work <백업 폴더>] [--file <경로> --take <고른 것> | --rest]');
+    if (!cmd) throw new Error('usage: node scripts/update.mjs backup|detect|plan|apply|resolve|finish --user <비서 폴더> [--repo <받은 저장소>] [--base <tag>] [--work <백업 폴더>] [--file <경로> --take <고른 것> | --rest]');
     const o = args();
     for (const k of /** @type {const} */ (['user', 'repo', 'work'])) {
       const v = o[k];

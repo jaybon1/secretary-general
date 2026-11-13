@@ -7,10 +7,17 @@ import { nowIso } from '../core/kst-time.ts';
 
 // ---- turn tools -------------------------------------------------------------
 
-/** One check's verdict on a turn's answer: blocked (the model wrote again) or warned (told on the next prompt). */
+/**
+ * One guard's catch in a turn. A Stop check on the answer (no hook): blocked (the model wrote again) or warned (told on the
+ * next prompt). A PreToolUse or PostToolUse hook's (mistake-guards/tool-hook-hits.ts): refused the call (block) or added a
+ * note (warn), with the tool and the time.
+ */
 export interface GuardHit {
   check: string;
   level: 'block' | 'warn';
+  hook?: 'PreToolUse' | 'PostToolUse';
+  tool?: string;
+  at?: string;
 }
 
 export interface TurnTools {
@@ -49,6 +56,30 @@ export function turnTools(db: DatabaseSync, opts: { sessionId?: string; limit?: 
   return (rows as unknown as TurnRow[]).map(turnOf);
 }
 
+/** Per hook (Stop for the answer checks), check and level since a time: how many turns caught, and the last one. */
+export function guardHitSummary(db: DatabaseSync, since: string): Array<{ hook: string; check: string; level: 'block' | 'warn'; n: number; last_at: string }> {
+  const rows = db.prepare(`SELECT guard, created_at FROM turn_tools WHERE guard <> '[]' AND created_at >= ?`).all(since) as unknown as Array<{ guard: string; created_at: string }>;
+  const out = new Map<string, { hook: string; check: string; level: 'block' | 'warn'; n: number; last_at: string }>();
+  for (const r of rows) {
+    let hits: GuardHit[];
+    try {
+      hits = JSON.parse(r.guard);
+    } catch {
+      continue;
+    }
+    for (const h of hits) {
+      const hook = h.hook ?? 'Stop';
+      const key = `${hook}\0${h.check}\0${h.level}`;
+      const at = h.at ?? r.created_at;
+      const s = out.get(key) ?? { hook, check: h.check, level: h.level, n: 0, last_at: at };
+      s.n++;
+      if (at > s.last_at) s.last_at = at;
+      out.set(key, s);
+    }
+  }
+  return [...out.values()].sort((a, b) => b.n - a.n || b.last_at.localeCompare(a.last_at));
+}
+
 // ---- mistakes ---------------------------------------------------------------
 
 /** Who found it: the user, the secretary itself, a review of a report, or a guard (hook, check script). */
@@ -76,8 +107,6 @@ export interface Mistake {
   harm: string;
   /** The guard the rule moved into (hook, script), '' while there is none. */
   guard: string;
-  /** Eval set scenes that test it, "E1,E2". */
-  eval_ids: string;
   /** 1 when the group had happened before (counted when it is recorded, or set directly by the secretary). */
   recurred: number;
   created_at: string;
@@ -95,7 +124,6 @@ export interface NewMistake {
   ruleRef?: string;
   harm?: string;
   guard?: string;
-  evalIds?: string[];
   /** Left out: 1 when an earlier mistake has the same group. */
   recurred?: boolean;
 }
@@ -114,8 +142,8 @@ export function recordMistake(db: DatabaseSync, m: NewMistake): Mistake {
   const recurred = m.recurred === undefined ? Number(before.n) > 0 : m.recurred;
   const { lastInsertRowid } = db
     .prepare(
-      `INSERT INTO mistakes (happened_at, session_id, what, made_by, found_by, group_name, cause, log_ids, rule_ref, harm, guard, eval_ids, recurred, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO mistakes (happened_at, session_id, what, made_by, found_by, group_name, cause, log_ids, rule_ref, harm, guard, recurred, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       at,
@@ -129,7 +157,6 @@ export function recordMistake(db: DatabaseSync, m: NewMistake): Mistake {
       m.ruleRef?.trim() ?? '',
       m.harm?.trim() ?? '',
       m.guard?.trim() ?? '',
-      joinIds(m.evalIds),
       recurred ? 1 : 0,
       nowIso(),
     );
@@ -140,16 +167,16 @@ export function getMistake(db: DatabaseSync, id: number): Mistake | undefined {
   return db.prepare('SELECT * FROM mistakes WHERE id = ?').get(id) as Mistake | undefined;
 }
 
-/** The fields a later step fills in: the guard it moved into, the eval scenes, whether it came back. */
-export function updateMistake(db: DatabaseSync, id: number, patch: { guard?: string; evalIds?: string[]; recurred?: boolean; harm?: string; ruleRef?: string }): Mistake | undefined {
+/** The fields a later step fills in: the group (moved to an existing one of the same kind), the guard it moved into, whether it came back. */
+export function updateMistake(db: DatabaseSync, id: number, patch: { group?: string; guard?: string; recurred?: boolean; harm?: string; ruleRef?: string }): Mistake | undefined {
   const sets: string[] = [];
   const params: Array<string | number> = [];
   const set = (col: string, v: string | number) => {
     sets.push(`${col} = ?`);
     params.push(v);
   };
+  if (patch.group !== undefined && patch.group.trim()) set('group_name', patch.group.trim());
   if (patch.guard !== undefined) set('guard', patch.guard.trim());
-  if (patch.evalIds !== undefined) set('eval_ids', joinIds(patch.evalIds));
   if (patch.recurred !== undefined) set('recurred', patch.recurred ? 1 : 0);
   if (patch.harm !== undefined) set('harm', patch.harm.trim());
   if (patch.ruleRef !== undefined) set('rule_ref', patch.ruleRef.trim());

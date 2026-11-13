@@ -1,6 +1,6 @@
 /**
  * External devices' ids (scripts/external-devices/devices-config.ts): four upper-case letters from the secretary id's
- * alphabet (setup/secretary-id.ts), so a device id reads like a secretary id and never spells a word. A new one is unlike
+ * alphabet (core/secretary-id.ts), so a device id reads like a secretary id and never spells a word. A new one is unlike
  * every secretary id this PC knows (knownSecretaryIds) and every device id already there: one id names one thing on this PC.
  * The device's Tailscale name sits beside it (tailscaleName), so renaming the device in Tailscale changes that one line.
  */
@@ -9,7 +9,7 @@ import path from 'node:path';
 import { randomInt } from 'node:crypto';
 import { PROJECT_ROOT } from './config.ts';
 import { sharedDir } from './this-secretary.ts';
-import { readSecretaryId, SECRETARY_ID_ALPHABET, SECRETARY_ID_LENGTH, SECRETARY_ID_PATTERN } from '../setup/secretary-id.ts';
+import { readSecretaryId, SECRETARY_ID_ALPHABET, SECRETARY_ID_LENGTH, SECRETARY_ID_PATTERN } from './secretary-id.ts';
 
 /** SECRETARY_<name>_DIR variables that are no secretary's folder (the keys, skills and shared folders, core/provider-accounts.ts, paths.ts, this-secretary.ts). */
 const NOT_IDS = new Set(['KEYS', 'SKILLS', 'SHARED']);

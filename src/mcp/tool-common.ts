@@ -3,13 +3,25 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { LogEntry, Store } from '../store/store.ts';
+import type { ConsolidateTally } from '../memory/consolidate-tally.ts';
+import type { CandidateBook } from '../memory/consolidate-verdicts.ts';
 import { formatLocal } from '../core/kst-time.ts';
 
-/** What each tool file's register function gets. `readonly` is the server's --readonly. */
+/**
+ * What each tool file's register function gets. `readonly` is the server's --readonly. `tally`: only in the memory
+ * consolidation's own server (--staff memory-consolidation), the write tools report what they wrote (memory/consolidate-tally.ts).
+ */
 export interface ToolContext {
   server: McpServer;
   store: Store;
   readonly: boolean;
+  tally?: (part: Partial<ConsolidateTally>) => void;
+  /**
+   * Only in the memory consolidation's own server: its memory candidates (propose_memory → judge_memory,
+   * memory/consolidate-verdicts.ts). There remember takes topic summaries only and forget is refused, so every other
+   * memory goes through a verdict per close memory.
+   */
+  candidates?: CandidateBook;
 }
 
 export const ok = (text: string) => ({ content: [{ type: 'text' as const, text }] });

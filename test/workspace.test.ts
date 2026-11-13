@@ -62,10 +62,10 @@ test('a team workspace gets a dated folder, a charter, role files and an output 
   assert.doesNotMatch(charter, /history\.md`에 이 업무 항목을/, 'no more appending to the state file');
   assert.match(charter, /## 일하는 방식[\s\S]*workspaces[\\/]_sandbox[\\/]<공간폴더이름>-<업무번호>[\s\S]*지웠는지 적는다\. 이유: 위쪽 폴더에 규칙 파일·git이 없어/, 'test folders live outside every workspace');
   assert.match(charter, /## 일하는 방식[\s\S]*되돌릴 수 없는 단계[^\n]*`\[질문\]`으로 넘긴다\. 실행은 비서가 사용자 승인을 받아 한다/, 'irreversible steps are handed to the secretary');
-  assert.match(charter, /## 일하는 방식[\s\S]*나중까지 남는 것[^\n]*"장기적 관점의 제안"을 나란히 적는다[^\n]*"장기적 관점으로 봐도 같음"[^\n]*"개선 후보"로만 적는다/, 'lasting changes get a long-term option beside the current one');
+  assert.match(charter, /## 일하는 방식[\s\S]*나중까지 남는 것[^\n]*"장기적 관점의 제안"을 나란히 적는다[^\n]*"장기적 관점으로 봐도 같음"[^\n]*"개선 후보"에 적기만/, 'lasting changes get a long-term option beside the current one');
   assert.match(charter, /## 일하는 방식[\s\S]*업무를 끝내기 전에 뒤에서 도는 명령을 끝내거나 멈춘다\(TaskStop\)\. 남으면 비서가 완료를 늦게 알게 된다\./, 'workers stop leftover background commands before finishing');
   assert.match(charter, /## 끝낼 때[\s\S]*- 장기적 관점의 제안:[^\n]*\n- 개선 후보: 맡은 범위 밖/, 'the report has the long-term and out-of-scope lines');
-  assert.match(charter, /## 일하는 방식[\s\S]*비서 기억 읽기 도구\(`recall`·`search_log`\)가 있으면[^\n]*`search_log`로 대화 원문을 펼친다\. 쓰기 도구는 없으니 남길 사실은 보고서에 적는다/, 'memory is read with recall/search_log when the tools are there');
+  assert.match(charter, /## 일하는 방식[\s\S]*비서 기억 읽기 도구\(`recall`·`search_log`\)가 있으면[^\n]*`search_log`로 대화 원문을 조회한다\. 쓰기 도구는 없으니 남길 사실은 보고서에 적는다/, 'memory is read with recall/search_log when the tools are there');
 
   assert.equal(
     fs.readFileSync(path.join(ws.folder, '.claude', 'agents', 'designer.md'), 'utf8'),
@@ -99,11 +99,11 @@ test('a non-quick workspace keeps what it learns in skills, MEMORY.md and pendin
   assert.match(memory, /^# 인스타 계정 사실 메모[\s\S]*"~이다"[\s\S]*2,000자/);
 
   const charter = fs.readFileSync(path.join(ws.folder, 'AGENTS.md'), 'utf8');
-  assert.match(charter, /MEMORY\.md`와 `notes\/history\.md`\(지금 상태\)를 읽고[\s\S]*맞는 스킬\(`\.agents\/skills\/`, 공통 스킬은 `common-<이름>`\)이 있으면 먼저 읽고 따른다[^\n]*통째로 열지 말고 찾아 읽는다/);
+  assert.match(charter, /MEMORY\.md`와 `notes\/history\.md`\(지금 상태\)를 읽고[\s\S]*맞는 스킬\(`\.agents\/skills\/`, 공통 스킬은 `common-<이름>`\)이 있으면 먼저 읽고 따른다[^\n]*찾아 그 항목만 읽는다/);
   assert.match(charter, /## 스킬과 기억[\s\S]*\.agents\/skills\/<이름>\/SKILL\.md[\s\S]*"규칙 \+ 이유 한 줄"[\s\S]*notes\/pending\/<YYYYMMDD>-<짧은이름>\.md[\s\S]*공통 스킬\(`common-<이름>` 스킬, 원본은 `workspaces\\_skills`[\s\S]*읽기만 한다[\s\S]*남기지 않는 것: 환경 탓 실패[\s\S]*## 일하는 방식/);
   assert.ok(!charter.includes('스킬 목록(') && !charter.includes('- 아직 없음'), 'no skill list in the charter: the CLI lists skills by their description');
   assert.match(charter, /## 끝낼 때[\s\S]*- 고친 스킬, 남긴 제안:/);
-  assert.match(charter, /역할 정의, `MEMORY\.md`는 직접 고치지 않는다\. 스킬은[^\n]*교정을 반영할 때만 고친다/);
+  assert.match(charter, /역할 정의, `MEMORY\.md`는 직접 고치지 않는다\([^\n]*비서가 관리[^\n]*\)\. 스킬은[^\n]*교정을 반영할 때만 고친다/);
   assert.doesNotMatch(charter, /지난 업무에서 배운 점/);
 });
 
@@ -116,7 +116,7 @@ test('each task gets its own dated folder under research/ or records/<product>/,
   assert.match(brief, /^# 카페 소개 페이지/);
   assert.match(brief, /- 모바일에서도 읽힌다/);
   assert.match(brief, /24시/);
-  assert.match(brief, /## 증거[\s\S]*- index\.html을 열면/);
+  assert.match(brief, /## 완료 확인 방법[\s\S]*- index\.html을 열면/);
   assert.doesNotMatch(brief, /## 위험|## 진행 방식|## 제품/, 'empty sections stay out');
 
   const careful = createTaskFolder(ws.folder, task({ name: 'fix', risks: ['기존 링크가 깨질 수 있다'], planFirst: true, lockTests: true }), NOW);
@@ -151,7 +151,7 @@ test('rejects bad names, wrong team shapes, missing parents and the secretary fo
 
   const ws = createWorkspaceFolder(team({ parentDir: parent }), NOW);
   assert.throws(() => createTaskFolder(ws.folder, task({ doneCriteria: [] })), /완료 기준/);
-  assert.throws(() => createTaskFolder(ws.folder, task({ proof: [] })), /증거/);
+  assert.throws(() => createTaskFolder(ws.folder, task({ proof: [] })), /완료 확인 방법/);
   assert.throws(() => createTaskFolder(ws.folder, task({ name: 'Bad Name' })), /영문 소문자/);
 });
 
@@ -191,6 +191,7 @@ test('an archived workspace leaves the list but keeps its task history', () => {
   assert.throws(() => s.archiveWorkspace(w.id, '/x/elsewhere'), /이미 보관/);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 옛 DB의 업무 폴더가 작업 공간으로 옮겨지지 않아 업무 이력을 잃는다(DB 옮기기).
 test('migration 4 turns each pre-existing task folder into a workspace', () => {
   const file = path.join(tempDir(), 'v3.db');
   const raw = new DatabaseSync(file);
@@ -254,8 +255,8 @@ test('code scale adds rules on top of the small set', () => {
 test('every charter asks for pasted verification output; only non-quick ones call a checker', () => {
   const spec: WorkspaceSpec = { kind: 'solo', name: 'ext', title: '확장', purpose: '크롬 확장', verify: ['npm test'] };
   const charter = renderCharter(spec);
-  assert.match(charter, /## 검증[\s\S]*- `npm test`[\s\S]*테스트가 아니라 코드를 고친다[\s\S]*고치지 말고 보고만 하라[\s\S]*## 물어볼 때/);
+  assert.match(charter, /## 검증[\s\S]*테스트가 아니라 코드를 고친다[\s\S]*고치지 말고 보고만 하라[\s\S]*<!-- secretary:end verify -->\n- `npm test`\n[\s\S]*## 물어볼 때/);
   assert.match(charter, /계획 먼저: 예/, 'plan-first tasks stop for approval');
-  assert.match(renderCharter({ ...spec, verify: undefined }), /아직 정하지 않음/);
+  assert.match(renderCharter({ ...spec, verify: undefined }), /아직 없으면[^\n]*\n<!-- secretary:end verify -->\n\n/);
   assert.doesNotMatch(renderCharter(QUICK_SPEC), /확인 담당: 보고서를/);
 });

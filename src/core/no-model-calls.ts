@@ -8,5 +8,5 @@ export const NO_MODEL_ENV = 'SECRETARY_NO_MODEL_CALLS';
 
 /** Throws while the mark is set; `what` names the call refused. */
 export function assertModelCallsAllowed(what: string, env: NodeJS.ProcessEnv = process.env): void {
-  if (env[NO_MODEL_ENV]) throw new Error(`시험 중에는 claude·run-job을 부르지 않아요(${NO_MODEL_ENV}): ${what}. 시험에 가짜를 넣는다.`);
+  if (env[NO_MODEL_ENV]) throw new Error(`테스트 중에는 claude·run-job을 부르지 않아요(${NO_MODEL_ENV}): ${what}. 테스트에는 가짜를 넣는다.`);
 }

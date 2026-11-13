@@ -16,6 +16,13 @@ export interface LogEntry {
   created_at: string;
 }
 
+/**
+ * Front of a user row the person sent while the secretary was still working (a queued message the turn took in,
+ * log/ingest-transcript.ts). Such a row is said inside a turn, so it does not start one: readers that count turns or
+ * look for a turn's prompt pass it over.
+ */
+export const QUEUED_PREFIX = '[끼어든 말] ';
+
 const CONSOLIDATED_KEY = 'consolidated_through_log_id';
 
 /** Idempotent: entries already archived (same message_uuid) are skipped, and so are entries the user deleted (purged_log_ids). */
@@ -63,8 +70,8 @@ export function searchLog(db: DatabaseSync, query: string, opts: { limit: number
  */
 export function linkTurnMemories(db: DatabaseSync, sessionId: string): number {
   const prompt = db
-    .prepare("SELECT id, created_at FROM raw_log WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1")
-    .get(sessionId) as { id: number; created_at: string } | undefined;
+    .prepare("SELECT id, created_at FROM raw_log WHERE session_id = ? AND role = 'user' AND substr(content, 1, ?) != ? ORDER BY id DESC LIMIT 1")
+    .get(sessionId, QUEUED_PREFIX.length, QUEUED_PREFIX) as { id: number; created_at: string } | undefined;
   if (!prompt) return 0;
   const { changes } = db
     .prepare('UPDATE memories SET source_log_id = ?, source_session = ? WHERE source_log_id IS NULL AND created_at >= ?')
@@ -100,7 +107,8 @@ export function memoriesForRewind(db: DatabaseSync, logIds: number[], ids: numbe
 /**
  * Removes log entries for good (log/purge.ts deleteLogRows: rows the user deleted, or a branch a rewind abandoned) and
  * invalidates `forgetIds` in one transaction. The rows' identifiers go on purged_log_ids, so ingest never logs them
- * again. Memories and big-work rows that pointed at a removed entry lose the link (the row is gone).
+ * again. Memories and main-agenda rows that pointed at a removed entry lose the link (the row is gone), and a decision's
+ * quote copied from it is deleted with it (the user's words go where the user sent them).
  * raw_log ids are never handed out again (AUTOINCREMENT, migration 11), so no watermark needs to move.
  */
 export function dropLogEntries(db: DatabaseSync, logIds: number[], forgetIds: number[], reason: string, at: string): { forgotten: number[] } {
@@ -109,13 +117,17 @@ export function dropLogEntries(db: DatabaseSync, logIds: number[], forgetIds: nu
     const forgotten = forgetIds.filter((id) => Number(invalidate.run(at, reason, id).changes) > 0);
     const block = db.prepare('INSERT OR REPLACE INTO purged_log_ids (message_uuid, log_id, session_id, purged_at) SELECT message_uuid, id, session_id, ? FROM raw_log WHERE id = ?');
     const unlinkMemory = db.prepare('UPDATE memories SET source_log_id = NULL WHERE source_log_id = ?');
-    const unlinkBigWork = db.prepare('UPDATE big_work SET source_log_id = NULL WHERE source_log_id = ?');
+    const unlinkMainAgenda = db.prepare('UPDATE main_agenda SET source_log_id = NULL WHERE source_log_id = ?');
+    // A decision's quote of the user's words (migration 18) goes with the row it was copied from (none before that table).
+    const quotes = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_quotes'").get();
+    const dropQuote = quotes ? db.prepare('DELETE FROM memory_quotes WHERE log_id = ?') : null;
     const unindex = db.prepare('DELETE FROM raw_log_fts WHERE rowid = ?');
     const remove = db.prepare('DELETE FROM raw_log WHERE id = ?');
     for (const id of logIds) {
       block.run(at, id);
       unlinkMemory.run(id);
-      unlinkBigWork.run(id);
+      unlinkMainAgenda.run(id);
+      dropQuote?.run(id);
       unindex.run(id);
       remove.run(id);
     }

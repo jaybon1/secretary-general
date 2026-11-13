@@ -37,11 +37,11 @@ for (;;) {
     process.exit(0);
   }
   if (status === 'stopped') {
-    console.log(`멈춤: 의미 검색 서버가 모델 파일을 ${STOPPED_NOTE}. 마지막 오류: ${readDown()?.error}. 실패 기록: ${FAILURE_LOG}. 감시를 끝내요.`);
+    console.log(`멈춤: 의미 검색 서버가 모델 파일을 ${STOPPED_NOTE}. 마지막 오류: ${readDown()?.error}. 실패 기록: ${FAILURE_LOG}. 모니터링을 끝내요.`);
     process.exit(0);
   }
   if (status === 'low-memory') {
-    console.log(`멈춤: ${lowMemoryNotice(readDown()?.lowMemory?.needMb ?? serverNeedMb(), freeMemMb())} 켜라고 하면 --retry. 실패 기록: ${FAILURE_LOG}. 감시를 끝내요.`);
+    console.log(`멈춤: ${lowMemoryNotice(readDown()?.lowMemory?.needMb ?? serverNeedMb(), freeMemMb())} 켜라고 하면 --retry. 실패 기록: ${FAILURE_LOG}. 모니터링을 끝내요.`);
     process.exit(0);
   }
   if (Date.now() >= deadline) break;
@@ -49,4 +49,4 @@ for (;;) {
 }
 const down = readDown();
 const last = down ? ` 연속 ${down.failures}번 실패, 마지막 오류: ${down.error}.` : '';
-console.log(`시간 초과: ${maxMinutes}분 동안 의미 검색 서버가 살아나지 않았어요.${last} 실패 기록: ${FAILURE_LOG}. 감시를 끝내요.`);
+console.log(`시간 초과: ${maxMinutes}분 동안 의미 검색 서버가 살아나지 않았어요.${last} 실패 기록: ${FAILURE_LOG}. 모니터링을 끝내요.`);

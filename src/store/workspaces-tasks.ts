@@ -6,8 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './schema.ts';
 import { nowIso } from '../core/kst-time.ts';
 
-/** review: the report is checked, and the user still has to see the result for themselves (only tasks planned so). */
-export const TASK_STATUSES = ['ready', 'running', 'review', 'done', 'failed', 'cancelled'] as const;
+export const TASK_STATUSES = ['ready', 'running', 'done', 'failed', 'cancelled'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 export const WORKSPACE_KINDS = ['quick', 'solo', 'team'] as const;
@@ -42,10 +41,6 @@ export interface Task {
   result: string | null;
   created_at: string;
   updated_at: string;
-  /** 1 when the plan said "검수 대기: 예": the user sees the result before it counts as done. */
-  review_needed: number;
-  /** When it went into 'review' (null before). */
-  review_since: string | null;
 }
 
 export type TaskWithWorkspace = Task & { workspace_title: string; workspace_kind: WorkspaceKind; folder: string };
@@ -107,18 +102,15 @@ export function listWorkspaces(db: DatabaseSync): Array<Workspace & { task_count
 
 // ---- tasks ----------------------------------------------------------------
 
-export function createTask(
-  db: DatabaseSync,
-  t: { workspaceId: number; name: string; title: string; goal: string; outputDir: string; review?: boolean },
-): Task {
+export function createTask(db: DatabaseSync, t: { workspaceId: number; name: string; title: string; goal: string; outputDir: string }): Task {
   const now = nowIso();
   return transaction(db, () => {
     const { lastInsertRowid } = db
       .prepare(
-        `INSERT INTO tasks (workspace_id, name, title, goal, output_dir, status, review_needed, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'ready', ?, ?, ?)`,
+        `INSERT INTO tasks (workspace_id, name, title, goal, output_dir, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'ready', ?, ?)`,
       )
-      .run(t.workspaceId, t.name, t.title, t.goal, t.outputDir, t.review ? 1 : 0, now, now);
+      .run(t.workspaceId, t.name, t.title, t.goal, t.outputDir, now, now);
     db.prepare('UPDATE workspaces SET updated_at = ? WHERE id = ?').run(now, t.workspaceId);
     return getTask(db, Number(lastInsertRowid)) as Task;
   });
@@ -128,31 +120,20 @@ export function getTask(db: DatabaseSync, id: number): TaskWithWorkspace | undef
   return db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(id) as TaskWithWorkspace | undefined;
 }
 
-/** Only the given fields change; returns undefined if there is no such task. Going into 'review' stamps review_since. */
+/** Only the given fields change; returns undefined if there is no such task. */
 export function updateTask(
   db: DatabaseSync,
   id: number,
-  patch: { status?: TaskStatus; sessionRef?: string; result?: string; review?: boolean },
+  patch: { status?: TaskStatus; sessionRef?: string; result?: string },
 ): TaskWithWorkspace | undefined {
-  const now = nowIso();
-  const status = patch.status ?? null;
-  const review = patch.review === undefined ? null : patch.review ? 1 : 0;
   const { changes } = db
     .prepare(
-      `UPDATE tasks SET review_since = CASE WHEN ? = 'review' AND status <> 'review' THEN ? ELSE review_since END,
-                        status = coalesce(?, status), session_ref = coalesce(?, session_ref),
-                        result = coalesce(?, result), review_needed = coalesce(?, review_needed), updated_at = ?
+      `UPDATE tasks SET status = coalesce(?, status), session_ref = coalesce(?, session_ref),
+                        result = coalesce(?, result), updated_at = ?
        WHERE id = ?`,
     )
-    .run(status, now, status, patch.sessionRef ?? null, patch.result ?? null, review, now, id);
+    .run(patch.status ?? null, patch.sessionRef ?? null, patch.result ?? null, nowIso(), id);
   return Number(changes) ? getTask(db, id) : undefined;
-}
-
-/** Tasks waiting for the user's own look at the result since before `before` (ISO), longest waiting first. */
-export function reviewWaiting(db: DatabaseSync, before: string): TaskWithWorkspace[] {
-  return db
-    .prepare(`${TASK_SELECT} WHERE t.status = 'review' AND coalesce(t.review_since, t.updated_at) <= ? ORDER BY coalesce(t.review_since, t.updated_at), t.id`)
-    .all(before) as unknown as TaskWithWorkspace[];
 }
 
 /** Most recently updated first. */
