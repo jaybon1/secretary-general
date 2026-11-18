@@ -1,13 +1,13 @@
 /**
  * The rules text a workspace gets: its charter (AGENTS.md), memory and history files, role definitions,
- * and each task's brief. Ego Lite is used only where it is installed (the ego-browser command).
+ * and each task's brief. How to use what workspaces share (the secretary's programs, Ego Lite's page saver, the Windows
+ * shell) lives in common skills (workspaces/_skills, workspace/common-skills.ts), which the rules name by one line each.
  */
 import path from 'node:path';
 import { BASIS_GUESS, BASIS_UNABLE } from '../core/basis-forms.ts';
-import { ENTRY_DIR, entryPath, secretaryDirEnv } from '../core/paths.ts';
-import { COMMON_PREFIX } from './common-skills.ts';
+import { ENTRY_DIR } from '../core/paths.ts';
+import { COMMON_PREFIX, commonSkillFile } from './common-skills.ts';
 import { PROJECT_ROOT } from '../core/config.ts';
-import { readSecretaryId } from '../core/secretary-id.ts';
 import {
   HISTORY_DIR,
   HISTORY_FILE,
@@ -75,17 +75,17 @@ export const QUESTION_BASIS_RULE = `- 추천한 선택지에는 ${BASIS_PLACE} �
  */
 export const VERIFIER_RUN_RULE =
   'TASK.md·보고서 초안·결과 폴더 경로와 함께, 검증 명령을 돌릴 때 쓴 환경 설정(시험 폴더 환경변수 등, 업무 세션이 쓴 그대로)과 반복 실행·변형 시험의 출력 파일 경로를 준다. 확인 담당은 완료 확인 방법과 검증 명령을 그 환경 설정으로 한 번씩만 직접 돌린다(설정 없이 돌리면 시험 파일이 제품 폴더에 남는다). 반복 실행과 변형 시험(일부러 깨뜨린 복사본 등)은 업무 세션이 남긴 출력 파일과 대조만 한다(다시 돌리면 시간이 두 번 든다).';
+/** Shared "how to read a blocked page" skill, a common skill (workspace/common-skills.ts); other CLIs read it by full path. */
+const webUnblockSkill = (root: string) => commonSkillFile(root, `${COMMON_PREFIX}web-unblock`);
 /**
- * The end of the charter's Python finding code (findSecretaryCode): with no link file found, this
- * secretary's variable, and a plain message rather than Path(None)'s TypeError when that is empty too.
+ * The common skills every workspace's rules point to, by name and full path (a workspace whose common-skills.json does not
+ * list one still reads it by the path): finding and calling the secretary's programs, research with Ego Lite (saving an
+ * opened page), the Windows shell.
  */
-export function pythonFallbackLines(env: string): string[] {
-  return [
-    `    d = os.environ.get("${env}")`,
-    `    if not d: raise SystemExit("비서 진입점을 못 찾음: 위 폴더들에 비서 위치 파일이 없고 환경변수 ${env}도 비었다(비서에게 workspace-links를 부탁한다)")`,
-    `    return Path(d) / "${ENTRY_DIR}"`,
-  ];
-}
+export const SECRETARY_PROGRAMS_SKILL = `${COMMON_PREFIX}secretary-programs`;
+export const WEB_RESEARCH_SKILL = `${COMMON_PREFIX}web-research`;
+export const WINDOWS_SHELL_SKILL = `${COMMON_PREFIX}windows-shell`;
+const skillRef = (root: string, name: string) => `\`${name}\` 스킬(\`${commonSkillFile(root, name)}\`)`;
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 
@@ -138,12 +138,19 @@ export const IRREVERSIBLE_RULE =
 
 /** Lasting things get a long-term option beside the current one so the user has more to choose from; out-of-scope finds are only reported. */
 export const LONGTERM_RULE =
-  `- 나중까지 남는 것(이름 짓는 법(키·폴더·파일), 공간·업무 틀, 기억·비서 시스템, 프로그램, 구조)을 만들거나 바꿀 때는 계획(\`plan.md\`·\`[질문]\`)과 보고서에 지금 안 옆에 "장기적 관점의 제안"을 나란히 적는다. 안마다 좋은 점, 지금 비용, 나중에 바꾸는 비용을 붙이고 추천을 표시한다. 두 안이 같으면 "장기적 관점으로 봐도 같음" 한 줄로 끝낸다. 맡은 범위 밖에서 본 더 나은 구조는 보고서 "개선 후보"에 적기만 한다.`;
+  `- 나중까지 남는 것(이름 짓는 법(키·폴더·파일), 공간·업무 구성, 기억·비서 시스템, 프로그램, 구조)을 만들거나 바꿀 때는 계획(\`plan.md\`·\`[질문]\`)과 보고서에 지금 안 옆에 "장기적 관점의 제안"을 나란히 적는다. 안마다 좋은 점, 지금 비용, 나중에 바꾸는 비용을 붙이고 추천을 표시한다. 두 안이 같으면 "장기적 관점으로 봐도 같음" 한 줄로 끝낸다. 맡은 범위 밖에서 본 더 나은 구조는 보고서 "개선 후보"에 적기만 한다.`;
 /**
  * What the worker settled without asking (2026-11-13 the user's call): a guess that fills a gap in the brief
  * goes quiet otherwise, and the user finds it only when the result is off. The secretary shows these lines one by one.
  */
 export const ASSUMED_REPORT = '- 묻지 않고 대신 정한 것·가정: 지시서에 없어 짐작으로 정한 것마다 무엇을, 왜 그렇게, 틀리면 무엇이 바뀌는지 한 줄씩. 없으면 "없음".';
+
+/**
+ * Where each claim's evidence is, down to the line (2026-11-15 the user's call): the secretary opens the place a report
+ * points to before passing it on, and with a line it reads that part, not the whole file.
+ */
+export const EVIDENCE_PLACE_RULE =
+  '- 보고의 주장(지적, 성공, 숫자)마다 근거가 있는 원본 자리를 `파일:줄`(여러 줄이면 `파일:시작-끝`)로 붙인다. 보고서 자신의 줄이 아니라 코드, 결과 파일, 실행 기록의 줄을 쓴다. 이유: 비서가 보고를 전하기 전에 그 자리를 열어 맞는지 보는데, 줄까지 있으면 파일 전체를 읽지 않고 그 부분만 읽는다.';
 
 export const LONGTERM_REPORT = [
   '- 장기적 관점의 제안: 나중까지 남는 것을 만들거나 바꿨으면 지금 안과 장기적 관점의 안(좋은 점, 지금 비용, 나중에 바꾸는 비용, 추천). 같으면 "장기적 관점으로 봐도 같음", 해당 없으면 "해당 없음".',
@@ -153,14 +160,20 @@ export const LONGTERM_REPORT = [
 /**
  * Repeated work is done by a tool or script, checked at three points: before starting, after the first few items, and at
  * the end. "하나씩 직접 되풀이" and not a word that hides who does it: a smaller model can read that as "a person does it" (2026-11-07).
+ * One text for a workspace and a run-job. Only a workspace asks with [질문] (a run-job answers once, in text), and only a
+ * workspace keeps the tool it made and has a "되풀이 단계" report line (REPEAT_REPORT): `asks` adds those parts.
  */
-export const REPEAT_RULES = [
-  '- 많은 자료를 하나씩 열어 읽거나 같은 조작을 여러 번 되풀이할 일(예: 메일 수백 통을 브라우저로 하나씩 열기)은 도구·스크립트로 만들어 한꺼번에 처리한다. 아래 세 때에 따지고, 그렇게 할지 애매하면 `[질문]`으로 묻는다.',
-  `  - 시작 전: 목적(이 업무로 무엇을 얻으려는지), 규모(먼저 센다: 몇 건인지, 하나씩 직접 하면 얼마나 걸리는지, 다음 업무에서도 할 일인지), 길(하나씩 직접 하는 길과 한꺼번에 하는 길: 내보내기, 공식 API, 프로그램, 이미 있는 도구)을 본다. \`${TASK_FILE}\`가 방법을 정하지 않았으면 나은 길을 고른다. 방법까지 정했으면 그대로 하되, 훨씬 나은 길이 있으면 시간 차이를 숫자로 붙여 보고서에 제안하고, 차이가 커서 완료 기준을 지키기 어려우면 \`[질문]\`으로 묻는다.`,
-  '  - 도중: 처음 몇 건을 해 본 뒤 "한 건 시간 × 남은 건수"로 전체 시간을 계산하고, 너무 길거나 같은 조작을 되풀이하고 있으면 멈추고 방법을 바꾼다. 같은 조작이 한 턴에 여러 번 되풀이되면 훅이 `[반복 작업 알림]`으로 알린다.',
-  '  - 끝난 뒤: 다음에 또 할 일이면 만든 도구를 이 공간에 남기고 쓰는 법을 공간 스킬에 적는다.',
-  '  - 이번 업무는 한 번뿐이어도 이 공간에 같은 종류 업무가 계속 들어와 같은 단계를 되풀이하게 되면(예: 영상 편마다 같은 단계) 보고서 "되풀이 단계"에 적는다.',
-];
+export function repeatRules(asks: boolean): string[] {
+  return [
+    '- 같은 형식을 여러 개 만드는 일은 찍어 내는 코드를 만들어 돌린다. 판단이 필요한 부분만 직접 한다.',
+    `- 많은 자료를 하나씩 열어 읽거나 같은 조작을 여러 번 되풀이할 일(예: 메일 수백 통을 브라우저로 하나씩 열기)은 도구·스크립트로 만들어 한꺼번에 처리한다. 아래 세 때에 ${asks ? '따지고, 그렇게 할지 애매하면 `[질문]`으로 묻는다.' : '따진다.'}`,
+    `  - 시작 전: 목적(이 일로 무엇을 얻으려는지), 규모(먼저 센다: 몇 건인지, 하나씩 직접 하면 얼마나 걸리는지, 다음에도 할 일인지), 길(하나씩 직접 하는 길과 한꺼번에 하는 길: 내보내기, 공식 API, 프로그램, 이미 있는 도구)을 본다. 지시가 방법을 정하지 않았으면 나은 길을 고른다. 방법까지 정했으면 그대로 하되, 훨씬 나은 길이 있으면 시간 차이를 숫자로 붙여 보고에 ${asks ? '제안하고, 차이가 커서 완료 기준을 지키기 어려우면 `[질문]`으로 묻는다.' : '제안한다.'}`,
+    '  - 도중: 처음 몇 건을 해 본 뒤 "한 건 시간 × 남은 건수"로 전체 시간을 계산하고, 너무 길거나 같은 조작을 되풀이하고 있으면 멈추고 방법을 바꾼다. 같은 조작이 한 턴에 여러 번 되풀이되면 훅이 `[반복 작업 알림]`으로 알린다.',
+    `  - 끝난 뒤: 다음에 또 할 일이면 ${asks ? '만든 도구를 이 공간에 남기고 쓰는 법을 공간 스킬에 적는다.' : '보고에 그 도구 위치와 쓰는 법을 적는다.'}`,
+    ...(asks ? ['  - 이번 업무는 한 번뿐이어도 이 공간에 같은 종류 업무가 계속 들어와 같은 단계를 되풀이하게 되면(예: 영상 편마다 같은 단계) 보고서 "되풀이 단계"에 적는다.'] : []),
+  ];
+}
+export const REPEAT_RULES = repeatRules(true);
 export const REPEAT_REPORT =
   '- 되풀이 단계: 도구·스크립트로 만들지 않아 다음 업무에서도 하나씩 직접 되풀이할 단계(무엇을, 이번에 몇 번, 한 번에 얼마나 걸렸는지)와 도구로 만들면 줄어들 시간. 없으면 "없음".';
 
@@ -260,11 +273,11 @@ export function charterBlockLines(id: string, c: CharterContext): string[] | nul
         '- 파일 충돌 막기: 병렬로 맡긴 보조 에이전트마다 쓸 하위 폴더나 파일명을 미리 정해 주고(예: `parts/03-<이름>/`), 그 폴더·파일에만 쓰게 한다. 앞 결과를 받아 되풀이하는 작업은 회차마다 번호 붙인 새 폴더·파일(예: `round-02/`)에 쓴다(앞 회차 결과는 그대로 남긴다). 합친 결과물과 보고서는 업무를 받은 세션만 쓴다.',
         '- 날짜·시각은 한국시간(KST)으로 쓴다. Windows의 Git Bash에는 시간대 자료가 없어 `TZ=Asia/Seoul date`가 UTC를 내므로, `TZ=KST-9 date`나 PowerShell `Get-Date`로 확인한다.',
         '- PowerShell로 파일을 쓸 때는 `-Encoding utf8`을 붙인다(`Set-Content`·`Out-File` 기본 인코딩은 한글을 깨뜨린다).',
-        '- 웹은 검색·페이지 읽기 도구(WebSearch·WebFetch)로 되면 그걸 쓴다. 로그인된 사이트, 클릭·입력, 그 도구로 막히는 페이지에는 Ego Lite가 설치돼 있으면(`ego-browser` 명령이 있으면) Ego Lite를 쓴다: 먼저 `ego-browser skill`을 실행해 출력대로 따른다. 캡차·보안 확인은 `task.handOff()`로 넘긴 뒤 [질문]으로 알린다(캡차는 사용자가 푼다).',
-        '- 같은 형식을 여러 개 만드는 일은 찍어 내는 코드를 만들어 돌린다. 판단이 필요한 부분만 직접 한다.',
+        `- PowerShell·Git Bash로 명령을 쓰거나 .ps1·Python 스크립트에 Windows 경로·명령 줄을 넣을 때는 먼저 ${skillRef(root, WINDOWS_SHELL_SKILL)}을 읽는다(PowerShell 5.1의 BOM·배열·따옴표, Python 경로의 백슬래시처럼 오류 없이 틀리는 곳이 있다).`,
+        `- 웹은 검색·페이지 읽기 도구(WebSearch·WebFetch)로 되면 그걸 쓴다. 로그인된 사이트, 클릭·입력, 그 도구로 막히는 페이지에는 Ego Lite가 설치돼 있으면(\`ego-browser\` 명령이 있으면) Ego Lite를 쓴다: 먼저 \`ego-browser skill\`을 실행해 출력대로 따른다. WebFetch나 Ego Lite에서 막히면 먼저 \`${COMMON_PREFIX}web-unblock\` 스킬(\`${webUnblockSkill(root)}\`)을 읽는다. 캡차·보안 확인은 \`task.handOff()\`로 넘긴 뒤 [질문]으로 알린다(캡차는 사용자가 푼다).`,
         ...REPEAT_RULES,
-        `- 조사에서 Ego Lite로 연 페이지는 근거로 남긴다: \`${entryPath('ego-grab.mjs', root).replace(/\\/g, '/')}\`의 \`grab\`이 페이지 본문을 txt로 저장한다(사용법은 파일 맨 위 주석).`,
-        ...renderFindSecretary(secretaryDirEnv(readSecretaryId(root))),
+        `- 조사에서 Ego Lite로 연 페이지는 근거로 남긴다: ${skillRef(root, WEB_RESEARCH_SKILL)}의 "연 페이지를 근거로 남기기"대로 비서 프로그램 \`ego-grab.mjs\`의 \`grab\`으로 페이지 본문을 txt로 저장한다.`,
+        renderFindSecretary(root),
         `- 사용자에게 말하는 방식은 \`${TASK_FILE}\`의 "알아둘 맥락"을 따른다.`,
       ];
     case 'code':
@@ -317,6 +330,7 @@ function finishBlock(hasHistory: boolean): string[] {
     '- 결과 요약 (두세 문장)',
     '- 산출물: 만든 파일과 그 용도',
     '- 완료 기준별 충족 여부와 근거',
+    EVIDENCE_PLACE_RULE,
     '- 검증: 실행한 명령과 출력(위 "검증"), 확인 담당의 지적과 처리 결과',
     '- 작업 중 받은 답과 그에 따른 결정',
     ASSUMED_REPORT,
@@ -374,29 +388,33 @@ export function renderCharter(spec: WorkspaceSpec, root = PROJECT_ROOT): string 
 
 /**
  * How a workspace tool finds the secretary's entrance folder bin/: the workspace's secretary-link.local.json
- * (workspace/secretary-link.ts), else this secretary's own variable plus \bin. The one
- * place with code to read it, in three languages; each searches upward from the tool's own folder, so a tool anywhere
- * in the workspace finds the file. None of them returns the secretary folder itself.
+ * (workspace/secretary-link.ts), searched upward from the tool's own folder so a tool anywhere in the workspace finds it,
+ * else the one secretary on this PC: an environment variable SECRETARY_<id>_DIR (core/paths.ts secretaryDirEnv) naming a
+ * folder that has a .secretary-id (other SECRETARY_*_DIR variables, the keys folder for one, name no secretary). No id is
+ * written into the code, so it is the same for every secretary and lives once in the common skill common-secretary-programs
+ * (its references/find-secretary-bin.md carries exactly this text; the release test compares). With several secretaries on
+ * one PC it does not guess: a tool outside a workspace then needs a link file above it. None of them returns the secretary
+ * folder itself.
  */
-export function findSecretaryCode(env = secretaryDirEnv(readSecretaryId(PROJECT_ROOT))): { python: string; powershell: string; node: string } {
-  const pyEnv = `os.environ.get("${env}")`;
-  const psEnv = `$env:${env}`;
-  const nodeEnv = `process.env.${env}`;
+export function findSecretaryCode(): { python: string; powershell: string; node: string } {
+  const pattern = 'SECRETARY_[A-Z0-9]+_DIR';
   return {
     python: [
-      'import json, os',
+      'import json, os, re',
       'from pathlib import Path',
       'def secretary_bin(start=Path(__file__).resolve()):',
       '    for d in start.parents:',
       `        f = d / "${LINK_FILE}"`,
       '        if f.is_file(): return Path(json.loads(f.read_text(encoding="utf-8-sig"))["bin"])',
-      ...pythonFallbackLines(env),
+      `    found = sorted(k for k, v in os.environ.items() if re.fullmatch(r"${pattern}", k, re.I) and v and (Path(v) / ".secretary-id").is_file())`,
+      `    if len(found) != 1: raise SystemExit(f"비서 진입점을 못 찾음: 위 폴더들에 비서 위치 파일이 없고 비서 폴더 환경변수(SECRETARY_<번호>_DIR)가 하나가 아니다({', '.join(found) or '없음'}). 비서에게 workspace-links를 부탁한다")`,
+      `    return Path(os.environ[found[0]]) / "${ENTRY_DIR}"`,
     ].join('\n'),
     powershell: [
       'function Get-SecretaryBin([string]$Dir = $PSScriptRoot) {',
       `  for ($d = $Dir; $d; $d = Split-Path $d) { $f = Join-Path $d '${LINK_FILE}'; if (Test-Path -LiteralPath $f) { return (Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json).bin } }`,
-      `  $root = @(${psEnv}) | Where-Object { $_ } | Select-Object -First 1`,
-      `  if ($root) { Join-Path $root '${ENTRY_DIR}' }`,
+      `  $found = @(Get-ChildItem Env: | Where-Object { $_.Name -match '^${pattern}$' -and $_.Value -and (Test-Path -LiteralPath (Join-Path $_.Value '.secretary-id')) })`,
+      `  if ($found.Count -eq 1) { Join-Path $found[0].Value '${ENTRY_DIR}' }`,
       '}',
     ].join('\n'),
     node: [
@@ -409,32 +427,50 @@ export function findSecretaryCode(env = secretaryDirEnv(readSecretaryId(PROJECT_
       "    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\\uFEFF/, '')).bin;",
       '    if (path.dirname(d) === d) break;',
       '  }',
-      `  const root = ${nodeEnv};`,
-      `  return root && path.join(root, '${ENTRY_DIR}');`,
+      `  const found = Object.keys(process.env).filter((k) => /^${pattern}$/i.test(k) && process.env[k] && fs.existsSync(path.join(process.env[k], '.secretary-id')));`,
+      `  return found.length === 1 ? path.join(process.env[found[0]], '${ENTRY_DIR}') : undefined;`,
       '}',
     ].join('\n'),
   };
 }
 
-/** The charter's lines on calling secretary scripts (any secretary's variable name in env). */
-export function renderFindSecretary(env = secretaryDirEnv(readSecretaryId(PROJECT_ROOT))): string[] {
-  const code = findSecretaryCode(env);
+/**
+ * The text of common-secretary-programs/references/find-secretary-bin.md: findSecretaryCode in the three languages. Made
+ * from here so the skill and the tested code stay one (the release test compares the shipped file with this text).
+ */
+export function findSecretaryReference(): string {
+  const code = findSecretaryCode();
   return [
-    `- 비서 스크립트는 비서의 진입점 폴더(\`${ENTRY_DIR}\`)에 있는 이름으로만 부른다(비서 폴더의 다른 파일은 업무 세션에서 막힌다). 진입점 폴더는 이 공간 맨 위 \`${LINK_FILE}\`의 \`bin\`이다(비서가 써 두는 파일이라 고치지 않는다. PC마다 달라 커밋하지 않는다, \`.gitignore\`). 그 파일이 없으면 환경변수 \`${env}\` 아래 \`${ENTRY_DIR}\`을 쓴다. 도구에서 찾을 때는 아래 함수를 그대로 쓴다(도구 폴더에서 위로 올라가며 찾는다):`,
+    '# 비서 진입점 폴더(bin) 찾는 함수',
+    '',
+    `도구에 아래 함수 하나를 그대로 넣는다. 도구 파일이 있는 폴더에서 위로 올라가며 \`${LINK_FILE}\`(작업 공간 맨 위에 비서가 써 둔다)를 찾아 그 \`bin\`을 돌려준다. 없으면 이 PC의 비서 폴더 환경변수 \`SECRETARY_<번호>_DIR\` 가운데 비서 폴더(\`.secretary-id\`가 있는 폴더)를 가리키는 것이 하나뿐일 때 그 아래 \`${ENTRY_DIR}\`을 돌려준다. 둘 이상이거나 없으면 Python은 까닭을 적고 멈추고, PowerShell·Node는 빈 값을 돌려준다.`,
+    '',
+    '이유: 비서 번호(변수 이름)는 비서마다 달라 도구에 박아 둘 수 없다. 공간 밖 도구(공통 스킬의 `scripts/` 등)는 위치 파일이 없어 변수로 찾는다. 같은 PC에 비서가 여럿이면 어느 비서인지 짐작하지 않는다(그때는 위치 파일이 있는 곳에서 부른다).',
+    '',
+    '## Python',
     '',
     '```python',
     code.python,
     '```',
     '',
+    '## PowerShell',
+    '',
     '```powershell',
     code.powershell,
     '```',
+    '',
+    '## Node',
     '',
     '```js',
     code.node,
     '```',
     '',
-  ];
+  ].join('\n');
+}
+
+/** The charter's one line on calling the secretary's programs; how to find and which to call is in the common skill. */
+export function renderFindSecretary(root = PROJECT_ROOT): string {
+  return `- 비서 프로그램은 비서의 진입점 폴더(\`${ENTRY_DIR}\`)에 있는 이름으로만 부른다(비서 폴더의 다른 파일은 업무 세션에서 막힌다). 진입점 폴더는 이 공간 맨 위 \`${LINK_FILE}\`의 \`bin\`이고, 도구에서 찾는 함수와 공간이 부를 수 있는 프로그램 목록은 ${skillRef(root, SECRETARY_PROGRAMS_SKILL)}에 있다.`;
 }
 
 /** Hermes Agent's split (MIT, Nous Research): procedures and corrections go to skills, only lasting facts to memory. */
@@ -555,11 +591,11 @@ export function renderAgent(a: AgentSpec): string {
   return `${front.join('\n')}\n\n${a.prompt.trim()}\n`;
 }
 
-/** The common skills run-job's default folder lists (its common-skills.json when made; one missing from _skills is left out). */
-export const RUN_JOB_HOME_SKILLS: string[] = [];
+/** The common skills run-job's default folder lists (its common-skills.json when made; one missing from _skills is left out). workspace-links adds WORKSPACE_COMMON_SKILLS to it as to every workspace. */
+export const RUN_JOB_HOME_SKILLS = [`${COMMON_PREFIX}web-unblock`];
 
 /**
- * The rules of run-job's default folder (workspaces/_run-job-home, workspace/aux-folders.ts makes it when missing; the
+ * The rules of run-job's default folder (workspaces/_run-job-home, setup/aux-folders.ts makes it when missing; the
  * block follows the template through workspace-links like a workspace's): the jobs answer in text, not in reports, so the
  * lines say "답" where a workspace's say "보고서".
  */
@@ -571,17 +607,14 @@ function runJobBlock(root: string): string[] {
   return [
     '비서가 run-job으로 맡긴 일을 하는 곳이다. 결과는 마지막 답에 글로 쓴다.',
     '',
-    '- 웹은 검색·페이지 읽기 도구(WebSearch·WebFetch)로 되면 그걸 쓴다. 로그인된 사이트, 클릭·입력, 그 도구로 막히는 페이지에는 Ego Lite가 설치돼 있으면(`ego-browser` 명령이 있으면) Ego Lite를 쓰는데, 먼저 `ego-browser skill`을 실행해 출력대로 따른다. 캡차·보안 확인이 나오면 거기서 멈춰 어디서 막혔는지 알린다(캡차는 사용자가 푼다).',
+    `- 웹은 검색·페이지 읽기 도구(WebSearch·WebFetch)로 되면 그걸 쓴다. 로그인된 사이트, 클릭·입력, 그 도구로 막히는 페이지에는 Ego Lite가 설치돼 있으면(\`ego-browser\` 명령이 있으면) Ego Lite를 쓰는데, 먼저 \`ego-browser skill\`을 실행해 출력대로 따른다. WebFetch나 Ego Lite에서 막히면 먼저 \`${COMMON_PREFIX}web-unblock\` 스킬(\`${webUnblockSkill(root)}\`)을 읽는다. 캡차·보안 확인이 나오면 거기서 멈춰 어디서 막혔는지 알린다(캡차는 사용자가 푼다).`,
     `- 비서가 넘긴 파일은 \`${OUTPUT_DIR}/${RESEARCH_DIR}/<날짜-일이름>/\`에 있다. 파일을 만들어야 하면 그 폴더 안에만 쓴다.`,
     '- 보조 에이전트를 뒤에서 띄웠으면 모두 끝날 때까지 기다렸다가 결과를 모아 답한다.',
     BACKGROUND_STOP_RULE,
-    '- 같은 형식을 여러 개 만드는 일은 찍어 내는 코드를 만들어 돌린다. 판단이 필요한 부분만 직접 한다.',
-    '- 많은 자료를 하나씩 열어 읽거나 같은 조작을 여러 번 되풀이할 일(예: 메일 수백 통을 브라우저로 하나씩 열기)은 도구·스크립트로 만들어 한꺼번에 처리한다. 아래 세 때에 따진다.',
-    '  - 시작 전: 목적(이 일로 무엇을 얻으려는지), 규모(먼저 센다: 몇 건인지, 하나씩 직접 하면 얼마나 걸리는지), 길(하나씩 직접 하는 길과 한꺼번에 하는 길: 내보내기, 공식 API, 프로그램, 이미 있는 도구)을 본다. 지시가 방법을 정하지 않았으면 나은 길을 고른다. 방법까지 정했으면 그대로 하되, 훨씬 나은 길이 있으면 시간 차이를 숫자로 붙여 답에 제안한다.',
-    '  - 도중: 처음 몇 건을 해 본 뒤 "한 건 시간 × 남은 건수"로 전체 시간을 계산하고, 너무 길거나 같은 조작을 되풀이하고 있으면 멈추고 방법을 바꾼다. 같은 조작이 한 턴에 여러 번 되풀이되면 훅이 `[반복 작업 알림]`으로 알린다.',
-    '  - 끝난 뒤: 다음에 또 쓸 만하면 답에 그 도구 위치와 쓰는 법을 적는다.',
+    ...repeatRules(false),
     '- 확인하지 못한 값은 "확인 안 됨"으로 적는다.',
-    '- 나중까지 남는 것(이름 짓는 법(키·폴더·파일), 공간·업무 틀, 기억·비서 시스템, 프로그램, 구조)을 만들거나 바꿀 때는 답에 지금 안 옆에 "장기적 관점의 제안"을 나란히 적는다. 안마다 좋은 점, 지금 비용, 나중에 바꾸는 비용을 붙이고 추천을 표시한다. 두 안이 같으면 "장기적 관점으로 봐도 같음" 한 줄로 끝낸다. 맡은 범위 밖에서 본 더 나은 구조는 답 끝 "개선 후보" 항목에 적기만 한다(없으면 항목을 뺀다).',
+    EVIDENCE_PLACE_RULE,
+    '- 나중까지 남는 것(이름 짓는 법(키·폴더·파일), 공간·업무 구성, 기억·비서 시스템, 프로그램, 구조)을 만들거나 바꿀 때는 답에 지금 안 옆에 "장기적 관점의 제안"을 나란히 적는다. 안마다 좋은 점, 지금 비용, 나중에 바꾸는 비용을 붙이고 추천을 표시한다. 두 안이 같으면 "장기적 관점으로 봐도 같음" 한 줄로 끝낸다. 맡은 범위 밖에서 본 더 나은 구조는 답 끝 "개선 후보" 항목에 적기만 한다(없으면 항목을 뺀다).',
     '- 비서 기억 읽기 도구(`recall`·`search_log`)가 있으면, 기억이 필요할 때 `recall`로 찾고 근거가 더 필요하면 `search_log`로 대화 원문을 조회한다. 쓰기 도구는 없으니 남길 사실은 답에 적는다.',
     '- 조사 보고서를 쓰면 맨 아래에 `## 출처` 항목을 두고, 근거로 쓴 자료(URL, 파일 경로)를 모아 적는다.',
   ];

@@ -7,7 +7,7 @@
  * nothing waits for the semantic-search server on the prompt hook.
  */
 import type { Memory, Store } from '../store/store.ts';
-import { searchTerms } from '../memory/search-terms.ts';
+import { searchTerms } from '../store/search-terms.ts';
 import { formatLocal } from '../core/kst-time.ts';
 
 /** A board line that says something is still open. */

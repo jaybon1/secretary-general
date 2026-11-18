@@ -7,6 +7,7 @@ import path from 'node:path';
 import { PROJECT_ROOT } from '../core/config.ts';
 import { ingestTranscript } from './ingest-transcript.ts';
 import { accountConfigDirs } from '../core/provider-accounts.ts';
+import { projectFolderName } from '../core/transcript.ts';
 import type { Store } from '../store/store.ts';
 
 /** Other sessions' transcripts untouched this long are caught up at session start; younger ones may be mid-turn. */
@@ -15,7 +16,7 @@ const CATCH_UP_MAX_AGE_MS = 24 * 3600 * 1000;
 
 /** This project's transcript folders under every account's config dir (a: ~/.claude, b: ~/.claude-b). */
 export function transcriptDirs(): string[] {
-  const name = PROJECT_ROOT.replace(/[^A-Za-z0-9]/g, '-');
+  const name = projectFolderName(PROJECT_ROOT);
   return accountConfigDirs()
     .map((r) => path.join(r, 'projects', name))
     .filter((d) => fs.existsSync(d));

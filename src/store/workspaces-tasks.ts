@@ -6,7 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './schema.ts';
 import { nowIso } from '../core/kst-time.ts';
 
-export const TASK_STATUSES = ['ready', 'running', 'done', 'failed', 'cancelled'] as const;
+export const TASK_STATUSES = ['ready', 'running', 'asking', 'done', 'failed', 'cancelled'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 export const WORKSPACE_KINDS = ['quick', 'solo', 'team'] as const;

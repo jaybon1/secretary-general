@@ -1,14 +1,17 @@
 {
-  "_comment": "비서가 지어내 사용자가 되물은 낱말(답변 검사 invented-word, answer-checks.ts). 질문·선택지·근거 줄에 바로 뒤 괄호 풀이 없이 나오면 알린다. record_mistake의 invented_words로 더한 낱말은 DB(meta invented_words)에 쌓인다. 개발 용어(테이블, 컬럼 등)는 넣지 않는다.",
+  "_comment": "비서가 지어내 사용자가 되물은 낱말(답변 검사 invented-word, answer-checks.ts). 질문·선택지·근거 줄에 바로 뒤 괄호 풀이 없이 나오면 알린다. record_mistake의 invented_words로 더한 낱말은 DB(meta invented_words)에 쌓인다. 개발 용어(테이블, 컬럼 등)는 넣지 않는다. 한 글자 낱말(칸, 틀, 꼴, 손)은 '한 칸 두 칸'처럼 제 뜻으로도 쓰이므로 사용자가 지적한 묶음 말로만 넣는다(한 글자만 적으면 검사가 건너뛴다).",
   "words": [
-    { "word": "칸", "source": "DB 이야기에서 column을 칸으로 씀(컬럼·키값·항목으로 바꿈)" },
-    { "word": "꼴", "source": "줄바꿈 문자(LF/CRLF) 설명에 지어낸 말(형식이나 모양으로 바꿈)" },
-    { "word": "두 꼴", "source": "줄바꿈 문자(LF/CRLF) 설명에 지어낸 말" },
+    { "word": "목적 칸", "source": "지시서 항목을 칸으로 씀(사용자 지적: 한 칸 두 칸, 책장 칸 같은 뜻이 아니면 쓰지 않음. 항목으로 바꿈)" },
+    { "word": "의도 칸", "source": "지시서 항목을 칸으로 씀(항목으로 바꿈)" },
+    { "word": "기억 칸", "source": "DB 이야기에서 column을 칸으로 씀(컬럼·키값·항목으로 바꿈)" },
+    { "word": "두 꼴", "source": "줄바꿈 문자(LF/CRLF) 설명에 지어낸 말(형식이나 모양으로 바꿈)" },
     { "word": "글 쌍", "source": "줄바꿈 문자(LF/CRLF) 설명에 지어낸 말" },
     { "word": "입구", "source": "AGENTS.md 말투 예(얇은 입구, 진입점으로 바꿈)" },
-    { "word": "틀", "source": "템플릿을 틀로 씀" },
-    { "word": "손", "source": "누가 하는지(비서·사용자·프로그램) 흐린 낱말로 씀" },
+    { "word": "옛 틀", "source": "공간 AGENTS.md의 기본 규칙 글(템플릿)을 틀로 씀(\"옛 틀 공간\")" },
+    { "word": "업무 틀", "source": "템플릿을 틀로 씀" },
+    { "word": "\uc190\uc73c\ub85c", "source": "누가 하는지(비서·사용자·프로그램) 흐린 낱말로 씀(AGENTS.md 말투 예. 낱말은 규칙의 금지 줄 밖에 그대로 적지 않으려고 \\u로 적음: test/wording.test.ts)" },
     { "word": "머리 글", "source": "머리말(frontmatter `---`)을 머리 글로 씀" },
-    { "word": "함정", "source": "스킬·규칙 글에 설명 없이 씀(주의사항으로 바꿈)" }
+    { "word": "함정", "source": "스킬·규칙 글에 설명 없이 씀(주의사항으로 바꿈)" },
+    { "word": "절 표", "source": "상황판 할 일 글에 'AGENTS.md 섹션을 스킬로 옮길 목록 표'를 '옮길 절 표'로 씀(사용자가 뜻을 알 수 없다고 함)" }
   ]
 }

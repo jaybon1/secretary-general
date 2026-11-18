@@ -1,5 +1,6 @@
-/** Reading a JSON file (PowerShell writes some with a BOM). */
+/** Reading a JSON file (PowerShell writes some with a BOM), and adding a line to a record file (JSON Lines). */
 import fs from 'node:fs';
+import path from 'node:path';
 
 export type JsonRead<T> = { ok: true; value: T } | { ok: false; missing: boolean; error: string };
 
@@ -27,4 +28,28 @@ export function readJsonStrict<T>(file: string): T {
 export function readJsonFile<T>(file: string): T | null {
   const r = readJson<T>(file);
   return r.ok ? r.value : null;
+}
+
+/** A record file (JSON Lines) grows to about this size before its oldest lines are cut. */
+export const JSONL_MAX_BYTES = 1024 * 1024;
+/** What a cut keeps: about this many last lines. */
+export const JSONL_KEEP_LINES = 2000;
+
+/**
+ * One line added to a record file (JSON Lines: one JSON value per line), its folder made when missing. A file past
+ * maxBytes keeps only its last keepLines lines first (a reader that keeps byte places in the file passes Infinity).
+ * Throws when the line can't be written (callers that must cost their hook nothing catch it).
+ */
+export function appendJsonLine(file: string, value: unknown, opts: { maxBytes?: number; keepLines?: number } = {}): void {
+  const maxBytes = opts.maxBytes ?? JSONL_MAX_BYTES;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    if (fs.statSync(file).size > maxBytes) {
+      const kept = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-(opts.keepLines ?? JSONL_KEEP_LINES));
+      fs.writeFileSync(file, kept.length ? `${kept.join('\n')}\n` : '');
+    }
+  } catch {
+    // No file yet, or a cut that failed: the line is still added.
+  }
+  fs.appendFileSync(file, `${JSON.stringify(value)}\n`);
 }

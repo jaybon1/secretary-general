@@ -4,7 +4,8 @@
  * (`node src/cli.ts subscription-pick`, called by Use-Provider in scripts/lib/providers.ps1).
  * Account a ('subscription') is the chat account. Every other "claude-subscription" in scripts/lib/providers.json (b, c, …)
  * is one work can be handed to; the one with the most room is picked (pickSubscription). With one such account (a and b only)
- * everything is as it was before there could be more: b is always the one, and the line reads the same.
+ * everything is as it was before there could be more: b is always the one, and the line reads the same. With none (account a
+ * alone, e.g. after another account is given up), the line shows a's numbers only and auto stays on a: no account is assumed.
  * Usage files (usage/usage-files.ts, one per login account) are written by the status line and scripts/usage/usage-query.ps1.
  */
 import { readJsonFile } from '../core/json-file.ts';
@@ -23,8 +24,8 @@ export const AUTO_PROVIDER = 'auto';
 
 /** The usage guard's limit (scripts/usage/usage-guard.mjs reads the same variable): an account at it is not picked. */
 export function pauseLimit(env = process.env): number {
-  // SECRETARY_USAGE_GUARD_PCT (2026-11-09); the old USAGE_PAUSE_PCT is still read for a while.
-  const n = Number(env.SECRETARY_USAGE_GUARD_PCT ?? env.USAGE_PAUSE_PCT ?? 90); // legacy-name: env-usage-guard-pct
+  // SECRETARY_USAGE_GUARD_PCT.
+  const n = Number(env.SECRETARY_USAGE_GUARD_PCT ?? 90);
   return Number.isFinite(n) ? n : 90;
 }
 
@@ -56,11 +57,10 @@ const shortId = (label: string) => /^계정\s*(\S+)$/.exec(label)?.[1] ?? label;
 
 /**
  * The accounts work can be handed to: every Claude subscription in providers.json but account a, in the file's order.
- * None listed (or the file unreadable): b by its usual name, as before more than one was possible.
+ * Only what the file lists: none listed (or the file unreadable) is none, so an account that was removed is not shown or picked.
  */
 export function routingTargets(list: ProviderInfo[]): ProviderInfo[] {
-  const targets = list.filter((p) => p.type === 'claude-subscription' && p.name !== CHAT_ACCOUNT);
-  return targets.length ? targets : [{ name: 'subscription-b', type: 'claude-subscription', label: providerLabel('subscription-b'), usage: 'claude-usage' }];
+  return list.filter((p) => p.type === 'claude-subscription' && p.name !== CHAT_ACCOUNT);
 }
 
 export interface AccountUsage {
@@ -138,6 +138,8 @@ export function routingContext(now = Date.now(), provider = chatProvider(), deps
   }
   if (!a.usage) return '';
   const all = [a, ...targets].map((t) => describe(t.label, t.usage, now)).join(' · ');
+  // No other subscription listed: account a's numbers only (nothing to pick, nothing handed to is full).
+  if (!targets.length) return `<${TAG.usage}>5시간 사용량: ${all}</${TAG.usage}>`;
   // Every account handed to at the guard's limit: ask before going to another account or provider (the delegate skill's order).
   const full = targets.every((t) => isFull(t.usage, now, limit)) ? `보낼 구독 모두 ${limit}% 이상, 다른 계정·공급자로 돌릴지 먼저 묻는다` : '';
   // One account to hand to (a and b): the numbers. More: which one was picked, and how to reach it.

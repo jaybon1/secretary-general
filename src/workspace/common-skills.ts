@@ -6,19 +6,14 @@
  * start with common-). A folder (a workspace, or the secretary's own) lists the ones it uses in `common-skills.json` at
  * its top (in its git, so a workspace release carries the list), and this module makes what each CLI needs from it:
  * - Claude Code and Codex: a link `.agents/skills/<name>` to _skills/<name> (Claude Code reads it through
- *   .claude/skills, which is a link to .agents/skills: setup/skill-links.ts). Links differ per PC (a junction holds an
- *   absolute path), so they stay out of git (.gitignore, setup/skill-links.ts SKILL_GITIGNORE_LINES).
+ *   .claude/skills, which is a link to .agents/skills: workspace/skill-links.ts). Links differ per PC (a junction holds an
+ *   absolute path), so they stay out of git (.gitignore, workspace/skill-links.ts SKILL_GITIGNORE_LINES).
  * - Antigravity, which reads only real folders in .agents/skills: `.agents/skills.json` with one entry for _skills and
  *   the listed names (include_only). The path is absolute: agy 1.5.2 refuses a relative path that leaves the folder
  *   ("escapes workspace root") even with that folder added, and reads an absolute one once the folder is added to the
  *   session (run-job adds it: scripts/run-job/run-job-other-cli.ps1 --add-dir; tried 2026-11-07). An absolute path differs
  *   per PC, so the file stays out of git like the links; a relative entry from before is taken as ours and rewritten.
  *   Other entries in that file (the user or the secretary wrote them) are kept.
- *
- * The old form (before 2026-11-09): names listed without the prefix, folders _skills/<name>/ and links common-<name>.
- * A name without the prefix is read as common-<name> and the list is written again with the prefix; a common skill
- * still in its old folder (_skills/<name>/, no _skills/common-<name>/) is moved to the new one and its SKILL.md name
- * set, so a release's user moves over by the same fix.
  *
  * Only links named common-* are this module's: a common-* link to something not on the list is removed, a real folder
  * there is reported and left. A link in .agents/skills under another name that points at a common skill (the user or the secretary made it
@@ -27,8 +22,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { cutLink, makeDirLink, SKILLS_DIR } from '../setup/skill-links.ts';
+import { cutLink, makeDirLink, SKILLS_DIR } from './skill-links.ts';
 import { workspaceRootOf } from './workspace-paths.ts';
+import { readJsonStrict } from '../core/json-file.ts';
 
 export const COMMON_SKILLS_FILE = 'common-skills.json';
 export const COMMON_PREFIX = 'common-';
@@ -39,15 +35,65 @@ export const commonSkillsDirOf = (root: string) => path.join(workspaceRootOf(roo
 /** The about line a new common-skills.json gets. */
 export const COMMON_SKILLS_ABOUT =
   '이 공간이 쓰는 공통 스킬(workspaces/_skills/common-<이름>) 목록. 이름은 common-까지 적는다(폴더 이름 = 스킬 name). 비서가 이 목록대로 .agents/skills에 같은 이름의 연결(Claude Code·Codex가 읽는다)과 .agents/skills.json(Antigravity가 읽는다)을 만든다(node src/cli.ts workspace-links). 고칠 때는 비서에게 말한다.';
-/**
- * About lines the secretary wrote before (the list's form changed 2026-11-09: names with common-): a list with one of
- * them gets the current line from the same fix. An about the user wrote is left.
- */
-export const OLD_COMMON_SKILLS_ABOUTS = [ // legacy-name: common-skill-prefix
-  '이 공간이 쓰는 공통 스킬(workspaces/_skills) 목록. 비서가 이 목록대로 .agents/skills에 common-<이름> 연결(Claude Code·Codex가 읽는다)과 .agents/skills.json(Antigravity가 읽는다)을 만든다(node src/cli.ts workspace-links). 고칠 때는 비서에게 말한다.',
-];
 /** Antigravity's list of extra skill folders (per PC, out of git). */
 export const AGY_SKILLS_FILE = '.agents/skills.json';
+/**
+ * The common skills every workspace gets whatever its common-skills.json lists (workspace-links, secretary-link.ts): the
+ * workspace rules always point to them (workspace/rules-text.ts), so a workspace whose list leaves them out still has them.
+ * One missing from _skills is left out without a word (the shipped-skills check tells about a release's).
+ */
+export const WORKSPACE_COMMON_SKILLS = [`${COMMON_PREFIX}secretary-programs`, `${COMMON_PREFIX}windows-shell`];
+/** A common skill's SKILL.md for the secretary at root: rules name it by full path so a CLI without the link reads it too. */
+export const commonSkillFile = (root: string, name: string) => path.join(commonSkillsDirOf(root), name, 'SKILL.md');
+
+/**
+ * Where a general release carries the common skills it ships (release-src/common-skills-in-release.json names them; the
+ * release builder copies them here). The original has no such folder, so what follows does nothing there.
+ * The release copies each one into the user's workspaces/_skills as a real folder, as the original's PC has them (the
+ * folder's .agents/skills/common-<name> is then a link to that copy, fixCommonSkills). A name _skills already has is the
+ * user's: never written over here. The update keeps the user's changes to those copies the way it keeps the secretary's
+ * files (scripts/update.mjs: the shipped file of the installed version is the base, _skills the user's side).
+ */
+export const SHIPPED_COMMON_SKILLS_DIR = 'common-skills';
+
+/** The common skills a release folder ships (SHIPPED_COMMON_SKILLS_DIR/<name> with a SKILL.md); none in the original. */
+export function shippedCommonSkills(root: string): string[] {
+  const shipped = path.join(root, SHIPPED_COMMON_SKILLS_DIR);
+  try {
+    return fs
+      .readdirSync(shipped, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.startsWith(COMMON_PREFIX) && fs.existsSync(path.join(shipped, e.name, 'SKILL.md')))
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** The shipped ones _skills does not have yet (nothing there under that name, not even a link). */
+function missingShipped(root: string, commonDir: string): string[] {
+  return shippedCommonSkills(root).filter((name) => {
+    try {
+      fs.lstatSync(path.join(commonDir, name));
+      return false;
+    } catch {
+      return true;
+    }
+  });
+}
+
+/** Why the shipped common skills are not in _skills; null when they are (or the folder ships none). */
+export function shippedCommonSkillProblem(root: string, commonDir: string): string | null {
+  const missing = missingShipped(root, commonDir);
+  return missing.length ? `배포판 공통 스킬을 ${COMMON_SKILLS_DIR}에 안 깖: ${missing.join(', ')}` : null;
+}
+
+/** Copies the shipped common skills _skills does not have into it; the names copied. */
+export function installShippedCommonSkills(root: string, commonDir: string): string[] {
+  const missing = missingShipped(root, commonDir);
+  for (const name of missing) fs.cpSync(path.join(root, SHIPPED_COMMON_SKILLS_DIR, name), path.join(commonDir, name), { recursive: true, errorOnExist: true, force: false });
+  return missing;
+}
 
 const norm = (p: string) => {
   const r = path.resolve(p.replace(/^\\\\\?\\/, '')).replace(/[\\/]+$/, '');
@@ -60,17 +106,15 @@ const real = (p: string): string | null => {
     return null;
   }
 };
-/** A name as listed: with the prefix, or the old form without it. */
+/** A name as listed (a name without the prefix names no common skill and is reported as unknown). */
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
-/** A listed name in the current form (old ones gain the prefix). */
-export const withPrefix = (n: string) => (n.startsWith(COMMON_PREFIX) ? n : `${COMMON_PREFIX}${n}`);
 
 /** The raw names in the list (as written); null when there is no list, 'bad' when it cannot be read. */
 function readRawList(folder: string): string[] | null | 'bad' {
   const file = path.join(folder, COMMON_SKILLS_FILE);
   if (!fs.existsSync(file)) return null;
   try {
-    const v = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    const v = readJsonStrict<{ skills?: unknown } | null>(file);
     const names = v?.skills;
     if (!Array.isArray(names) || !names.every((n) => typeof n === 'string' && NAME.test(n))) return 'bad';
     return names as string[];
@@ -79,27 +123,10 @@ function readRawList(folder: string): string[] | null | 'bad' {
   }
 }
 
-/** The list's about line (null: none, or the file cannot be read). */
-function readAbout(folder: string): string | null {
-  try {
-    const v = JSON.parse(fs.readFileSync(path.join(folder, COMMON_SKILLS_FILE), 'utf8').replace(/^﻿/, ''));
-    return typeof v?.about === 'string' ? v.about : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The names a folder lists, with the prefix; null when it has no list (nothing to link), 'bad' when the file cannot be read. */
+/** The names a folder lists; null when it has no list (nothing to link), 'bad' when the file cannot be read. */
 export function readCommonSkills(folder: string): string[] | null | 'bad' {
   const raw = readRawList(folder);
-  return raw === null || raw === 'bad' ? raw : [...new Set(raw.map(withPrefix))].sort();
-}
-
-/** Sets the name: line of a SKILL.md's front matter (the old common skill moved to its common- folder). */
-function setSkillName(file: string, name: string): void {
-  const text = fs.readFileSync(file, 'utf8');
-  const next = text.replace(/^(﻿?---\r?\n[\s\S]*?^name:[ \t]*)[^\r\n]*/m, `$1${name}`);
-  if (next !== text) fs.writeFileSync(file, next);
+  return raw === null || raw === 'bad' ? raw : [...new Set(raw)].sort();
 }
 
 interface AgyEntry {
@@ -119,7 +146,7 @@ function readAgy(folder: string): AgyFile | 'bad' | null {
   const file = path.join(folder, ...AGY_SKILLS_FILE.split('/'));
   if (!fs.existsSync(file)) return null;
   try {
-    const v = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    const v = readJsonStrict<AgyFile | null>(file);
     return v && typeof v === 'object' && !Array.isArray(v) && (v.entries === undefined || Array.isArray(v.entries)) ? v : 'bad';
   } catch {
     return 'bad';
@@ -137,12 +164,6 @@ function agyText(folder: string, commonDir: string, names: string[], now: AgyFil
 }
 
 interface Plan {
-  /** Common skills still in their old folder (_skills/<name>/): moved to _skills/common-<name>/, SKILL.md name set. */
-  rename: { from: string; to: string }[];
-  /** The list is in the old form (a name without the prefix): written again with it. */
-  relist: boolean;
-  /** The list's about is one the secretary wrote before: written again with the current one. */
-  staleAbout: boolean;
   /** Links to make or make again: rel (forward slashes) → target folder. */
   make: { rel: string; target: string; wrong: boolean }[];
   /** common-* links not on the list (or to a skill gone). */
@@ -163,20 +184,17 @@ interface Plan {
   clash: string[];
 }
 
-/** Whether _skills holds the skill: in its folder, or (planned) moved there from the old one. */
-const hasSkill = (commonDir: string, n: string, rename: Plan['rename']) =>
-  fs.existsSync(path.join(commonDir, n, 'SKILL.md')) || rename.some((r) => r.to === n);
+/** Whether _skills holds the skill. */
+const hasSkill = (commonDir: string, n: string) => n.startsWith(COMMON_PREFIX) && fs.existsSync(path.join(commonDir, n, 'SKILL.md'));
 
-function plan(folder: string, commonDir: string): Plan {
-  const p: Plan = { rename: [], relist: false, staleAbout: false, make: [], remove: [], adopt: [], kept: [], unknown: [], names: [], bad: [], clash: [] };
+function plan(folder: string, commonDir: string, always: string[] = []): Plan {
+  const p: Plan = { make: [], remove: [], adopt: [], kept: [], unknown: [], names: [], bad: [], clash: [] };
   const raw = readRawList(folder);
   if (raw === 'bad') {
     p.bad.push(COMMON_SKILLS_FILE);
     return p;
   }
-  const listed = raw === null ? null : [...new Set(raw.map(withPrefix))].sort();
-  p.relist = !!raw?.some((n) => !n.startsWith(COMMON_PREFIX));
-  p.staleAbout = raw !== null && OLD_COMMON_SKILLS_ABOUTS.includes(readAbout(folder) ?? '');
+  const listed = raw === null ? null : [...new Set(raw)].sort();
   const dir = path.join(folder, ...SKILLS_DIR.split('/'));
   let entries: fs.Dirent[] = [];
   try {
@@ -188,17 +206,12 @@ function plan(folder: string, commonDir: string): Plan {
     for (const e of entries) {
       if (e.name.startsWith(COMMON_PREFIX) || !e.isSymbolicLink()) continue;
       const t = real(path.join(dir, e.name));
-      if (t && path.dirname(t) === commonReal && fs.existsSync(path.join(t, 'SKILL.md'))) p.adopt.push({ rel: `${SKILLS_DIR}/${e.name}`, name: withPrefix(path.basename(t)) });
+      if (t && path.dirname(t) === commonReal && path.basename(t).startsWith(COMMON_PREFIX) && fs.existsSync(path.join(t, 'SKILL.md'))) p.adopt.push({ rel: `${SKILLS_DIR}/${e.name}`, name: path.basename(t) });
     }
   }
-  const all = [...new Set([...(listed ?? []), ...p.adopt.map((a) => a.name)])].sort();
-  // The old folder of a listed skill (no common- folder yet): moved.
-  for (const n of all) {
-    const old = n.slice(COMMON_PREFIX.length);
-    if (!fs.existsSync(path.join(commonDir, n)) && fs.existsSync(path.join(commonDir, old, 'SKILL.md'))) p.rename.push({ from: old, to: n });
-  }
+  const all = [...new Set([...(listed ?? []), ...p.adopt.map((a) => a.name), ...always.filter((n) => hasSkill(commonDir, n))])].sort();
   p.names = all.filter((n) => {
-    const ok = hasSkill(commonDir, n, p.rename);
+    const ok = hasSkill(commonDir, n);
     if (!ok) p.unknown.push(n);
     return ok;
   });
@@ -233,13 +246,10 @@ function plan(folder: string, commonDir: string): Plan {
 }
 
 /** Why the folder's common skills are not right; null when they are. */
-export function commonSkillProblem(folder: string, commonDir: string): string | null {
-  const p = plan(folder, commonDir);
+export function commonSkillProblem(folder: string, commonDir: string, always: string[] = []): string | null {
+  const p = plan(folder, commonDir, always);
   const out: string[] = [];
   if (p.bad.length) out.push(`${p.bad.join(', ')}을 못 읽음`);
-  if (p.relist) out.push(`${COMMON_SKILLS_FILE}이 옛 형식(이름에 ${COMMON_PREFIX} 없음)`);
-  if (p.staleAbout) out.push(`${COMMON_SKILLS_FILE}의 about이 옛 설명`);
-  if (p.rename.length) out.push(`옛 이름 폴더의 공통 스킬(${COMMON_PREFIX}을 붙여 옮김): ${p.rename.map((r) => `${COMMON_SKILLS_DIR}/${r.from}`).join(', ')}`);
   if (p.unknown.length) out.push(`공통 스킬 없음: ${p.unknown.join(', ')}`);
   if (p.adopt.length) out.push(`목록에 넣을 공통 스킬 링크: ${p.adopt.map((a) => a.rel).join(', ')}`);
   if (p.make.length) out.push(`공통 스킬 링크 없음·틀림: ${p.make.map((m) => m.rel).join(', ')}`);
@@ -250,24 +260,18 @@ export function commonSkillProblem(folder: string, commonDir: string): string | 
   return out.length ? out.join('; ') : null;
 }
 
-/** Makes the folder's common skills right: old folders, the list (old form, adopted links), the links, .agents/skills.json. Real folders and unknown names are left. */
-export function fixCommonSkills(folder: string, commonDir: string): boolean {
-  const p = plan(folder, commonDir);
+/** Makes the folder's common skills right: the list (adopted links), the links, .agents/skills.json. Real folders and unknown names are left. */
+export function fixCommonSkills(folder: string, commonDir: string, always: string[] = []): boolean {
+  const p = plan(folder, commonDir, always);
   if (p.bad.includes(COMMON_SKILLS_FILE)) return false;
   let changed = false;
-  for (const r of p.rename) {
-    fs.renameSync(path.join(commonDir, r.from), path.join(commonDir, r.to));
-    setSkillName(path.join(commonDir, r.to, 'SKILL.md'), r.to);
-    changed = true;
-  }
-  if (p.adopt.length || p.relist || p.staleAbout) {
+  if (p.adopt.length) {
     const file = path.join(folder, COMMON_SKILLS_FILE);
-    const read = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')) : { about: COMMON_SKILLS_ABOUT };
-    const now = p.staleAbout ? { ...read, about: COMMON_SKILLS_ABOUT } : read;
+    const now: { about?: string; skills?: string[] } = fs.existsSync(file) ? readJsonStrict(file) : { about: COMMON_SKILLS_ABOUT };
     const before: string[] = now.skills ?? [];
-    const names = [...new Set([...before.map(withPrefix), ...p.adopt.map((a) => a.name)])].sort();
-    // Written only when a name is new or in the old form (an already listed one only loses its hand-made link).
-    if (p.relist || p.staleAbout || names.length !== before.length || !fs.existsSync(file)) fs.writeFileSync(file, `${JSON.stringify({ ...now, skills: names }, null, 2)}\n`);
+    const names = [...new Set([...before, ...p.adopt.map((a) => a.name)])].sort();
+    // Written only when a name is new (an already listed one only loses its hand-made link).
+    if (names.length !== before.length || !fs.existsSync(file)) fs.writeFileSync(file, `${JSON.stringify({ ...now, skills: names }, null, 2)}\n`);
     for (const a of p.adopt) cutLink(path.join(folder, ...a.rel.split('/')));
     changed = true;
   }

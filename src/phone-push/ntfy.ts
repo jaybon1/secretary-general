@@ -4,7 +4,7 @@
  * turn, after the answer is written (the model's PushNotification arrived before the answer and cost a request).
  *
  * Not sent: a turn the answer checks send back (mistake-guards/stop-guard.ts: the rewritten answer ends the turn and is sent
- * then), a subagent's stop (Claude Code fires SubagentStop for those, and a hook input with agent_id is skipped too),
+ * then), a routine progress turn (progressTurn: nothing for the user to read), a subagent's stop (Claude Code fires SubagentStop for those, and a hook input with agent_id is skipped too),
  * tests (the no-model mark, core/no-model-calls.ts), and any copy without the settings section. Work sessions
  * and run-jobs run in other folders, whose settings carry no secretary Stop hook.
  *
@@ -37,6 +37,8 @@ import { secretaryLogDir } from '../core/paths.ts';
 import { featureOn, readFeatures } from '../core/features.ts';
 import { FEATURE } from '../core/names.ts';
 import { readLastTurn } from '../mistake-guards/last-turn.ts';
+import { parseLine, tailLines } from '../core/transcript.ts';
+import { promptSource } from '../core/prompt-sender.ts';
 
 export const FEATURE_ID = FEATURE.phonePush;
 export const DEFAULT_TITLE = '비서';
@@ -151,30 +153,41 @@ export function firstLine(answer: string, max = MAX_MESSAGE): string {
   return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : text;
 }
 
+/** A first line saying a background job still runs and the wait was started again ("업무 X 아직 진행 중, 모니터링 다시 띄움"). */
+const STILL_RUNNING = /아직\s*(?:진행|도는|돌고\s*있는|일하는)\s*중/;
+const WAIT_AGAIN = /다시\s*(?:기다|띄)/;
+/**
+ * Anything the user may have to read or act on: a question (any "?", a lettered question, the open-questions step), a
+ * decision or approval, an end, an error, a stop. The default "다음 행동" wait line ("끝나면 비서가 알려 드려요") has none.
+ */
+const USER_SIGNAL = /[?？]|질문|답해|결정|승인|골라|정해\s*주|봐\s*주|확인해\s*주|끝났|끝남|완료|마쳤|오류|실패|멈[춤췄춘]|막[힘혔힌]|꺼[짐졌]|경고|주의/;
+/** Longer than this is more than a progress line with its wait step. */
+const PROGRESS_MAX_CHARS = 500;
+
+/**
+ * A routine progress turn, not sent: the turn was started by a background task's end notice (not by the person, a voice
+ * message or another session), its first line says the job still runs and the wait was started again, and the answer is
+ * short and carries no question, decision, end, error or stop. Anything else is sent: a notice missed costs more than a
+ * notice too many.
+ */
+export function progressTurn(startText: string, answer: string): boolean {
+  if (promptSource(startText) !== 'machine' || !/<task-notification>/.test(startText)) return false;
+  const head = firstLine(answer);
+  if (!STILL_RUNNING.test(head) || !WAIT_AGAIN.test(head)) return false;
+  return answer.trim().length <= PROGRESS_MAX_CHARS && !USER_SIGNAL.test(answer);
+}
+
 /** The session's name from the transcript's end: its /rename title, else the name it was started with. */
 export function sessionName(transcriptPath: string | undefined): string | null {
   if (!transcriptPath) return null;
   try {
-    const size = fs.statSync(transcriptPath).size;
-    const start = Math.max(0, size - 512 * 1024);
-    const fd = fs.openSync(transcriptPath, 'r');
-    let text: string;
-    try {
-      const buf = Buffer.alloc(size - start);
-      fs.readSync(fd, buf, 0, buf.length, start);
-      text = buf.toString('utf8');
-    } finally {
-      fs.closeSync(fd);
-    }
     let custom: string | null = null;
     let agent: string | null = null;
-    for (const l of text.split('\n')) {
+    for (const l of tailLines(transcriptPath, 512 * 1024)) {
       if (!l.startsWith('{"type":"custom-title"') && !l.startsWith('{"type":"agent-name"')) continue;
-      try {
-        const o = JSON.parse(l) as { type?: string; customTitle?: unknown; agentName?: unknown };
-        if (o.type === 'custom-title' && typeof o.customTitle === 'string' && o.customTitle.trim()) custom = o.customTitle.trim();
-        if (o.type === 'agent-name' && typeof o.agentName === 'string' && o.agentName.trim()) agent = o.agentName.trim();
-      } catch {}
+      const o = parseLine(l);
+      if (o?.type === 'custom-title' && typeof o.customTitle === 'string' && o.customTitle.trim()) custom = o.customTitle.trim();
+      if (o?.type === 'agent-name' && typeof o.agentName === 'string' && o.agentName.trim()) agent = o.agentName.trim();
     }
     return custom ?? agent;
   } catch {
@@ -235,11 +248,19 @@ export interface PlanDeps {
   sessionsDir?: string;
 }
 
+/** What the answer checks read of the turn (mistake-guards/stop-guard.ts StopVerdict). */
+export interface StopRead {
+  block?: string;
+  answer?: string;
+  /** What started the turn (a typed prompt, a background notification). */
+  startText?: string;
+}
+
 /**
  * What the Stop hook would send for this turn, or null with why not. The answer is the one the checks read (`verdict.answer`),
  * else the transcript's last turn.
  */
-export function planNotice(input: StopNotifyInput, verdict: { block?: string; answer?: string }, deps: PlanDeps = {}): { notice: Notice; settings: NotifySettings } | { skip: string } {
+export function planNotice(input: StopNotifyInput, verdict: StopRead, deps: PlanDeps = {}): { notice: Notice; settings: NotifySettings } | { skip: string } {
   const env = deps.env ?? process.env;
   const root = deps.root ?? PROJECT_ROOT;
   if (env[NO_MODEL_ENV]) return { skip: 'test run' };
@@ -248,9 +269,12 @@ export function planNotice(input: StopNotifyInput, verdict: { block?: string; an
   if (!notifyOn(root)) return { skip: 'feature off' };
   const settings = deps.settings !== undefined ? deps.settings : readNotifySettings(root).settings;
   if (!settings) return { skip: 'no settings' };
-  const answer = deps.answer ?? verdict.answer ?? (input.transcript_path ? (readLastTurn(input.transcript_path)?.answer ?? '') : '');
+  const read = deps.answer ?? verdict.answer;
+  const turn = read === undefined && input.transcript_path ? readLastTurn(input.transcript_path) : null;
+  const answer = read ?? turn?.answer ?? '';
   const message = firstLine(answer);
   if (!message) return { skip: 'empty answer' };
+  if (progressTurn(verdict.startText ?? turn?.startText ?? '', answer)) return { skip: 'progress turn' };
   const title = settings.title.replace(/\{session\}/g, sessionName(input.transcript_path) ?? DEFAULT_TITLE);
   const click = clickUrl(settings, input.session_id, deps.sessionsDir);
   return { notice: { title, message, ...(click ? { click } : {}) }, settings };
@@ -302,7 +326,7 @@ export function launchNotice(notice: Notice, root = PROJECT_ROOT): void {
 }
 
 /** The Stop hook's call: plans and hands off; never throws, never waits. */
-export function notifyAfterStop(input: StopNotifyInput, verdict: { block?: string; answer?: string }, deps: PlanDeps & { launch?: (n: Notice) => void; logFile?: string } = {}): void {
+export function notifyAfterStop(input: StopNotifyInput, verdict: StopRead, deps: PlanDeps & { launch?: (n: Notice) => void; logFile?: string } = {}): void {
   try {
     const plan = planNotice(input, verdict, deps);
     if ('notice' in plan) (deps.launch ?? ((n: Notice) => launchNotice(n, deps.root)))(plan.notice);

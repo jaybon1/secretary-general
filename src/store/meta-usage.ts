@@ -97,3 +97,9 @@ export function injectedIds(db: DatabaseSync, sessionId: string): Set<number> {
   for (const r of rows) for (const id of (JSON.parse(r.detail) as { ids?: number[] }).ids ?? []) ids.add(id);
   return ids;
 }
+
+/** The usage_log id of this session's last context reset (/clear, compaction: session-start.ts), 0 when none. */
+export function lastContextReset(db: DatabaseSync, sessionId: string): number {
+  const r = db.prepare(`SELECT max(id) AS id FROM usage_log WHERE event = 'context_reset' AND json_extract(detail, '$.session') = ?`).get(sessionId) as { id: number | null };
+  return Number(r.id ?? 0);
+}

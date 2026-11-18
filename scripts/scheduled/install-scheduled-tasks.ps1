@@ -16,13 +16,11 @@
 # -DryRun: 등록하지 않고 만들 작업의 실행 명령·시점·설정을 찍는다(지금 등록된 것과 비교할 때).
 # 지금 한 번 돌려 보기: Start-ScheduledTask -TaskName '<이름>'. 해제: Unregister-ScheduledTask -TaskName '<이름>' -Confirm:$false
 #
-# 번호 없는 옛 이름 옮기기: 번호가 붙기 전 이름(features.json의 이름 그대로)으로 등록된 작업이 이 비서의 파일(이 비서 폴더 안, 같은 번호의
-# 옛 사본, 비서가 없어진 옛 자리)을 부르면 새 이름으로 등록한 뒤 옛 작업을 지운다(-DryRun은 '옮김(예정)'만 찍는다). 옛 작업의 매일 시각(backup,
-# -At을 안 줬을 때), 반복 간격(idle-jobs, -EveryMinutes를 안 줬을 때), 사용 안 함 상태를 이어받는다. 다른 비서 파일을 부르거나 무엇을 부르는지
-# 모르는 옛 이름 작업은 건드리지 않는다. server의 옛 작업도 관리자 PowerShell에서만 지워진다.
 # 이름이 바뀐 작업 옮기기: 옮기기 표(-MovesFile, 안 주면 배포판의 scripts/update-moves.json)의 scheduledTasks({"<버전>": {"<옛 이름>": "<새 이름>"}},
-# 번호 없는 이름)에 적힌 옛 이름으로 등록된 이 비서의 작업도 같은 방식으로 옮긴다. 이 비서 번호가 붙은 옛 이름이면 이 비서 것으로 보고(부르는 파일을
-# 모르는 ntfy 작업도), 번호 없는 옛 이름이면 위처럼 부르는 파일로 가린다. ntfy는 -NtfyExe·-NtfyConfig를 안 주면 옛 작업의 ntfy.exe·server.yml을 이어받는다.
+# 번호 없는 이름)에 적힌 옛 이름에 이 비서 번호를 붙인 이름으로 등록된 작업이 다른 비서 파일을 부르지 않으면(부르는 파일을 모르는 ntfy 작업도) 새 이름으로
+# 등록한 뒤 옛 작업을 지운다(-DryRun은 '옮김(예정)'만 찍는다). 옛 작업의 매일 시각(backup, -At을 안 줬을 때), 반복 간격(idle-jobs, -EveryMinutes를
+# 안 줬을 때), 사용 안 함 상태를 이어받고, ntfy는 -NtfyExe·-NtfyConfig를 안 주면 옛 작업의 ntfy.exe·server.yml을 이어받는다. server의 옛 작업은
+# 관리자 PowerShell에서만 지워진다.
 # 한 PC에 비서가 여럿이면: 이 비서 이름(번호 포함)으로 이미 등록된 작업이 이 PC의 다른 비서 폴더의 파일을 부르면(그 경로 위에 번호가 다른
 # 비서 폴더가 있으면) 덮어쓰지 않고 건너뛴다(-DryRun에서도). 그래도 이 비서로 가져오려면 -TakeOver.
 # -FeaturesFile: features.json 대신 읽을 파일, -MovesFile: 옮기기 표, -IdFile: .secretary-id 대신 읽고 만들 파일, -FakeTasksFile: 지금 등록된 작업을 작업 스케줄러 대신
@@ -60,7 +58,7 @@ $id = Get-SecretaryId -Root $root -File $IdFile
 if (-not $id) { throw "비서 고유 번호 파일을 만들지 못해 작업 이름을 정할 수 없어요($(if ($IdFile) { $IdFile } else { Join-Path $root $SecretaryIdFile }))." }
 if (-not $hadId) { Write-Host "비서 고유 번호를 새로 만들었어요: $id ($SecretaryIdFile, 예약 작업 이름 끝에 붙어요)" }
 
-# 작업 id → 등록 이름(번호 포함), 작업 id → 번호 없는 옛 이름, 작업 id → 그 작업을 가진 꺼진 기능의 id.
+# 작업 id → 등록 이름(번호 포함), 작업 id → features.json의 이름(번호 없음), 작업 id → 그 작업을 가진 꺼진 기능의 id.
 if (-not $FeaturesFile) { $FeaturesFile = Join-Path $root 'features.json' }
 $names = @{}
 $oldNames = @{}
@@ -105,25 +103,19 @@ if (Test-Path -LiteralPath $MovesFile -PathType Leaf) {
   } catch { Write-Host "옮기기 표를 못 읽어 이름이 바뀐 옛 작업은 찾지 않아요($MovesFile): $($_.Exception.Message)" }
 }
 
-# 옛 이름으로 등록된 이 비서의 작업(옮길 것): 작업 id → @{ Name = 옛 등록 이름; Task = 그 작업 }. 번호 없는 옛 이름(features.json 이름 그대로,
-# 이름이 바뀐 작업은 그 옛 이름도)은 부르는 파일이 이 비서 것일 때만, 이 비서 번호가 붙은 옛 이름은 다른 비서 파일을 부르지 않으면 넣는다.
+# 옛 이름으로 등록된 이 비서의 작업(옮길 것): 작업 id → @{ Name = 옛 등록 이름; Task = 그 작업 }. 이름이 바뀐 작업의 옛 이름에 이 비서 번호를
+# 붙인 이름으로 등록돼 있고 다른 비서 파일을 부르지 않으면 넣는다.
 $moves = @{}
 foreach ($t in $Task) {
   if (-not $names[$t] -or $off.ContainsKey($t)) { continue }
-  $candidates = @()
-  if ($oldNames[$t] -ne $names[$t]) { $candidates += @{ Name = $oldNames[$t]; WithId = $false } } # legacy-name: task-name-no-id
   foreach ($o in @($renamedFrom[$oldNames[$t]])) {
     if (-not $o) { continue }
-    $candidates += @{ Name = (Get-TaskNameWithId $o $id); WithId = $true }
-    $candidates += @{ Name = $o; WithId = $false }
-  }
-  foreach ($c in $candidates) {
-    if ($c.Name -eq $names[$t]) { continue }
-    $old = Find-Task $c.Name
+    $name = Get-TaskNameWithId $o $id
+    if ($name -eq $names[$t]) { continue }
+    $old = Find-Task $name
     if (-not $old) { continue }
     $oldFile = Get-TaskTargetFile @($old.Actions)[0]
-    $mine = if ($c.WithId) { -not ($oldFile -and (Get-OtherSecretary $oldFile $root)) } else { $oldFile -and -not (Get-OtherSecretary $oldFile $root) }
-    if ($mine) { $moves[$t] = @{ Name = $c.Name; Task = $old }; break }
+    if (-not ($oldFile -and (Get-OtherSecretary $oldFile $root))) { $moves[$t] = @{ Name = $name; Task = $old }; break }
   }
 }
 # 옛 작업의 시각·간격·ntfy 파일을 이어받는다(명령에서 따로 주지 않았을 때).

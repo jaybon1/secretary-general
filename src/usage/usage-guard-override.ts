@@ -8,8 +8,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AccountDeps } from '../core/provider-accounts.ts';
-import { personText } from '../hooks/prompt-sender.ts';
-import { chatProvider, LEGACY_OVERRIDE_FILE, legacyDirFor, onSubscription, overrideFile, readUsage, USAGE_DIR } from './usage-files.ts';
+import { personText } from '../core/prompt-sender.ts';
+import { chatProvider, onSubscription, overrideFile, readUsage, USAGE_DIR } from './usage-files.ts';
 import { labeler, readProviders, type ProviderInfo } from './provider-usage.ts';
 import { TAG } from '../core/names.ts';
 
@@ -73,8 +73,6 @@ export function namedAccounts(text: string, providers: ProviderInfo[]): NamedAcc
 export interface OverrideDeps {
   /** Where the lifts and usage files are (~/.secretary/usage). */
   dir?: string;
-  /** The folder before 2026-11-09 (~/.claude/usage) beside the real `dir`; a test names its own. */
-  legacyDir?: string | null;
   /** How a provider's login account is found (overrideFile). */
   account?: AccountDeps;
   /** providers.json as read (labels, names). */
@@ -91,8 +89,6 @@ export interface OverrideDeps {
  * lifted either, and the notice says it was never stopped.
  * Only the person's words count (personText): another session's message, a subagent's report or a task
  * notice may quote the phrase.
- * The old lift for every account (guard-override.json in ~/.claude/usage, usage-files.ts LEGACY_OVERRIDE_FILE, only beside the
- * real folder) is deleted then; the guard no longer reads it.
  */
 export function applyGuardOverride(prompt: string, now = Date.now(), provider = chatProvider(), deps: OverrideDeps = {}): string {
   const said = personText(prompt);
@@ -121,16 +117,12 @@ export function applyGuardOverride(prompt: string, now = Date.now(), provider = 
   const lifted: string[] = [];
   for (const p of targets) {
     const file = overrideFile(p, dir, deps.account);
-    const resets = readUsage(p, dir, deps.account, deps.legacyDir !== undefined ? deps.legacyDir : legacyDirFor(dir))?.resets_at;
+    const resets = readUsage(p, dir, deps.account)?.resets_at;
     const until = resets && Date.parse(resets) > now ? resets : new Date(now + 5 * 3600_000).toISOString();
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ until, set_at: new Date(now).toISOString(), provider: p }));
     lifted.push(`${p === 'subscription' && read.length < 2 ? '5시간 사용량' : label(p)} 초기화(${until})`);
   }
-  const legacyDir = deps.legacyDir !== undefined ? deps.legacyDir : legacyDirFor(dir);
-  try {
-    if (legacyDir) fs.rmSync(path.join(legacyDir, path.basename(LEGACY_OVERRIDE_FILE)), { force: true }); // legacy-name: usage-guard-override-old
-  } catch {}
   const notes = [
     targets.includes(provider) ? '' : ` 이 대화의 ${label(provider)}는 그대로예요.`,
     named.unknown.length && named.providers.length ? ` 목록에 없는 계정(${named.unknown.join(', ')})은 풀지 않았어요.` : '',

@@ -31,10 +31,13 @@ export function inventedWords(store: Store): string[] {
   return [...new Set([...baseInventedWords(), ...addedInventedWords(store)])];
 }
 
-/** Adds words (trimmed, 1 to 20 characters, not already listed); returns those added. */
+/**
+ * Adds words (trimmed, 2 to 20 characters, not already listed); returns those added. A one-letter word is not added: the
+ * check passes it over (answer-checks.ts inventedWordsIn), so the phrase the user pointed at goes in instead ("목적 칸").
+ */
 export function addInventedWords(store: Store, words: readonly string[]): string[] {
   const have = new Set(inventedWords(store));
-  const fresh = [...new Set(words.map((w) => w.trim()).filter((w) => w.length >= 1 && w.length <= 20 && !have.has(w)))];
+  const fresh = [...new Set(words.map((w) => w.trim()).filter((w) => [...w].length >= 2 && w.length <= 20 && !have.has(w)))];
   if (fresh.length) store.setJson(ADDED_KEY, [...addedInventedWords(store), ...fresh]);
   return fresh;
 }

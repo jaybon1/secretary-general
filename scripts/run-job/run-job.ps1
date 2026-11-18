@@ -22,8 +22,14 @@
 # 호출마다 토큰·비용·시간을 같은 폴더의 run-job-calls.jsonl에 한 줄씩 남긴다(요약: scripts/run-job/run-job-stats.ps1).
 # 도는 동안은 같은 폴더의 run-job-active/<PID>.json(pid, started_at, provider, model, folder, label=지시 첫 줄)을 두고 끝나면 지운다.
 # -RawJson <파일>을 주면 claude -p의 json 출력(토큰·비용 포함)을 그 파일에 남긴다.
+# -ReportFile <파일 | 폴더>: 결과 글을 그 파일(폴더면 그 안의 REPORT.md)에 원문 그대로 쓰고 '보고 저장: <경로>'를 찍는다(-Detach·wait-job으로
+#   떼어 돌려도 떼어 돈 쪽이 쓴다). 이미 내용이 있으면 돌리지 않고 멈추고, 돈 사이 다른 내용이 생겼으면 쓰지 않는다(-Force면 덮어씀).
+#   오류로 끝난 결과는 쓰지 않는다. Claude Code 공급자만(다른 회사 CLI는 결과 글을 받아 비서가 직접 쓴다).
+# -ReadDir <결과 폴더>: 기본 작업 폴더(_run-job-home)에서 개인정보를 보내지 않는 Claude Code 공급자로 돌 때 꼭 준다(그 일의 output\research\<날짜-일이름>,
+#   작업 폴더 기준 상대 경로도 된다). 그런 run-job은 이 폴더와 작업 폴더의 AGENTS.md, 공통 스킬만 읽는다(providers.ps1 Resolve-RunJobReadDir).
+#   그런 공급자로 보내는 지시에 사용자 호칭·기억/대화 번호·다른 작업 공간 이름이 있으면 돌리지 않고 멈춘다(providers.ps1 Assert-PrivateFreeBrief).
 #
-# 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job/run-job.ps1 [-Provider <이름>] -Model <opus|sonnet|haiku|공급자 models의 이름> [-Effort <low|medium|high|xhigh|max>] [-Folder <폴더>] [-McpConfig <파일>] [-Resume <세션 id> | -New] [-RawJson <파일>] [-DryRun] [-Detach] (-Prompt <지시> | -PromptFile <파일>)
+# 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job/run-job.ps1 [-Provider <이름>] -Model <opus|sonnet|haiku|공급자 models의 이름> [-Effort <low|medium|high|xhigh|max>] [-Folder <폴더> | -ReadDir <결과 폴더>] [-McpConfig <파일>] [-Resume <세션 id> | -New] [-RawJson <파일>] [-ReportFile <파일|폴더> [-Force]] [-DryRun] [-Detach] (-Prompt <지시> | -PromptFile <파일>)
 #     담당자로: run-job.ps1 -Staff <이름> [-EvalProvider <공급자>] [-RawJson <파일>] [-DryRun] [-Detach] (-Prompt <지시> | -PromptFile <파일>)
 
 param(
@@ -31,12 +37,15 @@ param(
   [string]$Model,
   [string]$Effort,
   [string]$Folder,
+  [string]$ReadDir,
   [string]$McpConfig,
   [string]$Resume,
   [switch]$New,
   [string]$Staff,
   [string]$EvalProvider,
   [string]$RawJson,
+  [string]$ReportFile,
+  [switch]$Force,
   [string]$Prompt,
   [string]$PromptFile,
   [switch]$DryRun,
@@ -51,7 +60,7 @@ $ErrorActionPreference = 'Stop'
 # 한글 지시·결과·오류 문구가 깨지지 않게, 무엇이든 내보내기 전에 표준입출력을 UTF-8로 맞춘다.
 $claude = Initialize-ClaudeScript
 # 결과물 상위의 workspaces 폴더(src/core/config.ts WORKSPACE_ROOT와 같다).
-$workspaceRoot = if ($env:SECRETARY_WORKSPACE_ROOT) { $env:SECRETARY_WORKSPACE_ROOT } else { Join-Path (Split-Path -Parent $SecretaryRoot) 'workspaces' }
+$workspaceRoot = Get-WorkspaceRoot
 $memoryWrite = $false
 $staffConfig = $null
 if ($Staff) {
@@ -84,13 +93,21 @@ if ($Resume -and $info.Type -in $OtherCliTypes) {
 }
 if ($Resume -and $New) { throw '-Resume과 -New는 함께 줄 수 없어요.' }
 if ($RawJson) { $RawJson = [IO.Path]::GetFullPath($RawJson) }
+if ($Force -and -not $ReportFile) { throw '-Force는 -ReportFile과 함께만 써요.' }
+if ($ReportFile) {
+  if ($info.Type -in $OtherCliTypes) { throw "$($info.Name) 공급자는 -ReportFile을 지원하지 않아요. 결과 글을 받아 직접 써요." }
+  # 전체 경로로 바꿔 둔다(-Detach로 떼어 돌 때도 같은 파일에 쓴다). 이미 내용이 있으면 돌리기 전에 멈춘다.
+  $ReportFile = Resolve-ReportFile $ReportFile
+  $PSBoundParameters['ReportFile'] = $ReportFile
+  Assert-ReportFileFree $ReportFile -Force:$Force
+}
 $folderGiven = $PSBoundParameters.ContainsKey('Folder') -or $Staff
 if (-not $folderGiven) {
   $Folder = Join-Path $workspaceRoot '_run-job-home'
   # 없으면 멈춘다(2026-11-09 결정). 임시 폴더에서 돌면 그 폴더의 공통 규칙(AGENTS.md)과 결과 자리가 빠진다.
-  # 설치 상태 점검(setup-check) 항목 'workspace-aux-folders'(node src/cli.ts workspace-aux-folders)가 이 폴더를 만들고, 옛 이름 run-job-home이면 옮긴다.
+  # 설치 상태 점검(setup-check) 항목 'workspace-aux-folders'(node src/cli.ts workspace-aux-folders)가 이 폴더를 만든다.
   if (-not (Test-Path $Folder -PathType Container)) {
-    throw "run-job 기본 작업 폴더가 없어요: $Folder (SECRETARY_WORKSPACE_ROOT=$($env:SECRETARY_WORKSPACE_ROOT)). 비서 폴더에서 node src/cli.ts workspace-aux-folders로 만들거나(옛 이름 run-job-home이면 옮긴다) -Folder를 주세요."
+    throw "run-job 기본 작업 폴더가 없어요: $Folder (SECRETARY_WORKSPACE_ROOT=$($env:SECRETARY_WORKSPACE_ROOT)). 비서 폴더에서 node src/cli.ts workspace-aux-folders로 만들거나 -Folder를 주세요."
   }
 }
 if (-not (Test-Path $Folder -PathType Container)) { throw "작업 폴더가 없어요: $Folder" }
@@ -101,6 +118,12 @@ if ($McpConfig) {
 }
 # 비서 폴더에서 돌면 개인정보가 공급자에게 넘어가므로, 개인정보를 보내지 않는 공급자(providers.json의 personalDataAllowed)는 막는다(providers.ps1).
 Assert-SecretaryFolderProvider $info $Folder
+# 개인정보를 보내지 않는 공급자의 run-job이 읽을 결과 폴더(전체 경로로 바꿔 -Detach로 떼어 돌 때도 같은 값이 가게 한다).
+$ReadDir = Resolve-RunJobReadDir $info $Folder $ReadDir ([bool]$folderGiven)
+if ($ReadDir) { $PSBoundParameters['ReadDir'] = $ReadDir }
+# 개인정보를 보내지 않는 공급자면 지시(와 거기 적힌 TASK.md)에 사용자 호칭·기억/대화 번호·다른 작업 공간 이름이 있을 때 멈춘다(providers.ps1).
+# 담당자(-Staff)의 지시는 비서 코드가 만들고, 기억을 다루는 담당자를 그런 공급자로 돌리는 것은 시험용 DB의 평가뿐이라 보지 않는다.
+if (-not $Staff) { Assert-PrivateFreeBrief $info $Folder $PromptFile $Prompt }
 
 # -Detach: 이 백그라운드 명령과 떼어 따로 돌리고 바로 끝난다(scripts/lib/detached-job.ps1). 55분 넘게 걸릴 수 있는 일에 쓰고, scripts/run-job/wait-job.ps1로 55분씩 기다린다.
 if ($Detach -and -not $DryRun) {
@@ -132,21 +155,21 @@ $effortArg = if ($Effort) { @('--effort', $Effort) } else { @() }
 # 같은 종류 조작이 한 턴에 여러 번 되풀이되면 막지 않고 알리는 훅(common.ps1 Get-RepeatHook). 담당자(-Staff)는 도구가 정해져 있어 넣지 않는다.
 $repeatHooks = if ($staffConfig) { @() } else { @(Get-RepeatHook) }
 # 설정 파일은 내용이 같으면 다시 쓰지 않아, 동시에 도는 run-job이 반쯤 쓴 파일을 읽지 않는다.
+# 이름 끝에 내용의 해시를 붙여, 폴더마다 다른 훅(작업 폴더 경로가 든 폴더 훅)을 넣은 run-job끼리 서로의 파일을 덮어쓰지 않는다.
 function Write-RunJobSettings([string]$Name, $Settings) {
-  $file = Join-Path $env:TEMP $Name
   $text = $Settings | ConvertTo-Json -Depth 8
+  $hash = -join ([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($text)) | Select-Object -First 4 | ForEach-Object { $_.ToString('x2') })
+  $file = Join-Path $env:TEMP "$Name-$hash.json"
   if (-not (Test-Path $file) -or [IO.File]::ReadAllText($file) -ne $text) { Write-Utf8File $file $text }
   $file
 }
 $permArg = if ($info.Type -eq 'claude-subscription') {
-  @('--permission-mode', 'auto') + $(if ($repeatHooks.Count) { @('--settings', (Write-RunJobSettings 'run-job-hooks.json' ([pscustomobject]@{ hooks = [pscustomobject]@{ PostToolUse = $repeatHooks } }))) } else { @() })
+  @('--permission-mode', 'auto') + $(if ($repeatHooks.Count) { @('--settings', (Write-RunJobSettings 'run-job-hooks' (New-ClaudeRunSettings -RepeatHooks $repeatHooks))) } else { @() })
 } else {
   # 웹 검색 도구는 다른 공급자에 없다. Bing 결과 페이지는 WebFetch로 읽힌다. 담당자는 웹 도구가 꺼져 있어 지시를 그대로 둔다(평가가 실제 지시로 재도록).
   if (-not $staffConfig) { $Prompt += "`n`n(웹 검색 도구가 없으니, 검색이 필요하면 WebFetch로 https://www.bing.com/search?q=<검색어> 를 가져와 결과를 보라.)" }
-  # 허용 목록의 비서 폴더 자리({SECRETARY_DIR})를 채운 사본을 넘긴다(common.ps1 Get-WorkerPermissions).
-  $perm = Get-WorkerPermissions
-  if ($repeatHooks.Count) { $perm | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{ PostToolUse = $repeatHooks }) -Force }
-  @('--permission-mode', 'dontAsk', '--settings', (Write-RunJobSettings 'run-job-permissions.json' $perm))
+  # 허용 목록과, 개인정보를 보내지 않는 공급자면 작업 폴더 훅(읽기 제한 포함)을 넣은 설정(providers.ps1 Get-RunJobPermissions).
+  @('--permission-mode', 'dontAsk', '--settings', (Write-RunJobSettings 'run-job-permissions' (Get-RunJobPermissions $info (Get-Location).ProviderPath $repeatHooks $ReadDir)))
 }
 # claude -p는 마지막 턴 뒤 10분이 지나면 뒤에서 도는 보조 에이전트를 멈춘다. 끝날 때까지 기다리게 한다.
 $env:CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = '0'
@@ -188,8 +211,7 @@ $stateFile = Join-Path $stateDir 'run-job-sessions.json'
 $callsFile = Join-Path $stateDir 'run-job-calls.jsonl'
 $folderFull = (Resolve-Path $Folder).Path.TrimEnd('\')
 $key = "$($info.Name)|$folderFull|$Model"
-try { $state = Get-Content -Raw -Encoding UTF8 $stateFile | ConvertFrom-Json } catch { $state = $null }
-if (-not $state) { $state = [pscustomobject]@{} }
+$state = Read-JsonStateFile $stateFile
 $last = $state.PSObject.Properties[$key].Value
 $now = [DateTime]::UtcNow
 $sinceMin = if ($last) { [math]::Round(($now - [DateTime]::Parse($last.at).ToUniversalTime()).TotalMinutes, 1) } else { $null }
@@ -240,7 +262,6 @@ if ($res -and $res.session_id) {
   $u = $res.usage
   $context = [int]$u.input_tokens + [int]$u.cache_read_input_tokens + [int]$u.cache_creation_input_tokens
   $entry = [pscustomobject]@{ session_id = $res.session_id; at = $now.ToString('o'); context = $context; total_cost_usd = $res.total_cost_usd }
-  if ($state.PSObject.Properties[$key]) { $state.$key = $entry } else { $state | Add-Member -NotePropertyName $key -NotePropertyValue $entry }
   $call = [ordered]@{
     at = $now.ToString('o'); provider = $info.Name; model = $Model; folder = $folderFull; session_id = $res.session_id
     resumed = [bool]$Resume; new_reason = $newReason; minutes_since_last = $sinceMin
@@ -250,14 +271,23 @@ if ($res -and $res.session_id) {
     ephemeral_1h_input_tokens = $u.cache_creation.ephemeral_1h_input_tokens; ephemeral_5m_input_tokens = $u.cache_creation.ephemeral_5m_input_tokens
     context = $context; cost_usd = $cost; is_error = [bool]$res.is_error
   }
+  # 시작 때 읽은 $state를 통째로 쓰지 않고, 잠근 채 다시 읽어 이 키만 바꾼다(common.ps1 Update-JsonStateFile). 동시에 돈 run-job이
+  # 그사이 적은 다른 키가 지워지면 다음 호출이 재사용 대신 새 세션을 열고 재사용 통계도 흐려진다. 호출 기록 줄도 잠근 채 덧붙인다.
   try {
     New-Item -ItemType Directory -Force $stateDir | Out-Null
-    Write-Utf8File $stateFile ($state | ConvertTo-Json -Depth 4)
-    Write-Utf8File $callsFile (($call | ConvertTo-Json -Compress) + "`n") -Append
-  } catch { [Console]::Error.WriteLine("run-job 기록을 못 남겼어요: $_") }
+    $null = Update-JsonStateFile $stateFile { param($s) $s | Add-Member -NotePropertyName $key -NotePropertyValue $entry -Force }
+  } catch { [Console]::Error.WriteLine("run-job 재사용 상태를 못 남겼어요: $_") }
+  try { Add-Utf8Line $callsFile ($call | ConvertTo-Json -Compress) } catch { [Console]::Error.WriteLine("run-job 호출 기록을 못 남겼어요: $_") }
 }
 if ($res -and $res.PSObject.Properties['result']) {
   if ($res.is_error) { [Console]::Error.WriteLine($res.result) } else { $res.result }
   if ($res.session_id) { "$(if ($Resume) { '(재사용)' } else { '(새 세션)' }) 세션: $($res.session_id)" }
+  if ($ReportFile) {
+    if ($res.is_error) { [Console]::Error.WriteLine("오류로 끝난 결과라 보고 파일을 쓰지 않았어요: $ReportFile") }
+    else {
+      try { $saved = Save-ReportFile $ReportFile "$($res.result)" -Force:$Force; "보고 $(if ($saved -eq 'same') { '이미 같음' } else { '저장' }): $ReportFile" }
+      catch { [Console]::Error.WriteLine("$_"); $code = 1 }
+    }
+  }
 } else { $raw }
 exit $code

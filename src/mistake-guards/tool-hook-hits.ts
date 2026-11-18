@@ -26,6 +26,7 @@ const KEEP_MS = 7 * 86_400_000;
 /** The guards these hooks hold, by the name the record uses (the check), with the user's word for it. */
 export const TOOL_HOOK_GUARDS = {
   'folder-place': '폴더 쓰기 막기',
+  'report-file-brief': '서브에이전트 보고서 파일 지시 막기',
   repeat: '반복 작업 알림',
 } as const;
 

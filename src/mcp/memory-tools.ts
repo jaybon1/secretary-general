@@ -4,14 +4,41 @@
  */
 import { z } from 'zod';
 import { BUDGET } from '../core/config.ts';
-import { checkDuplicates, duplicateMessage } from '../memory/duplicate-check.ts';
-import { clip, fail, formatLog, logHead, ok, type ToolContext } from './tool-common.ts';
+import { duplicateMessage, rememberChecked } from '../memory/duplicate-check.ts';
+import { ACTION_FIELDS, actionValues, clip, fail, formatLog, logHead, ok, type ToolContext } from './tool-common.ts';
 import { formatMemory, recall } from '../memory/recall.ts';
 import { findQuote, quoteNote, QUOTE_DESCRIBE, QUOTE_MISSING, quoteFormProblem, saveQuote } from '../memory/source-quote.ts';
 import { missLogFile, SEARCH_TIMEOUT_MS, semanticClient, START_WAIT_MS } from '../semantic-search/client.ts';
-import { MEMORY_KINDS, MemoryRaceError, SUMMARY_MIN_MEMORIES, SUMMARY_SKIP_TOPICS } from '../store/store.ts';
+import { MEMORY_KINDS, SUMMARY_MIN_MEMORIES, SUMMARY_SPLIT_TOPICS, TOPIC_SPLIT, type Store } from '../store/store.ts';
 import { estimateTokens } from '../core/token-estimate.ts';
 import { formatLocal } from '../core/kst-time.ts';
+import { rememberedText } from '../log/turn-memories.ts';
+import { PAIR_VERDICTS, PairBook, PAIRS_PER_RUN, TAG_CHECKS_PER_RUN } from '../memory/memory-pairs.ts';
+import { resolveQuestionCondition } from '../store/open-questions.ts';
+import { sameTagWords } from '../store/tag-names.ts';
+
+/** Topic summaries list_topics asks one consolidation run to write new at most (a topic without one; rewrites are not counted). */
+export const NEW_SUMMARIES_PER_RUN = 5;
+/**
+ * list_topics' lines: the topics due a summary and what to do with each. A run writes NEW_SUMMARIES_PER_RUN new summaries at
+ * most: splitting the secretary's topic made 25 topics without one at once, past what one run does in its time limit.
+ */
+export function topicLines(store: Pick<Store, 'topics'>): string[] {
+  let fresh = 0;
+  return store
+    .topics()
+    .filter((t) => t.count >= SUMMARY_MIN_MEMORIES)
+    .map((t) => {
+      const state = !t.summaryId
+        ? fresh++ < NEW_SUMMARIES_PER_RUN
+          ? '요약 없음 → 새로 만듦'
+          : '요약 없음 → 다음 정리에 만듦(이번 정리 몫을 넘음)'
+        : t.latestAt > (t.summaryAt ?? '')
+          ? `요약 #${t.summaryId} 이후 새 기억 있음 → 다시 씀`
+          : `요약 #${t.summaryId} 최신`;
+      return `${t.topic}: 기억 ${t.count}개 · ${state}`;
+    });
+}
 
 /** /consolidate reads every message whole; one longer than this is handed out alone, a part per call. */
 const LOG_PART_CHARS = 20_000;
@@ -30,7 +57,8 @@ export function registerMemoryTools({ server, store, readonly: READONLY, tally, 
         (candidates ? `${STAFF_REMEMBER} ` : '') +
         '사용자에 대한 오래 남길 정보를 기억에 저장한다. 한 기억에는 하나의 사실만, 나중에 혼자 읽어도 이해되는 완결된 문장으로 쓴다. ' +
         '기존 기억이 바뀐 경우(이사, 취향 변화, 결정 번복)엔 supersedes에 옛 기억 id를 넣는다 — 옛 기억은 삭제되지 않고 무효 처리된다. ' +
-        'decision에는 사용자가 고르거나 말한 것만 넣고, 비서의 추천·제안은 "비서가 ~를 권함"으로 적어 note로 둔다(추천을 결정으로 적으면 나중에 사용자가 정한 것으로 읽힌다).',
+        'decision에는 사용자가 고르거나 말한 것만 넣고, 비서의 추천·제안은 "비서가 ~를 권함"으로 적어 note로 둔다(추천을 결정으로 적으면 나중에 사용자가 정한 것으로 읽힌다). ' +
+        'action(할 일)에는 owner(누가 할 일인지)를 넣고, 기한이 있으면 due, 무엇이 된 뒤에 할 일이면 condition을 넣는다(할 일 요약과 조건 알림이 이 값을 읽는다). 끝난 할 일은 forget이나 새 기억의 supersedes로 닫는다.',
       inputSchema: {
         kind: z.enum(MEMORY_KINDS).describe('fact 사실 · preference 선호 · decision 결정 · event 일어난 일 · action 할 일(약속·해야 할 일) · person 인물 · note 기타 · summary 주제 요약(/consolidate 전용)'),
         content: z.string().min(1).describe('기억할 내용 (한두 문장)'),
@@ -41,10 +69,15 @@ export function registerMemoryTools({ server, store, readonly: READONLY, tally, 
         source_log_id: z.number().int().optional().describe('근거가 된 대화 로그 id (/consolidate에서 넣는다). 대화 중 저장은 비워 두면 그 턴에 자동 연결된다'),
         allow_similar: z.boolean().optional().describe('최근 기억과 뜻이 비슷해 저장이 멈춘 뒤 정말 다른 사실일 때만 true로 다시 저장한다'),
         quote: z.string().optional().describe(QUOTE_DESCRIBE),
+        ...ACTION_FIELDS,
       },
     },
-    async ({ kind, content, importance, tags, supersedes, valid_from, source_log_id, allow_similar, quote }) => {
+    async ({ kind, content, importance, tags, supersedes, valid_from, source_log_id, allow_similar, quote, owner, due, condition }) => {
       if (candidates && kind !== 'summary') return fail(STAFF_REMEMBER);
+      // An action carries who is to do it, and when or after what (store/memory-actions.ts): the to-do summary reads them.
+      const action = kind === 'action' ? actionValues({ owner, due, condition }) : null;
+      if (action && 'error' in action) return fail(action.error);
+      if (kind !== 'action' && (owner || due || condition)) return fail('owner·due·condition은 kind=action(할 일)에만 넣는다.');
       // A decision carries the user's own words (memory/source-quote.ts). With its row given they are looked up now and
       // refused when missing; saved during a chat, the Stop hook checks them once the turn is logged and linked.
       let found: ReturnType<typeof findQuote> | 'pending' = 'pending';
@@ -60,20 +93,17 @@ export function registerMemoryTools({ server, store, readonly: READONLY, tally, 
       // Summaries replace the topic's old summary and are left out of the check; allow_similar skips it.
       const check = kind !== 'summary' && !allow_similar;
       let missed = '';
-      for (let attempt = 1; ; attempt++) {
-        const dup = check ? await checkDuplicates(store, semanticClient(SEARCH_TIMEOUT_MS, 'remember 중복 확인', (why) => (missed = why), { waitMs: START_WAIT_MS }), { content, tags, supersedes }) : null;
-        if (dup?.similar.length) return fail(duplicateMessage(dup.similar, (iso) => formatLocal(iso, true)));
-        try {
-          // After two races in a row, save anyway rather than loop.
-          const r = store.remember({ ...input, expectMaxId: dup && !dup.skipped && attempt < 3 ? dup.maxId : undefined });
-          tally?.({ [kind === 'summary' ? 'summaries' : 'memories']: [r.id], superseded: r.superseded });
-          if (kind === 'decision') saveQuote(store, r.id, quote!, found);
-          const note = dup?.skipped ? ` (의미 검색 서버가 응답하지 않아 중복 확인은 못 함: ${missed || '이유 모름'}, 기록 ${missLogFile()})` : '';
-          return ok(`기억 #${r.id} 저장${r.superseded.length ? ` · 무효 처리: ${r.superseded.map((i) => `#${i}`).join(', ')}` : ''}${note}`);
-        } catch (err) {
-          if (!(err instanceof MemoryRaceError)) throw err;
-        }
-      }
+      const search = check ? semanticClient(SEARCH_TIMEOUT_MS, 'remember 중복 확인', (why) => (missed = why), { waitMs: START_WAIT_MS }) : null;
+      const res = await rememberChecked(store, search, input);
+      if ('similar' in res) return fail(duplicateMessage(res.similar, (iso) => formatLocal(iso, true)));
+      const r = res.saved;
+      tally?.({ [kind === 'summary' ? 'summaries' : 'memories']: [r.id], superseded: r.superseded });
+      if (kind === 'decision') saveQuote(store, r.id, quote!, found);
+      // A question's label is kept as the row that asked it (labels are given again in a new session).
+      if (action && !('error' in action)) store.setAction(r.id, { ...action, condition: action.condition && resolveQuestionCondition(store, action.condition), by: 'secretary', logId: source_log_id ?? null });
+      const note = res.skipped ? ` (의미 검색 서버가 응답하지 않아 중복 확인은 못 함: ${missed || '이유 모름'}, 기록 ${missLogFile()})` : '';
+      // The Stop hook finds this turn's memories by these words in the transcript (log/turn-memories.ts).
+      return ok(`${rememberedText(r.id)}${r.superseded.length ? ` · 무효 처리: ${r.superseded.map((i) => `#${i}`).join(', ')}` : ''}${note}`);
     },
   );
 
@@ -93,7 +123,7 @@ export function registerMemoryTools({ server, store, readonly: READONLY, tally, 
     async ({ query, ids, budget_tokens, include_invalid }) => {
       if (ids) {
         const found = ids.map((id) => store.getMemory(id)).filter((m) => m !== undefined);
-        const text = found.map((m) => [formatMemory(m), m.kind === 'decision' ? quoteNote(store, m.id) : ''].filter(Boolean).join('\n')).join('\n');
+        const text = found.map((m) => [formatMemory(m, store), m.kind === 'decision' ? quoteNote(store, m.id) : ''].filter(Boolean).join('\n')).join('\n');
         if (!READONLY) {
           store.touch(found.map((m) => m.id));
           store.logUsage('recall', estimateTokens(text), { ids: found.map((m) => m.id) });
@@ -143,35 +173,31 @@ export function registerMemoryTools({ server, store, readonly: READONLY, tally, 
       description: '최근 기억을 종류별·주제별로 나열한다 (정리·점검용).',
       inputSchema: {
         kind: z.enum(MEMORY_KINDS).optional(),
-        topic: z.string().optional().describe('주제(첫 태그)가 이것인 기억만'),
+        topic: z.string().optional().describe(`주제(첫 태그)가 이것인 기억만. list_topics의 주제 이름(예: "비서${TOPIC_SPLIT}상황판")도 된다`),
         include_invalid: z.boolean().optional(),
         limit: z.number().int().min(1).max(200).optional(),
       },
     },
     async ({ kind, topic, include_invalid, limit }) => {
       const rows = store.listMemories({ kind, topic, includeInvalid: include_invalid, limit: limit ?? 30 });
-      return ok(rows.length ? rows.map(formatMemory).join('\n') : '기억 없음');
+      return ok(rows.length ? rows.map((m) => formatMemory(m, store)).join('\n') : '기억 없음');
     },
   );
 
   server.registerTool(
     'list_topics',
     {
-      description: `/consolidate용: 주제(첫 태그)별 활성 기억 수와 요약 상태. 요약이 필요한 주제(${SUMMARY_MIN_MEMORIES}개 이상)만 보여준다.`,
+      description:
+        `/consolidate용: 주제(첫 태그)별 활성 기억 수와 요약 상태. 요약이 필요한 주제(${SUMMARY_MIN_MEMORIES}개 이상)만 보여준다. ` +
+        `기억이 너무 많은 주제(${[...SUMMARY_SPLIT_TOPICS].join(', ')})는 둘째 태그까지 묶어 "비서${TOPIC_SPLIT}상황판"처럼 보여 준다. 요약을 쓸 때 tags는 [그 주제 이름 그대로, "요약"]이다.`,
     },
     async () => {
-      const due = store.topics().filter((t) => t.count >= SUMMARY_MIN_MEMORIES && !SUMMARY_SKIP_TOPICS.has(t.topic));
-      if (due.length === 0) return ok('요약이 필요한 주제 없음');
-      return ok(
-        due
-          .map((t) => {
-            const state = !t.summaryId ? '요약 없음 → 새로 만듦' : t.latestAt > (t.summaryAt ?? '') ? `요약 #${t.summaryId} 이후 새 기억 있음 → 다시 씀` : `요약 #${t.summaryId} 최신`;
-            return `${t.topic}: 기억 ${t.count}개 · ${state}`;
-          })
-          .join('\n'),
-      );
+      const lines = topicLines(store);
+      return ok(lines.length ? lines.join('\n') : '요약이 필요한 주제 없음');
     },
   );
+
+  if (candidates) registerConsolidationUpkeep({ server, store, readonly: READONLY, tally, candidates });
 
   server.registerTool(
     'get_profile',
@@ -201,8 +227,104 @@ export function registerMemoryTools({ server, store, readonly: READONLY, tally, 
   );
 }
 
+/**
+ * Only on the memory consolidation's own server: the upkeep after the batches (consolidate skill references/procedure.md).
+ * get_memory_pairs · judge_memory_pair judge close pairs of memories already saved (memory/memory-pairs.ts); get_tag_checks ·
+ * set_memory_tags · merge_tags set the tag boundaries migration 21 could not tell (store/memories.ts).
+ */
+function registerConsolidationUpkeep({ server, store, tally }: ToolContext): void {
+  const pairs = new PairBook();
+  server.registerTool(
+    'get_memory_pairs',
+    {
+      description: `기억 정리 담당 전용: 같은 주제이면서 뜻이 가까운 살아 있는 기억 짝을 받는다(한 번 정리에 ${PAIRS_PER_RUN}쌍까지, 판정한 짝은 다시 나오지 않음). 짝마다 judge_memory_pair로 판정한다.`,
+    },
+    async () => ok(pairs.hand(store)),
+  );
+  server.registerTool(
+    'judge_memory_pair',
+    {
+      description:
+        '기억 정리 담당 전용: get_memory_pairs가 준 짝 하나를 판정한다. 먼저 두 기억이 누구·무엇에 관한지 각 글 그대로 베껴 견준다(한 글자만 달라도 다른 대상이면 unrelated). ' +
+        '판정: unrelated(다른 대상, 같은 대상의 다른 면, 다른 때 따로 일어난 일 → 둘 다 둠) · repeats(새 기억이 옛 기억과 같은 내용 → 옛 기억을 새 기억으로 대체) · ' +
+        'changes(같은 면의 값이 바뀜, 결정을 바꿈, 끝남·꺼짐·해지 → 옛 기억을 새 기억으로 대체). 옛 기억이 지난 사건(event)이면 unrelated다. ' +
+        '대체되는 옛 기억에 새 기억과 상관없이 여전히 맞는 다른 내용이 있으면 rest에 그 나머지만 완결된 문장으로 쓴다(코드가 옛 기억의 종류·태그·날짜로 새 기억을 남긴다).',
+      inputSchema: {
+        pair: z.string().describe('get_memory_pairs가 준 짝 번호 (예: P1)'),
+        older_about: z.string().min(1).describe('옛 기억 글이 누구·무엇에 관한지, 그 글에 적힌 그대로'),
+        newer_about: z.string().min(1).describe('새 기억 글이 누구·무엇에 관한지, 그 글에 적힌 그대로'),
+        verdict: z.enum(PAIR_VERDICTS),
+        rest: z.string().optional().describe('repeats·changes일 때만: 옛 기억에서 여전히 맞는 나머지 내용(완결된 문장). 없으면 비움'),
+      },
+    },
+    async ({ pair, older_about, newer_about, verdict, rest }) => {
+      const key = pair.trim().toUpperCase();
+      const r = pairs.judge(store, key, { verdict, olderAbout: older_about, newerAbout: newer_about, rest });
+      if (!r.ok) return fail(r.text);
+      tally?.({ pairs: [`${key} ${verdict}`], superseded: r.superseded ?? [], memories: r.rests ?? [], rests: r.rests ?? [] });
+      return ok(r.text);
+    },
+  );
+  server.registerTool(
+    'get_tag_checks',
+    {
+      description:
+        `기억 정리 담당 전용: 태그 경계를 확인할 기억을 받는다(한 번 정리에 ${TAG_CHECKS_PER_RUN}개). 옛 태그는 한 글로 이어 저장돼 두 낱말 태그("할 일", "모종 가게")와 두 태그를 가르지 못해 띄어쓰기로 나눠 두었다. ` +
+        '기억마다 원래 뜻대로 태그를 묶어 set_memory_tags로 저장한다(맞으면 같은 태그를 그대로 넣어 확인만 한다).',
+    },
+    async () => {
+      const { due, left } = store.tagChecksDue(TAG_CHECKS_PER_RUN);
+      if (!due.length) return ok('태그 경계를 확인할 기억 없음');
+      const lines = due.map((m) => `#${m.id} 태그 ${JSON.stringify(store.tagsOf(m.id))}: ${m.content.replace(/\s+/g, ' ').slice(0, 160)}`);
+      return ok([`태그 경계를 확인할 기억 ${due.length}개(남은 것 모두 ${left}개):`, ...lines].join('\n'));
+    },
+  );
+  server.registerTool(
+    'set_memory_tags',
+    {
+      description:
+        '기억 정리 담당 전용: 기억 하나의 태그를 순서대로 다시 정한다. 첫 태그가 주제다(주제 1개 + 세부 1~2개, 두 낱말이 한 이름이면 한 태그로: ["텃밭", "할 일"]). ' +
+        '내용에 없는 새 낱말은 넣지 않는다(검색에 쓰이던 낱말을 지우지도 않는다: 쪼개진 낱말을 다시 묶기만 한다).',
+      inputSchema: {
+        id: z.number().int().describe('기억 번호'),
+        tags: z.array(z.string()).min(1).describe('태그, 첫 것이 주제'),
+      },
+    },
+    async ({ id, tags }) => {
+      const before = store.tagsOf(id);
+      // Only the boundaries move: a word dropped or added would change what the memory is found by.
+      if (before.length && !sameTagWords(before, tags)) return fail(`태그의 낱말이 달라짐(전: ${JSON.stringify(before)}). 쪼개진 낱말을 다시 묶기만 한다. 낱말을 바꿀 일이면 그대로 두고 보고의 개선 후보에 적는다.`);
+      const kept = store.setMemoryTags(id, tags);
+      tally?.({ retagged: [id] });
+      return ok(`#${id} 태그: ${JSON.stringify(kept)}`);
+    },
+  );
+  server.registerTool(
+    'merge_tags',
+    {
+      description: '기억 정리 담당 전용: 같은 것을 가리키는 두 태그 이름을 하나로 묶는다(예: "크롬" → "크롬확장"). alias를 단 기억은 canonical로 바뀌고, 앞으로 alias로 저장해도 canonical로 읽는다.',
+      inputSchema: {
+        alias: z.string().min(1).describe('없앨 이름(별칭이 됨)'),
+        canonical: z.string().min(1).describe('남길 이름'),
+      },
+    },
+    async ({ alias, canonical }) => {
+      const ids = store.mergeTags(alias, canonical);
+      tally?.({ retagged: ids });
+      return ok(`"${alias}" → "${canonical}" 묶음 · 바뀐 기억 ${ids.length}개${ids.length ? `: ${ids.map((i) => `#${i}`).join(', ')}` : ''}`);
+    },
+  );
+}
+
 /** search_log, get_unconsolidated_log, mark_consolidated. */
 export function registerLogTools({ server, store, candidates }: ToolContext): void {
+  /**
+   * The last through_log_id this server handed out with get_unconsolidated_log (null: none yet). mark_consolidated takes
+   * nothing past it: a wrong number would mark messages nobody read as consolidated, and the memories in them would never
+   * be made. Kept in this server's memory, not in the database: the consolidation runs its own server (--staff), and the
+   * batch it may close is the one this very server handed it (a restarted server hands the batch out again).
+   */
+  let handedThrough: number | null = null;
   server.registerTool(
     'search_log',
     {
@@ -263,8 +385,11 @@ export function registerLogTools({ server, store, candidates }: ToolContext): vo
       let through = store.consolidatedThrough();
       let partNote = '';
       let done = 0;
+      // What the secretary already saved from a row during the chat (linked by the Stop hook): not to be proposed again.
+      const saved = store.memoriesFromRows(rows.map((r) => r.id));
       for (const r of rows) {
-        const head = logHead(r);
+        const ids = saved.get(r.id);
+        const head = `${logHead(r)}${ids ? ` (이 줄에서 이미 저장한 기억: ${ids.map((i) => `#${i}`).join(', ')})` : ''}`;
         if (r.content.length > LOG_PART_CHARS) {
           // A long message goes out alone, one part per call; the watermark moves past it only after the last part.
           if (out.length > 0) break;
@@ -290,6 +415,7 @@ export function registerLogTools({ server, store, candidates }: ToolContext): vo
         done++;
       }
       const remaining = store.stats().unconsolidated - done;
+      handedThrough = through;
       return ok(`${out.join('\n\n')}\n\nthrough_log_id=${through} · 남은 미정리 ${remaining}건${partNote}`);
     },
   );
@@ -297,7 +423,7 @@ export function registerLogTools({ server, store, candidates }: ToolContext): vo
   server.registerTool(
     'mark_consolidated',
     {
-      description: '지정한 로그 id까지 기억 정리를 마쳤다고 기록한다.',
+      description: '지정한 로그 id까지 기억 정리를 마쳤다고 기록한다. 이 서버의 get_unconsolidated_log가 마지막으로 넘겨준 through_log_id까지만 받는다.',
       inputSchema: { through_log_id: z.number().int().min(0) },
     },
     async ({ through_log_id }) => {
@@ -306,6 +432,8 @@ export function registerLogTools({ server, store, candidates }: ToolContext): vo
       if (candidates?.halted) return fail(`정리를 멈춰 정리 위치를 옮기지 않았다: ${candidates.halted}. 마지막 보고 첫 줄에 이 이유를 쓰고 끝낸다.`);
       const open = candidates?.pending() ?? [];
       if (open.length) return fail(`판정하지 않은 후보가 있어 정리 위치를 옮기지 않았다: ${open.join(', ')}. judge_memory로 판정하거나 withdraw_reason을 넣어 버린 뒤 다시 부른다.`);
+      if (handedThrough === null) return fail('이 서버가 아직 대화를 넘겨주지 않아 정리 위치를 옮기지 않았다. get_unconsolidated_log로 배치를 받아 정리한 뒤, 그 응답 끝의 through_log_id로 다시 부른다.');
+      if (through_log_id > handedThrough) return fail(`through_log_id=${through_log_id}은 마지막으로 넘겨준 배치의 끝(#${handedThrough})보다 뒤라 정리 위치를 옮기지 않았다(읽지 않은 대화가 정리된 것으로 처리된다). 응답 끝의 through_log_id=${handedThrough}로 다시 부른다.`);
       store.markConsolidated(through_log_id);
       return ok(`log #${through_log_id}까지 정리 완료로 기록`);
     },

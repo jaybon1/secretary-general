@@ -7,10 +7,10 @@
  * git or a release (.gitignore; a zip cannot hold a junction), so a fresh clone, a release and an update leave
  * .claude/skills to `node src/cli.ts skill-links` (install check item 'skills'; for a workspace, `workspace-links`).
  *
- * The same fix moves the old layouts over: skills/<name>/ (the secretary up to v8, workspaces before) with links to it
- * in .claude/skills and .agents/skills, and a real .claude/skills folder of links (common-*, hand-made ones). Such links
- * are dropped, skill folders move to .agents/skills, and a link elsewhere moves as a link with the same target. A real
- * folder that meets one of the same name is never removed or merged: it is reported. Only an empty folder is replaced.
+ * The same fix empties a real .claude/skills folder into .agents/skills before making the link: a link there to a skill
+ * already in .agents/skills is dropped, a skill folder moves to .agents/skills, and a link elsewhere moves as a link with
+ * the same target. A real folder that meets one of the same name is never removed or merged: it is reported. Only an
+ * empty folder is replaced.
  *
  * Kept free of the rest of src/ (only node: imports): the release's scripts/update.mjs imports it from the new version
  * to put the skills right at the end of an update, before the user's packages are reinstalled.
@@ -23,8 +23,6 @@ import { SECRETARY_SKILLS_DIR } from '../core/paths.ts';
 export const SKILLS_DIR = SECRETARY_SKILLS_DIR;
 /** Where Claude Code reads skills: one link to SKILLS_DIR. */
 export const CLAUDE_SKILLS_DIR = '.claude/skills';
-/** The old place of the real skill folders (the secretary up to v8, workspaces before): moved into SKILLS_DIR. */
-export const OLD_SKILLS_DIR = 'skills'; // legacy-name: old-skills-layout
 /** The folders the CLIs read skills from: Claude Code, then Codex and Antigravity. */
 export const SKILL_LINK_DIRS = [CLAUDE_SKILLS_DIR, SKILLS_DIR] as const;
 /**
@@ -38,22 +36,6 @@ export const SKILL_GITIGNORE_LINES = [
   `/${SKILLS_DIR}/common-*`,
   `/${SKILLS_DIR}.json`,
 ];
-/**
- * How the header line SKILL_GITIGNORE_LINES[0] began until 2026-11-11 (it said 연결 for the links): put right in place, in
- * the secretary's and every workspace's .gitignore. Matched by its start, since the line had more than one wording (the
- * workspaces of this PC carry a shorter one, from before the Antigravity list was added).
- */
-const OLD_GITIGNORE_HEADER = '# 스킬 연결('; // legacy-name: skill-gitignore-header
-const isOldHeader = (line: string) => line.trim().startsWith(OLD_GITIGNORE_HEADER);
-/** Lines of the old layout's .gitignore block, taken out when the new lines go in. */
-const OLD_GITIGNORE_LINES = [ // legacy-name: old-skills-layout
-  '# 공통 스킬(workspaces/_skills)로 가는 연결(비서가 common-skills.json대로 만든다, PC마다 다르다)',
-  '.claude/skills/common-*',
-  '.agents/skills/common-*',
-];
-/** The README a workspace's old skills/ folder was made with (workspace/rules-text.ts before this layout): removed with the folder. */
-const OLD_WORKSPACE_README = '업무 종류별 스킬을 `<이름>/SKILL.md`로 둔다. 목록과 쓰는 법은 AGENTS.md "스킬과 기억".\n';
-
 const abs = (root: string, rel: string) => path.join(root, ...rel.split('/'));
 /** Windows paths compare without case; readlink may give a \\?\ prefix. */
 const norm = (p: string) => {
@@ -118,7 +100,7 @@ export type ClaudeState =
   | 'missing'
   /** A link to somewhere else, or a broken one. */
   | 'wrong'
-  /** A real folder (the old layout): emptied by the fix, then made the link. */
+  /** A real folder: emptied by the fix, then made the link. */
   | 'folder'
   /** A file. */
   | 'file';
@@ -127,15 +109,13 @@ export interface SkillLayout {
   claude: ClaudeState;
   /** Where a wrong .claude/skills link points. */
   claudeTarget?: string;
-  /** Links of the old layout to drop: to a skill in skills/ or .agents/skills, or a twin of a link already in .agents/skills. */
+  /** Links in a real .claude/skills to drop: to a skill in .agents/skills, a twin of a link already there, or an empty folder. */
   cut: string[];
   /** Skill folders and links to move into .agents/skills (forward slashes). */
   move: { from: string; to: string }[];
   /** Real folders or files that meet one of the same name there (or are no skill): left, reported. */
   kept: string[];
-  /** Old leftovers to remove: the old workspace README, then skills/ itself once empty. */
-  clear: string[];
-  /** .gitignore lacks the link lines (or has the old ones). */
+  /** .gitignore lacks the link lines (or has the old header). */
   ignore: boolean;
 }
 
@@ -155,24 +135,13 @@ const ignoreLines = (root: string): string[] | null => {
 /** What the fix would do in root (nothing is changed). */
 export function skillLayout(root: string): SkillLayout {
   const agents = abs(root, SKILLS_DIR);
-  const old = abs(root, OLD_SKILLS_DIR);
   const claude = abs(root, CLAUDE_SKILLS_DIR);
-  const oldN = norm(old);
   const agentsN = norm(agents);
-  const r: SkillLayout = { claude: 'missing', cut: [], move: [], kept: [], clear: [], ignore: false };
+  const r: SkillLayout = { claude: 'missing', cut: [], move: [], kept: [], ignore: false };
   /** Names .agents/skills has once the cuts and moves are done. */
   const taken = new Map<string, string>();
   for (const e of entries(agents)) taken.set(e.name, `${SKILLS_DIR}/${e.name}`);
 
-  // .agents/skills: a link into skills/ (the old per-skill link) goes, so the folder it pointed at can move in.
-  for (const e of entries(agents)) {
-    if (!e.isSymbolicLink()) continue;
-    const t = linkTarget(path.join(agents, e.name));
-    if (t && isInside(t, oldN)) {
-      r.cut.push(`${SKILLS_DIR}/${e.name}`);
-      taken.delete(e.name);
-    }
-  }
   // An empty folder in .agents/skills (what a moved-out skill leaves) is taken over by a move.
   const emptyAt = (name: string) => {
     const p = path.join(agents, name);
@@ -196,23 +165,7 @@ export function skillLayout(root: string): SkillLayout {
     return true;
   };
 
-  // skills/ (old layout): folders and links move in; the old workspace README and then the empty folder go.
-  const oldSt = lstat(old);
-  if (oldSt?.isDirectory() && !oldSt.isSymbolicLink()) {
-    let left = false;
-    for (const e of entries(old)) {
-      const rel = `${OLD_SKILLS_DIR}/${e.name}`;
-      if (e.isFile() && e.name === 'README.md' && fs.readFileSync(path.join(old, e.name), 'utf8').replace(/\r\n/g, '\n') === OLD_WORKSPACE_README) r.clear.push(rel);
-      else if (e.isDirectory() || e.isSymbolicLink()) left = !moveIn(rel, e.name, e.isSymbolicLink()) || left;
-      else {
-        r.kept.push(rel);
-        left = true;
-      }
-    }
-    if (!left) r.clear.push(OLD_SKILLS_DIR);
-  }
-
-  // .claude/skills: the one link to .agents/skills, or a real folder of the old layout to empty.
+  // .claude/skills: the one link to .agents/skills, or a real folder to empty.
   const st = lstat(claude);
   if (!st) r.claude = 'missing';
   else if (st.isSymbolicLink()) {
@@ -229,8 +182,8 @@ export function skillLayout(root: string): SkillLayout {
       const rel = `${CLAUDE_SKILLS_DIR}/${e.name}`;
       if (e.isSymbolicLink()) {
         const t = linkTarget(path.join(claude, e.name));
-        // A link to a skill in skills/ or .agents/skills (the old per-skill link): the skill itself is moved or there.
-        if (t && (isInside(t, oldN) || isInside(t, agentsN))) r.cut.push(rel);
+        // A link to a skill in .agents/skills: the skill itself is there.
+        if (t && isInside(t, agentsN)) r.cut.push(rel);
         else moveIn(rel, e.name, true);
       } else if (e.isDirectory() && isEmptyTree(path.join(claude, e.name))) r.cut.push(rel);
       else moveIn(rel, e.name, false);
@@ -238,11 +191,7 @@ export function skillLayout(root: string): SkillLayout {
   } else r.claude = 'file';
 
   const lines = ignoreLines(root);
-  r.ignore =
-    !lines ||
-    !SKILL_GITIGNORE_LINES.slice(1).every((l) => hasLine(lines, l)) ||
-    OLD_GITIGNORE_LINES.slice(1).some((l) => lines.includes(l)) ||
-    lines.some(isOldHeader);
+  r.ignore = !lines || !SKILL_GITIGNORE_LINES.slice(1).every((l) => hasLine(lines, l));
   return r;
 }
 
@@ -254,14 +203,12 @@ export function skillLinkProblems(r: SkillLayout): string[] {
   };
   if (r.claude === 'missing') out.push(`링크 없음: ${CLAUDE_SKILLS_DIR}`);
   if (r.claude === 'wrong') out.push(`다른 곳을 가리킴: ${CLAUDE_SKILLS_DIR}${r.claudeTarget ? `(→ ${r.claudeTarget})` : '(끊김)'}`);
-  if (r.claude === 'folder') out.push(`링크 대신 실제 폴더(옛 구조): ${CLAUDE_SKILLS_DIR}`);
+  if (r.claude === 'folder') out.push(`링크 대신 실제 폴더: ${CLAUDE_SKILLS_DIR}`);
   if (r.claude === 'file') out.push(`링크 대신 파일: ${CLAUDE_SKILLS_DIR}`);
-  add('옛 위치에서 옮길 것:', r.move.map((m) => m.from));
-  // An old skills/ left with nothing to move (only the old README, or empty): its clearing is the whole fix.
-  if (!r.move.length) add('옛 위치에서 지울 것:', r.clear);
-  add('옛 구조의 링크:', r.cut);
+  add(`${CLAUDE_SKILLS_DIR}에서 옮길 것:`, r.move.map((m) => m.from));
+  add(`${CLAUDE_SKILLS_DIR} 안의 지울 링크·빈 폴더:`, r.cut);
   add('같은 이름이 이미 있어 옮기지 않음(지우지 않음):', r.kept);
-  if (r.ignore) out.push('.gitignore에 스킬 링크 줄 없음(또는 옛 줄)');
+  if (r.ignore) out.push('.gitignore에 스킬 링크 줄 없음');
   return out;
 }
 
@@ -270,7 +217,7 @@ export interface SkillLinkFix {
   made: string[];
   /** Wrong links made again. */
   remade: string[];
-  /** Old links removed and old leftovers cleared. */
+  /** Links and empty folders in a real .claude/skills removed. */
   removed: string[];
   /** Moved into .agents/skills ("from → to"). */
   moved: string[];
@@ -310,14 +257,11 @@ function moveEntry(from: string, to: string): void {
   fs.renameSync(from, to);
 }
 
-/** Adds the link lines to .gitignore (taking out the old block's, and putting an old header right in place), keeping the rest. Returns whether it changed. */
+/** Adds the link lines to .gitignore, keeping the rest. Returns whether it changed. */
 export function fixSkillIgnore(root: string): boolean {
   const file = path.join(root, '.gitignore');
   const old = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const kept = old
-    .split(/\r?\n/)
-    .filter((l) => !OLD_GITIGNORE_LINES.includes(l.trim()))
-    .map((l) => (isOldHeader(l) ? SKILL_GITIGNORE_LINES[0] : l));
+  const kept = old.split(/\r?\n/);
   while (kept.length && kept.at(-1)!.trim() === '') kept.pop();
   const trimmed = kept.map((k) => k.trim());
   const missing = SKILL_GITIGNORE_LINES.slice(1).filter((l) => !hasLine(trimmed, l));
@@ -349,16 +293,6 @@ export function fixSkillLinks(root: string, { dryRun = false } = {}): SkillLinkF
   if (r.ignore) attempt('.gitignore', fix.made, () => fixSkillIgnore(root));
   for (const rel of r.cut) attempt(rel, fix.removed, () => (lstat(abs(root, rel))?.isSymbolicLink() ? cutLink(abs(root, rel)) : fs.rmSync(abs(root, rel), { recursive: true })));
   for (const m of r.move) attempt(`${m.from} → ${m.to}`, fix.moved, () => moveEntry(abs(root, m.from), abs(root, m.to)));
-  for (const rel of r.clear) {
-    const p = abs(root, rel);
-    // skills/ itself only once everything in it went (a failed move leaves it).
-    if (rel === OLD_SKILLS_DIR) {
-      if (!fix.failed.length) attempt(rel, fix.removed, () => {
-        if (!isEmptyTree(p)) throw new Error('폴더가 비지 않음');
-        fs.rmSync(p, { recursive: true });
-      });
-    } else attempt(rel, fix.removed, () => fs.rmSync(p));
-  }
   const agents = abs(root, SKILLS_DIR);
   const claude = abs(root, CLAUDE_SKILLS_DIR);
   const link = () => {
@@ -389,7 +323,7 @@ export function formatSkillLinkFix(fix: SkillLinkFix, dryRun: boolean, label = '
   const verb = (done: string, plan: string) => (dryRun ? plan : done);
   const lines = [
     ...fix.moved.map((m) => `${verb('옮김', '옮길 것')}: ${m}`),
-    ...fix.removed.map((r) => `${verb('지움', '지울 것')}(옛 구조의 링크·빈 폴더): ${r}`),
+    ...fix.removed.map((r) => `${verb('지움', '지울 것')}(${CLAUDE_SKILLS_DIR} 안의 링크·빈 폴더): ${r}`),
     ...fix.made.map((r) => (r === '.gitignore' ? `${verb('고침', '고칠 것')}: .gitignore(스킬 링크 줄)` : `${verb('만듦', '만들 것')}: ${r} → ${SKILLS_DIR}`)),
     ...fix.remade.map((r) => `${verb('다시 만듦', '다시 만들 것')}(다른 곳을 가리켰음): ${r} → ${SKILLS_DIR}`),
     ...fix.kept.map((r) => `그대로 둠(같은 이름이 이미 있거나 실제 폴더·파일이라 지우지 않는다): ${r}`),

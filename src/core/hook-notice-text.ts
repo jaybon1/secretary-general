@@ -12,14 +12,27 @@ import { NOTICE } from './names.ts';
 export const HOOK_NOTICES_DIR = '.agents/hook-notices';
 
 /**
+ * What a notice told once needs of the database: the store's meta read and its told-once mark (store/store.ts getMeta,
+ * markOnce). Named here so the shared code takes the store without importing it (the store sits above this folder).
+ */
+export interface NoticeMarks {
+  getMeta(key: string): string | undefined;
+  markOnce(key: string, mark: string, covered?: (last: string) => boolean): boolean;
+}
+
+/**
  * Every (file, key) a hook reads, so a test can tell a renamed heading or a missing file (test/prompt-notices.test.ts).
  * The answer checks' pieces (answer-format.md) are listed where the checks are (mistake-guards/answer-check-table.ts
  * FORMAT_NOTICE_KEYS), so this shared code does not lean on that feature; the same test reads both.
  */
 export const HOOK_NOTICE_KEYS: Record<string, string[]> = {
   [NOTICE.situationBoard]: ['reading'],
+  [NOTICE.todoSummary]: ['summary', 'same', 'due', 'dropped'],
+  [NOTICE.jobStall]: ['notice'],
   'memory-consolidation-report': ['todo'],
   'semantic-search-misses': ['todo', 'ask'],
+  'hook-error': ['todo', 'stop', 'summary', 'repeat'],
+  'backup-stale': ['stale'],
 };
 
 /** The text under `## key` in .agents/hook-notices/<name>.md (to the next `## `), '' when the file or the key is not there. */

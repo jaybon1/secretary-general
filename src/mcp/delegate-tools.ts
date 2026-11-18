@@ -144,7 +144,7 @@ export function registerDelegateTools({ server, store }: ToolContext): void {
   server.registerTool(
     'update_task',
     {
-      description: '맡긴 업무의 상태를 기록한다. 시작하면 running(+session_ref), 끝나면 done/failed(+result 요약), 중단하면 cancelled.',
+      description: '맡긴 업무의 상태를 기록한다. 시작하면 running(+session_ref), 업무 세션이 [질문]으로 멈추면 asking(질문 대기), 답이나 새 지시를 보내 다시 일하면 running, 끝나면 done/failed(+result 요약), 중단하면 cancelled.',
       inputSchema: {
         id: z.number().int(),
         status: z.enum(TASK_STATUSES).optional(),

@@ -239,22 +239,10 @@ export async function checkSetup(over: Partial<SetupOptions> = {}, checks?: Chec
 
 // ---- Cache and notices ---------------------------------------------------------------------
 
-/**
- * Item ids renamed 2026-11-09 and 2026-11-10 (old → new). A skip list written before still names the old ones: read as the new ids
- * for a while (the list is written back with the new ones the next time it changes).
- */
-export const OLD_CHECK_IDS: Readonly<Record<string, string>> = { // legacy-name: setup-check-ids
-  model: CHECK.semanticSearchModel,
-  packages: CHECK.npmPackages,
-  'secretary-dir': CHECK.secretaryDirEnv,
-  notify: CHECK.phonePush,
-  'workspace-folders': CHECK.workspaceAuxFolders,
-};
-
 export function readCache(file: string): SetupCache | null {
   const c = readJsonFile<SetupCache>(file);
   if (!c || !Array.isArray(c.results)) return null;
-  const skip = Array.isArray(c.skip) ? [...new Set(c.skip.map((s) => OLD_CHECK_IDS[s] ?? s))] : [];
+  const skip = Array.isArray(c.skip) ? [...new Set(c.skip)] : [];
   return { ...c, skip };
 }
 

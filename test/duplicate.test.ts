@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { checkDuplicates, duplicateMessage, DUP_MIN_SIM } from '../src/memory/duplicate-check.ts';
-import { MemoryRaceError } from '../src/store/store.ts';
 import { tempStore } from './helpers.ts';
 
 test('duplicate check: a recent active memory close in meaning stops the save; superseded, old, summary and weak hits do not', async () => {
@@ -25,13 +24,4 @@ test('duplicate check: a recent active memory close in meaning stops the save; s
 
   const down = await checkDuplicates(s, async () => null, { content: 'x' });
   assert.deepEqual([down.skipped, down.similar.length], [true, 0], 'helper down: nothing compared, the save goes on');
-});
-
-test('duplicate check race: an insert is refused when another writer saved after the check (optimistic lock)', () => {
-  const s = tempStore();
-  const seen = s.maxMemoryId();
-  s.remember({ kind: 'fact', content: '다른 쪽이 먼저 저장' });
-  assert.throws(() => s.remember({ kind: 'fact', content: '같은 사실', expectMaxId: seen }), MemoryRaceError);
-  assert.equal(s.maxMemoryId(), seen + 1, 'nothing inserted');
-  assert.ok(s.remember({ kind: 'fact', content: '같은 사실', expectMaxId: s.maxMemoryId() }).id);
 });

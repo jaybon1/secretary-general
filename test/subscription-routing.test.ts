@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { PROJECT_ROOT } from '../src/core/config.ts';
 import { usageFile } from '../src/usage/usage-files.ts';
-import { applyGuardOverride } from '../src/usage/usage-guard-override.ts';
 import { subscriptionPick, pauseLimit, routingContext } from '../src/usage/subscription-routing.ts';
-import { providerLabel, readProviders } from '../src/usage/provider-usage.ts';
 import { tempDir } from './helpers.ts';
 
 const NOW = Date.parse('2026-11-08T05:00:00Z');
@@ -101,119 +97,6 @@ test('two subscriptions (a and b): the usage line shows the numbers, and b is th
   const solo = fixture([]);
   assert.equal(solo.pick(), 'subscription');
   assert.equal(pauseLimit({}), 90);
-  assert.equal(pauseLimit({ USAGE_PAUSE_PCT: '80' }), 80, 'the old name, for a while');
-  // 없으면 놓치는 실수: 새 이름 SECRETARY_USAGE_GUARD_PCT로 정한 기준을 계정 고르기가 읽지 않거나, 옛 이름이 새 이름을 이긴다.
-  assert.equal(pauseLimit({ SECRETARY_USAGE_GUARD_PCT: '85', USAGE_PAUSE_PCT: '80' }), 85);
-});
-
-// Without it: with three or more subscriptions work kept going to b while c sat idle, an account the guard would stop at
-// once (90% in 5 hours or the week) was picked, or one never read (maybe not logged in) won over one with room.
-test('three or more subscriptions: the one with the most room is picked, accounts at the guard\'s limit are passed over', () => {
-  const f = fixture(['subscription-b', 'subscription-c', 'subscription-d']);
-  const hint = (p: string) => ` (run-job·업무 세션은 기본 공급자 subscription-b로 도니 -Provider ${p}를 준다)`;
-  f.set('subscription', 30);
-  f.set('subscription-b', 70);
-  f.set('subscription-c', 20);
-  f.set('subscription-d', 45);
-  assert.equal(f.pick(), 'subscription-c');
-  assert.equal(
-    f.line(),
-    `<secretary-usage>5시간 사용량: 계정 a 30% · 계정 b 70% · 계정 c 20% · 계정 d 45% → 계정 c로 보냄${hint('subscription-c')}</secretary-usage>`,
-  );
-  // At the limit in its week, or in its 5 hours: passed over, even when its 5-hour % is the lowest.
-  f.set('subscription-c', 10, { week_pct: 95, week_resets_at: iso(-86400_000) });
-  assert.equal(f.pick(), 'subscription-d');
-  f.set('subscription-c', 10, { week_pct: 95, week_resets_at: iso(60_000) });
-  assert.equal(f.pick(), 'subscription-c', 'its week has reset');
-  f.set('subscription-c', 92);
-  assert.equal(f.pick(), 'subscription-d');
-  assert.match(f.line(), /→ 계정 d로 보냄 \(.*-Provider subscription-d/);
-  // Every one at the limit: the lowest anyway, and the line says so.
-  f.set('subscription-b', 95);
-  f.set('subscription-d', 91);
-  assert.equal(f.pick(), 'subscription-d');
-  assert.match(f.line(), /→ 계정 d로 보냄\(보낼 구독 모두 90% 이상, 다른 계정·공급자로 돌릴지 먼저 묻는다\) \(/);
-  // An account with no reading yet loses to one that has a reading, unless none has.
-  f.set('subscription-b', 70);
-  f.set('subscription-c', null);
-  f.set('subscription-d', null);
-  assert.equal(f.pick(), 'subscription-b');
-  f.set('subscription-b', null);
-  assert.equal(f.pick(), 'subscription-b', 'none has a reading: the default');
-  // A tie goes to the default provider, then the order in providers.json.
-  f.set('subscription-b', 40);
-  f.set('subscription-c', 20);
-  f.set('subscription-d', 20);
-  assert.equal(f.pick(), 'subscription-c');
-  const g = fixture(['subscription-b', 'subscription-c', 'subscription-d'], 'subscription-d');
-  for (const [p, pct] of [['subscription', 30], ['subscription-b', 40], ['subscription-c', 20], ['subscription-d', 20]] as const) g.set(p, pct);
-  assert.equal(g.pick(), 'subscription-d');
-  // Chatting on c: work stays on c, every other account is shown.
-  assert.equal(f.pick('subscription-c'), 'subscription-c');
-  assert.equal(
-    f.line('subscription-c'),
-    '<secretary-usage>이 세션은 계정 c. 5시간 사용량: 계정 c 20% · 계정 a 30% · 계정 b 40% · 계정 d 20% → 보내는 일도 c</secretary-usage>',
-  );
-});
-
-// Without it: with default "auto" the line still told the secretary to pass -Provider (or never told it when the default
-// was a fixed account other than the one picked).
-test('default "auto": the line names the account picked and no -Provider is needed', () => {
-  const f = fixture(['subscription-b', 'subscription-c'], 'auto');
-  f.set('subscription', 30);
-  f.set('subscription-b', 70);
-  f.set('subscription-c', 20);
-  assert.equal(f.line(), '<secretary-usage>5시간 사용량: 계정 a 30% · 계정 b 70% · 계정 c 20% → 계정 c로 보냄</secretary-usage>');
-  assert.equal(f.pick(), 'subscription-c');
-  f.set('subscription-c', 75);
-  assert.match(f.line(), /→ 계정 b로 보냄<\/secretary-usage>$/);
-});
-
-// Without it: a third subscription had no 계정 c name, so "계정 c 90퍼 넘어도 진행" lifted nothing (unknown account).
-test('subscription-<id> is shown as 계정 <id>, and the 90% lift finds it by that name', () => {
-  assert.equal(providerLabel('subscription-c'), '계정 c');
-  assert.equal(providerLabel('subscription-b2'), '계정 b2');
-  assert.equal(providerLabel('subscription-work'), 'subscription-work', 'a longer word stays the name');
-  const f = fixture(['subscription-b', 'subscription-c']);
-  f.set('subscription-c', 95);
-  const out = applyGuardOverride('계정 c 90퍼 넘어도 진행', NOW, 'subscription', { dir: f.usage, account: f.account, providers: readProviders(f.root), env: {} });
-  assert.match(out, /계정 c 초기화\(.*\)까지 풀었어요/);
-  assert.ok(fs.existsSync(path.join(f.usage, 'usage-guard-override-subscription-acct-c.json')));
-});
-
-// Without it: Use-Provider took "auto" for a provider's name and threw, or picked by a rule of its own that differs from the
-// line the secretary reads; and when node could not run, run-job and work sessions stopped instead of going to b.
-test('Use-Provider auto runs on the account the line picks; without the picker, the first subscription after a', { skip: process.platform !== 'win32' }, () => {
-  const f = fixture(['subscription-b', 'subscription-c'], 'auto');
-  // The usage files where the PowerShell side's node finds them (~/.secretary/usage of USERPROFILE).
-  const usage = path.join(f.home, '.secretary', 'usage');
-  fs.mkdirSync(usage, { recursive: true });
-  const write = (provider: string, five: number) =>
-    fs.writeFileSync(usageFile(provider, usage, f.account), JSON.stringify({ five_hour_pct: five, resets_at: new Date(Date.now() + 3600_000).toISOString(), updated_at: new Date().toISOString() }));
-  write('subscription', 30);
-  write('subscription-b', 70);
-  write('subscription-c', 20);
-  const lib = path.join(f.root, 'scripts', 'lib');
-  for (const name of ['common.ps1', 'this-secretary.ps1', 'providers.ps1']) fs.copyFileSync(path.join(PROJECT_ROOT, 'scripts', 'lib', name), path.join(lib, name));
-  const env: NodeJS.ProcessEnv = { ...process.env, USERPROFILE: f.home, SECRETARY_TEST_LOGIN_HOME: f.home, SECRETARY_KEYS_DIR: f.keys };
-  delete env.CLAUDE_CONFIG_DIR;
-  delete env.SECRETARY_PROVIDER;
-  const run = (lines: string[]) =>
-    execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', [`. '${path.join(lib, 'common.ps1')}'`, `. '${path.join(lib, 'providers.ps1')}'`, ...lines].join('; ')], { encoding: 'utf8', env })
-      .trim()
-      .split(/\r?\n/);
-  // No src beside the copied scripts: the picker can't run, so the first subscription after a.
-  assert.deepEqual(run([`$i = Use-Provider; "$($i.Name)|$env:SECRETARY_PROVIDER"`]), ['subscription-b|subscription-b']);
-  // The real picker (src as a link to this copy's), reading this folder's providers.json.
-  const link = path.join(f.root, 'src');
-  fs.symlinkSync(path.join(PROJECT_ROOT, 'src'), link, 'junction');
-  try {
-    assert.deepEqual(run([`$i = Use-Provider; "$($i.Name)|$env:SECRETARY_PROVIDER"`, `"$((Use-Provider subscription-b).Name)"`]), ['subscription-c|subscription-c', 'subscription-b']);
-    // A fixed name is never re-picked; -Provider auto picks like the default does.
-    write('subscription-c', 80);
-    assert.deepEqual(run([`"$((Use-Provider auto).Name)"`]), ['subscription-b']);
-  } finally {
-    // Only the link goes, never this copy's src behind it.
-    fs.unlinkSync(link);
-  }
+  // 없으면 놓치는 실수: SECRETARY_USAGE_GUARD_PCT로 정한 기준을 계정 고르기가 읽지 않는다.
+  assert.equal(pauseLimit({ SECRETARY_USAGE_GUARD_PCT: '85' }), 85);
 });

@@ -1,7 +1,7 @@
 /**
  * The dashboard's data: usage limits, running work sessions and run-jobs, the task board, scheduled tasks. Read only:
  * the database is opened read-only with query_only (no lock or change on the secretary's WAL database), the usage
- * folder (~/.secretary/usage, core/paths.ts USAGE_DIR: usage per account; ~/.claude/usage until 2026-11-09, read beside it),
+ * folder (~/.secretary/usage, core/paths.ts USAGE_DIR: usage per account),
  * this secretary's records folder (~/.secretary/<id>/state, core/paths.ts secretaryStateDir: its work sessions and run-jobs) and the task scheduler are
  * only read (running-jobs.ps1). The one change: a run-job-active file left by a run-job that certainly ended, or one left broken,
  * is deleted (runJobsActive).
@@ -13,15 +13,19 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { DB_PATH, PROJECT_ROOT } from '../core/config.ts';
-import { LEGACY_USAGE_DIR, secretaryStateDir, USAGE_DIR } from '../core/paths.ts';
+import { secretaryStateDir, USAGE_DIR } from '../core/paths.ts';
 import type { AccountDeps } from '../core/provider-accounts.ts';
 import { failureWaitMs, readFailure, usageFile } from '../usage/usage-files.ts';
 import { labeler, providerLabel, readProviders, type ProviderInfo } from '../usage/provider-usage.ts';
 import { readUsageChoice } from '../usage/usage-settings.ts';
+import type { TaskStatus } from '../store/workspaces-tasks.ts';
+import { readJsonStrict } from '../core/json-file.ts';
+import { pidAlive } from '../core/windows-process.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const STATUSES = ['ready', 'running', 'failed', 'done', 'cancelled'] as const;
-const STATUS_KO: Record<string, string> = { ready: '대기', running: '진행 중', failed: '실패', done: '끝남', cancelled: '취소' };
+/** The task board's columns in display order, one per status the store has (TASK_STATUSES): a status missing here is a type error. */
+const STATUS_KO: Record<TaskStatus, string> = { ready: '대기', running: '진행 중', asking: '질문 대기', failed: '실패', done: '끝남', cancelled: '취소' };
+export const STATUSES = Object.keys(STATUS_KO) as TaskStatus[];
 const STALE_MIN = 30;
 /** A run-job-active file that cannot be read as JSON this many minutes after its last write is deleted (runJobsActive). */
 const BROKEN_RUNJOB_MIN = 10;
@@ -74,7 +78,26 @@ export const accountName = (p?: string | null): string => providerLabel(p);
 type Namer = (p?: string | null) => string;
 const tail2 = (p?: string | null) => (p ? p.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : '');
 const firstLine = (s: string | null | undefined, n = 80) => (s ?? '').split(/\r?\n/).find((l) => l.trim())?.trim().slice(0, n) ?? '';
-const readJsonIn = (dir: string, f: string) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8').replace(/^﻿/, ''));
+const readJsonIn = <T,>(dir: string, f: string): T => readJsonStrict<T>(path.join(dir, f));
+/** A usage file as usage-query.ps1 (usage-command) or the agy reader (agy-usage) writes it. */
+interface UsageFileJson {
+  groups?: unknown;
+  five_hour_pct?: unknown;
+  resets_at?: unknown;
+  week_pct?: unknown;
+  week_resets_at?: unknown;
+  updated_at: string;
+  source: string;
+}
+/** A run-job-active file as run-job.ps1 writes it at its start. */
+interface RunJobJson {
+  pid: number;
+  provider: string;
+  model: string;
+  folder?: string;
+  label: string;
+  started_at: string;
+}
 /** A record file not written yet (a new secretary, or its records folder before its first work session or run-job) reads as `none`. */
 const orNone = <T,>(read: () => T, none: T): T => {
   try {
@@ -82,16 +105,6 @@ const orNone = <T,>(read: () => T, none: T): T => {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return none;
     throw e;
-  }
-};
-// Only whether the pid exists (a pid left in a killed run's file can be taken by another process): runJobState compares
-// start times when it has the process list and uses this only without it.
-const pidAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM';
   }
 };
 
@@ -108,24 +121,14 @@ export type Limit =
   | { name: string; provider: string; none: true };
 
 /**
- * One provider's usage file (~/.secretary/usage/subscription-<account>.json, usage/usage-files.ts usageFile; beside the real
- * folder also the one in ~/.claude/usage that an older copy may still write, the newer of the two) as meters: a
+ * One provider's usage file (~/.secretary/usage/subscription-<account>.json, usage/usage-files.ts usageFile) as meters: a
  * subscription's 5-hour and weekly windows (usage-query.ps1 source usage-command), or each model group of agy's weekly one
  * (source agy-usage).
  */
-export function limitOf(name: string, provider: string, usageDir = USAGE_DIR, now = Date.now(), d: AccountDeps = {}, legacyDir: string | null = usageDir === USAGE_DIR ? LEGACY_USAGE_DIR : null): Limit {
+export function limitOf(name: string, provider: string, usageDir = USAGE_DIR, now = Date.now(), d: AccountDeps = {}): Limit {
   const file = path.basename(usageFile(provider, usageDir, d));
-  let j: ReturnType<typeof readJsonIn> = null;
-  let failed: unknown = null;
-  for (const dir of legacyDir ? [usageDir, legacyDir] : [usageDir]) { // legacy-name: usage-dir
-    try {
-      const x = readJsonIn(dir, file);
-      if (!j || (Date.parse(x.updated_at) || 0) > (Date.parse(j.updated_at) || 0)) j = x;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') failed ??= e;
-    }
-  }
-  if (!j) throw failed ?? Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' });
+  const j = readJsonIn<UsageFileJson | null>(usageDir, file);
+  if (!j) throw Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' });
   const meter = (label: string, pct: unknown, resetsAt: unknown): Meter[] =>
     typeof pct === 'number'
       ? [{ label, pct, resetsAt: typeof resetsAt === 'string' ? kst(resetsAt) : null, left: typeof resetsAt === 'string' ? untilText(resetsAt, now) : null, passed: typeof resetsAt === 'string' && Date.parse(resetsAt) <= now }]
@@ -276,6 +279,8 @@ type RunJobItem = { pid: number; account: string; model: string; folder: string;
 export function runJobState(j: { pid?: unknown; started_at?: unknown }, procs: Procs | null): 'running' | 'gone' | 'hidden' {
   const pid = Number(j.pid);
   const started = typeof j.started_at === 'string' ? Date.parse(j.started_at) : NaN;
+  // Only whether the pid exists (a pid left in a killed run's file can be taken by another process): start times are
+  // compared when the process list is there.
   if (!procs) return pidAlive(pid) ? 'running' : 'hidden';
   const p = procs.list.find((x) => x.pid === pid);
   if (p) {
@@ -300,9 +305,9 @@ export function runJobsActive(stateDir = secretaryStateDir(), accountName: Namer
   }
   const running: RunJobItem[] = [];
   for (const f of files) {
-    let j;
+    let j: RunJobJson;
     try {
-      j = readJsonIn(dir, f);
+      j = readJsonIn<RunJobJson>(dir, f);
     } catch {
       // A file being written: next refresh. run-job.ps1 writes it once at its start (a few bytes, milliseconds), so one
       // still unreadable BROKEN_RUNJOB_MIN after its last write was cut off (killed mid-write, disk full): deleted.

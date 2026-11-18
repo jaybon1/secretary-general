@@ -29,6 +29,7 @@ function files(): string[] {
   }
 }
 
+// [늘 남김] 다시 깨진 곳: 규칙·스킬·코드 주석을 새로 쓴 작업마다 이 말이 여러 번 다시 들어갔다.
 // 없으면 놓치는 실수: 규칙·안내·코드 글에 누가 하는지 흐린 말("손"+"으로", 영어 주석의 같은 말)이 다시 들어가, 사용자나 다른 모델이 사람이 할 일로 읽는다.
 test('wording: no vague who-does-it word (Korean or English) anywhere but the rule line that bans it', () => {
   const found: string[] = [];

@@ -29,25 +29,22 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boardReflects, resetBoardAfterPurge } from '../session-continuity/situation-board.ts';
-import { dropQuestionsFrom } from '../session-continuity/open-questions.ts';
-import { transaction } from '../store/schema.ts';
+import { boardReflects } from '../store/board-state.ts';
+import { dropQuestionsFrom } from '../store/open-questions.ts';
+import { deleteLogRows, type PurgeResult } from './log-delete.ts';
 import { ingestTranscript } from './ingest-transcript.ts';
 import type { LogRowInfo, Store } from '../store/store.ts';
 import { QUEUED_PREFIX } from '../store/conversation-log.ts';
 import { formatLocal, nowIso } from '../core/kst-time.ts';
-import { indexText } from '../memory/search-terms.ts';
 import { catchUpTranscripts, transcriptDirs } from './catch-up.ts';
 import { CLI, TAG } from '../core/names.ts';
+import { parseLine } from '../core/transcript.ts';
 
-export const QUARANTINE_FILE = 'purged-log-error.db';
 export const PURGE_REASON = '사용자가 지운 대화에서 저장됨';
 /** A preview's state, keyed by its approval code. */
 const CODE_PREFIX = 'purge_code:';
 /** Every code handed out lately: a message holding just one of them is not conversation (turn counting). */
 const CODES_KEY = 'purge_codes';
-/** The "확인" previews of before (no longer used): dropped when met. */
-const OLD_PENDING_PREFIX = 'purge_pending:'; // legacy-name: purge-pending-prefix
 const NOTICE_KEY = 'purge_notice';
 /** An approval code older than this deletes nothing. */
 export const CODE_MAX_MS = 30 * 60 * 1000;
@@ -93,14 +90,6 @@ export interface PurgePlan {
   boardReset: boolean;
   questions: string[];
   notes: string[];
-}
-
-export interface PurgeResult {
-  quarantine: string;
-  deleted: number[];
-  forgotten: number[];
-  boardReset: boolean;
-  questions: string[];
 }
 
 // ---- the phrase ---------------------------------------------------------------
@@ -339,13 +328,8 @@ function rememberedIn(file: string | undefined, fromUuid: string, untilUuid?: st
   const ids = new Set<number>();
   let on = false;
   for (const raw of text.split('\n')) {
-    if (!raw) continue;
-    let o: { uuid?: string; type?: string; isSidechain?: boolean; message?: { content?: unknown } };
-    try {
-      o = JSON.parse(raw);
-    } catch {
-      continue;
-    }
+    const o = parseLine(raw) as { uuid?: string; type?: string; isSidechain?: boolean; message?: { content?: unknown } } | null;
+    if (!o) continue;
     if (o.uuid === start) on = true;
     if (stop && o.uuid === stop) break;
     if (!on || o.isSidechain || !Array.isArray(o.message?.content)) continue;
@@ -361,100 +345,6 @@ function rememberedIn(file: string | undefined, fromUuid: string, untilUuid?: st
   return [...ids];
 }
 
-// ---- deleting -------------------------------------------------------------------
-
-/** The quarantine file beside the DB: backups/error/, out of the daily backups (backup-db.ps1 reads backups/ itself only). */
-export function quarantinePath(store: Store): string {
-  return path.join(path.dirname(store.db.location() ?? '.'), 'backups', 'error', QUARANTINE_FILE);
-}
-
-const QUARANTINE_SCHEMA = `
-  CREATE TABLE IF NOT EXISTS purged.quarantined_log (
-    seq          INTEGER PRIMARY KEY,
-    log_id       INTEGER NOT NULL,
-    session_id   TEXT NOT NULL,
-    message_uuid TEXT NOT NULL,
-    role         TEXT NOT NULL,
-    content      TEXT NOT NULL,
-    created_at   TEXT NOT NULL,
-    purged_at    TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS purged.quarantined_log_uuid ON quarantined_log (message_uuid, seq);
-  CREATE TRIGGER IF NOT EXISTS purged.quarantined_log_no_update BEFORE UPDATE ON quarantined_log
-    BEGIN SELECT RAISE(ABORT, 'quarantined_log is append-only'); END;
-  CREATE TRIGGER IF NOT EXISTS purged.quarantined_log_no_delete BEFORE DELETE ON quarantined_log
-    BEGIN SELECT RAISE(ABORT, 'quarantined_log is append-only'); END;
-`;
-
-/** Runs `fn` with the quarantine attached as `purged` (made if missing unless `mustExist`). */
-function withQuarantine<T>(store: Store, fn: () => T, mustExist = false): T {
-  const file = quarantinePath(store);
-  if (mustExist && !fs.existsSync(file)) throw new Error(`격리 DB가 없어요(지웠다면 되돌릴 수 없어요): ${file}`);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  store.db.prepare('ATTACH DATABASE ? AS purged').run(file);
-  try {
-    store.db.exec(QUARANTINE_SCHEMA);
-    return fn();
-  } finally {
-    store.db.exec('DETACH DATABASE purged');
-  }
-}
-
-/**
- * The one way rows leave raw_log, for "비서 대화 삭제" (executePurge) and for a branch a rewind abandoned
- * (log/rewind.ts cleanRewound); the two differ only in how they choose rows and memories. The rows are copied into
- * the quarantine first and committed there on their own, so a failure in between leaves them in both places
- * rather than in neither; then one transaction in the main DB removes them, blocks their identifiers and
- * invalidates the memories; then the file traces go, and the board and open questions that came from them.
- * With no rows, only the memories are invalidated.
- */
-export function deleteLogRows(store: Store, logIds: number[], memoryIds: number[], reason: string): PurgeResult {
-  const ids = [...new Set(logIds)].sort((a, b) => a - b);
-  const at = nowIso();
-  if (!ids.length) {
-    const { forgotten } = store.dropLogRows([], memoryIds, reason, at);
-    return { quarantine: '', deleted: [], forgotten, boardReset: false, questions: [] };
-  }
-  const json = JSON.stringify(ids);
-  const present = Number((store.db.prepare('SELECT count(*) AS n FROM raw_log WHERE id IN (SELECT value FROM json_each(?))').get(json) as { n: number }).n);
-  if (present !== ids.length) throw new Error(`지울 줄 ${ids.length}개 중 ${present}개만 남아 있어요. 목록을 다시 보세요.`);
-  withQuarantine(store, () => {
-    const copied = transaction(store.db, () =>
-      Number(
-        store.db
-          .prepare(
-            `INSERT INTO purged.quarantined_log (log_id, session_id, message_uuid, role, content, created_at, purged_at)
-             SELECT id, session_id, message_uuid, role, content, created_at, ? FROM main.raw_log WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id`,
-          )
-          .run(at, json).changes,
-      ),
-    );
-    if (copied !== ids.length) throw new Error(`격리 DB에 ${ids.length}줄 중 ${copied}줄만 옮겨져 지우지 않았어요.`);
-  });
-  // The text must not stay in the main DB file: freed pages are zeroed, the search index's old segments merged
-  // away, and the WAL written back (best effort: an open reader can keep it from being emptied).
-  const secure = (store.db.prepare('PRAGMA secure_delete').get() as { secure_delete: number }).secure_delete;
-  store.db.exec('PRAGMA secure_delete = ON');
-  // The board and open questions are rewritten inside the same window: their old text came from these rows.
-  let forgotten: number[];
-  let boardReset: boolean;
-  let questions: string[];
-  try {
-    ({ forgotten } = store.dropLogRows(ids, memoryIds, reason, at));
-    store.db.exec("INSERT INTO raw_log_fts (raw_log_fts) VALUES ('optimize')");
-    boardReset = resetBoardAfterPurge(store, ids[0]);
-    questions = dropQuestionsFrom(store, ids);
-  } finally {
-    store.db.exec(`PRAGMA secure_delete = ${secure ? 'ON' : 'OFF'}`);
-  }
-  try {
-    store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-  } catch {
-    // Busy: the next automatic checkpoint writes it back.
-  }
-  return { quarantine: quarantinePath(store), deleted: ids, forgotten, boardReset, questions };
-}
-
 /**
  * Deletes what a plan listed (deleteLogRows). With `notify` (the CLI run directly) the secretary is told on its next
  * prompt; the approval code's turn tells it right away instead (purgeDone), so it passes `false`.
@@ -467,57 +357,6 @@ export function executePurge(store: Store, plan: PurgePlan, notify = true): Purg
     store.setJson(NOTICE_KEY, [...pending, { from: ids[0], to: ids.at(-1)!, rows: ids.length, forgotten: result.forgotten }]);
   }
   return result;
-}
-
-export interface RestoreRow {
-  logId: number;
-  /** The id it has again; another when its old id was taken by a newer row meanwhile. */
-  newId?: number;
-  role: string;
-  chars: number;
-  created_at: string;
-  state: 'restore' | 'restored' | 'in-log';
-}
-
-/**
- * Puts quarantined rows (log ids from..to, the latest copy of each) back into the log and off the block list.
- * The text moves inside SQLite; only the search index needs it in memory here, and it is never printed.
- * Memories invalidated by the deletion stay invalidated, and the board is not rewritten for them.
- */
-export function restorePurged(store: Store, from: number, to: number, dryRun = true): RestoreRow[] {
-  return withQuarantine(
-    store,
-    () => {
-      const rows = store.db
-        .prepare(
-          `SELECT q.seq, q.log_id, q.message_uuid, q.role, length(q.content) AS chars, q.created_at FROM purged.quarantined_log q
-           WHERE q.log_id BETWEEN ? AND ? AND q.seq = (SELECT max(seq) FROM purged.quarantined_log WHERE message_uuid = q.message_uuid)
-           ORDER BY q.log_id`,
-        )
-        .all(from, to) as Array<{ seq: number; log_id: number; message_uuid: string; role: string; chars: number; created_at: string }>;
-      const inLog = store.db.prepare('SELECT 1 FROM main.raw_log WHERE message_uuid = ?');
-      const out: RestoreRow[] = rows.map((r) => ({ logId: r.log_id, role: r.role, chars: r.chars, created_at: r.created_at, state: inLog.get(r.message_uuid) ? 'in-log' : 'restore' }));
-      if (dryRun) return out;
-      transaction(store.db, () => {
-        const taken = store.db.prepare('SELECT 1 FROM main.raw_log WHERE id = ?');
-        const insert = store.db.prepare(
-          'INSERT INTO main.raw_log (id, session_id, message_uuid, role, content, created_at) SELECT ?, session_id, message_uuid, role, content, created_at FROM purged.quarantined_log WHERE seq = ?',
-        );
-        const text = store.db.prepare('SELECT content FROM main.raw_log WHERE id = ?');
-        const index = store.db.prepare('INSERT INTO main.raw_log_fts (rowid, terms) VALUES (?, ?)');
-        const unblock = store.db.prepare('DELETE FROM main.purged_log_ids WHERE message_uuid = ?');
-        rows.forEach((r, i) => {
-          if (out[i].state !== 'restore') return;
-          const id = Number(insert.run(taken.get(r.log_id) ? null : r.log_id, r.seq).lastInsertRowid);
-          index.run(id, indexText((text.get(id) as { content: string }).content));
-          unblock.run(r.message_uuid);
-          out[i] = { ...out[i], newId: id, state: 'restored' };
-        });
-      });
-      return out;
-    },
-    true,
-  );
 }
 
 // ---- what the user and the secretary see -----------------------------------------
@@ -623,7 +462,6 @@ function codeOf(hash: string): string {
  * those row and memory ids (plus a nonce, so each preview gets its own). Old states and codes are pruned.
  */
 export function issuePurgeCode(store: Store, plan: PurgePlan, origin: PreviewOrigin = {}, now = Date.now()): string {
-  for (const { key } of store.metaWithPrefix(OLD_PENDING_PREFIX)) store.deleteMeta(key);
   for (const { key, value } of store.metaWithPrefix(CODE_PREFIX)) {
     let at = 0;
     try {

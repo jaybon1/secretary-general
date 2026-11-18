@@ -32,9 +32,13 @@ export interface ConsolidateTally {
   refused: number;
   /** Why the run stopped before its end (the semantic-search server did not answer, C9). */
   halted: string[];
+  /** Close pairs judged again (memory/memory-pairs.ts), "P1 repeats". */
+  pairs: string[];
+  /** Memories whose tags were set again (the boundaries migration 21 could not tell). */
+  retagged: number[];
 }
 
-const empty = (): ConsolidateTally => ({ memories: [], summaries: [], superseded: [], forgotten: [], agenda: [], profile: [], rests: [], withdrawn: [], refused: 0, halted: [] });
+const empty = (): ConsolidateTally => ({ memories: [], summaries: [], superseded: [], forgotten: [], agenda: [], profile: [], rests: [], withdrawn: [], refused: 0, halted: [], pairs: [], retagged: [] });
 
 /** Before a run: nothing counted yet. */
 export function startTally(store: Store): void {
@@ -73,6 +77,7 @@ export function tallyLine(t: ConsolidateTally): string {
   if (t.memories.length) lines.push(`새 기억 번호: ${t.memories.map((id) => `#${id}`).join(', ')}`);
   // Why each candidate went without a verdict (C10), and why the run stopped early (C9).
   if (t.withdrawn.length) lines.push(`버린 후보: ${t.withdrawn.join(' / ')}`);
+  if (t.pairs.length || t.retagged.length) lines.push(`가까운 기억 짝 다시 판정 ${t.pairs.length}개(대체한 짝 ${t.pairs.filter((p) => !p.endsWith('unrelated')).length}개) · 태그 경계 고친 기억 ${new Set(t.retagged).size}개`);
   for (const h of new Set(t.halted)) lines.push(`정리 멈춤: ${h}`);
   return lines.join('\n');
 }

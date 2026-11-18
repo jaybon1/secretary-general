@@ -1,0 +1,7 @@
+{
+  "about": "이 비서 폴더가 쓰는 공통 스킬(workspaces/_skills/common-<이름>) 목록. 이름은 common-까지 적는다(폴더 이름 = 스킬 name). 비서가 이 목록대로 .agents/skills에 같은 이름의 연결(Claude Code·Codex가 읽는다)과 .agents/skills.json(Antigravity가 읽는다)을 만든다(node src/cli.ts skill-links). 공간의 같은 이름 파일과 같은 꼴이다.",
+  "skills": [
+    "common-web-unblock",
+    "common-windows-shell"
+  ]
+}

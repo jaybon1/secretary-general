@@ -26,7 +26,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Agent|Task",
         "hooks": [
           {
             "type": "command",
@@ -39,7 +39,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|PowerShell|Read|Write|WebFetch|mcp__.*",
+        "matcher": "Bash|PowerShell|Read|Write|WebFetch|mcp__(?!secretary__).*",
         "hooks": [
           {
             "type": "command",

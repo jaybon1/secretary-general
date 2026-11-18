@@ -41,6 +41,8 @@ namespace Secretary {
     // 창이 없어 켜졌는지 모르므로, 이 창에서 처음 연결될 때 한 번 알림(windows-toast.ps1)을 띄운다. 끊겼다 다시 붙을 때는 띄우지 않는다.
     public static string NotifyArgs;
     static int notified;
+    // 이번 서버가 연결됐는지(창이 서버를 띄울 때마다 0으로 돌린다): 연결되지 못한 채 계속 다시 켜지는지 보는 데 쓴다.
+    public static int ConnectedSeen;
     static readonly Regex Connected = new Regex(@"\bConnected\b");
     static readonly object Gate = new object();
     static readonly Encoding Utf8 = new UTF8Encoding(false);
@@ -61,6 +63,7 @@ namespace Secretary {
           for (string raw; (raw = reader.ReadLine()) != null; ) {
             string line = Control.Replace(Link.Replace(raw, "$1 "), "").Trim();
             if (line.Length > 0 && seen.Add(line)) Write(line);
+            if (Connected.IsMatch(line)) ConnectedSeen = 1;
             if (NotifyArgs != null && Connected.IsMatch(line) && Interlocked.Exchange(ref notified, 1) == 0) {
               try {
                 System.Diagnostics.ProcessStartInfo notify = new System.Diagnostics.ProcessStartInfo("powershell.exe", NotifyArgs);
@@ -83,6 +86,21 @@ $null = New-Item -ItemType Directory -Force $logDir
 [Secretary.ServerLog]::Dir = $logDir
 [Secretary.ServerLog]::NotifyArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\windows-toast.ps1`" -Title `"$serverName`" -Text `"서버가 연결됐어요. 앱에서 새 세션을 열 수 있어요.`""
 function Write-Log([string]$message) { [Secretary.ServerLog]::Write("[비서 서버] $message") }
+
+# 폰 알림(기능 phone-push의 ntfy 설정이 있을 때만): 로그인이 풀렸거나(5분 간격 확인이 두 번 연달아 실패) 서버가 연결되지 못한 채
+# 15분 넘게 다시 켜지기를 되풀이하면 한 번 보낸다. 같은 상태가 이어지는 동안은 다시 보내지 않고, 로그인이 돌아오거나 서버가 연결되면 그 상태를 지운다.
+# 보낸 상태는 이 서버 기록 폴더의 phone-alert.json에 남아, 창을 다시 띄워도 같은 상태를 또 보내지 않는다(scripts/phone-push/server-alert.ts).
+# 평소 "already served" 기다림은 길어야 4분쯤이라(서버 기록) 15분이면 그것과 섞이지 않는다.
+$alertState = Join-Path $logDir 'phone-alert.json'
+$alertScript = Join-Path $SecretaryRoot 'scripts\phone-push\server-alert.ts'
+$restartLoopMinutes = 15
+function Send-ServerAlert([string[]]$AlertArgs) {
+  try {
+    $said = & (Get-Command node).Source --no-warnings $alertScript --state $alertState @AlertArgs 2>&1 | Out-String
+    if ($said.Trim()) { Write-Log "폰 알림: $($said.Trim())" }
+  } catch { Write-Log "폰 알림 실패: $_" }
+}
+function Clear-ServerAlert([string]$Problem) { if (Test-Path -LiteralPath $alertState) { Send-ServerAlert @('--clear', $Problem) } }
 
 # 예전 서버가 남아 있으면 새 서버가 "This folder is already served"로 거절당하므로 먼저 끈다.
 # 그 서버가 띄운 세션까지 함께 끈다(/T).
@@ -132,6 +150,9 @@ function Stop-ServerGracefully([Diagnostics.Process]$server) {
   }
 }
 
+$loginFails = 0
+# 서버가 연결되지 못한 채 처음 끝난 때(연결되면 지운다).
+$failingSince = $null
 while ($true) {
   # 로그인 직후에는 네트워크가 아직 없어 서버가 미리 만드는 세션이 실패한다.
   while (-not (Test-NetConnection api.anthropic.com -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue)) {
@@ -140,9 +161,14 @@ while ($true) {
   }
   if (-not (Test-ClaudeLogin $claude)) {
     Write-Log 'Claude 로그인이 필요해요. 새 터미널에서 "claude auth login"을 실행하세요. 5분 뒤 다시 확인합니다.'
+    # 한 번은 claude 업데이트 중 같은 잠깐의 실패일 수 있어, 두 번 연달아(5분 넘게) 실패하면 폰에 알린다.
+    $loginFails++
+    if ($loginFails -ge 2) { Send-ServerAlert @('--server', $serverName, '--problem', 'login') }
     Start-Sleep -Seconds 300
     continue
   }
+  $loginFails = 0
+  Clear-ServerAlert 'login'
   # 서버는 이 파일에 적힌 예전 세션을 다시 붙잡는데, 그 세션이 보관됐으면 바로 죽고 새 세션을 만들지 않는다.
   # 지우면 매번 새 세션을 미리 만든다.
   $configDir = Get-ClaudeConfigDir
@@ -169,6 +195,8 @@ while ($true) {
   $start.RedirectStandardError = $true
   $start.StandardOutputEncoding = [Text.Encoding]::UTF8
   $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+  [Secretary.ServerLog]::ConnectedSeen = 0
+  $alertCleared = $false
   $server = [Diagnostics.Process]::Start($start)
   [Secretary.ServerLog]::Pump($server.StandardOutput)
   [Secretary.ServerLog]::Pump($server.StandardError)
@@ -178,6 +206,8 @@ while ($true) {
   # 0개가 된 뒤 4~5분이면 다른 기기에서 새 세션을 못 열게 되므로 그보다 일찍 잡는다.
   $checkMinutes = 1
   while (-not $server.WaitForExit($checkMinutes * 60000)) {
+    # 연결됐으면 다시 켜지기 되풀이는 끝났다: 그 상태를 지운다(다음에 또 되풀이하면 다시 알린다).
+    if ([Secretary.ServerLog]::ConnectedSeen -and -not $alertCleared) { $failingSince = $null; $alertCleared = $true; Clear-ServerAlert 'restart-loop' }
     if ((Get-SessionCount $server.Id) -gt 0) { $emptySince = $null; continue }
     if (-not $emptySince) { $emptySince = Get-Date; continue }
     Write-Log "비서 세션이 ${checkMinutes}분 넘게 0개라 새 세션을 만들려고 서버를 다시 켭니다."
@@ -185,6 +215,14 @@ while ($true) {
     $restarting = $true
   }
   Restore-Console
+  if ([Secretary.ServerLog]::ConnectedSeen) {
+    $failingSince = $null
+    if (-not $alertCleared) { Clear-ServerAlert 'restart-loop' }
+  } elseif (-not $failingSince) {
+    $failingSince = Get-Date
+  } elseif (((Get-Date) - $failingSince).TotalMinutes -ge $restartLoopMinutes) {
+    Send-ServerAlert @('--server', $serverName, '--problem', 'restart-loop', '--exit-code', "$($server.ExitCode)")
+  }
   if ($restarting) { continue }
   Write-Log "서버 종료(코드 $($server.ExitCode)). 30초 뒤 다시 시작합니다."
   Start-Sleep -Seconds 30

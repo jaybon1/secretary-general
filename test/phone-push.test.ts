@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { test } from 'node:test';
 import { tempDir, write as writeFile } from './helpers.ts';
 import { NO_MODEL_ENV } from '../src/core/no-model-calls.ts';
-import { clickUrl, firstLine, notifyAfterStop, ntfyRequest, planNotice, postNotice, readNotifySettings, readToken, remoteSessionUrl, sessionName, type Notice, type NotifySettings } from '../src/phone-push/ntfy.ts';
+import { PROJECT_ROOT } from '../src/core/config.ts';
+import { alertServer, clearServerAlert, main as serverAlertMain, RESTART_LOOP_MINUTES } from '../scripts/phone-push/server-alert.ts';
+import { planNotice, sessionName, type Notice, type NotifySettings, notifyAfterStop } from '../src/phone-push/ntfy.ts';
 
 const SETTINGS: NotifySettings = { url: 'http://127.0.0.1:2586', topic: 'secretary-test', title: '{session}', priority: 4, click: null, tokenFile: null, timeoutMs: 2500 };
 /** An environment without the tests' no-model mark (only for planNotice, which never sends). */
@@ -18,104 +19,7 @@ const write = (file: string, text = ''): string => (writeFile(file, text), file)
 
 // ---- the first line ---------------------------------------------------------------------------------------------------
 
-test('first line: the conclusion line, markdown marks off', () => {
-  assert.equal(firstLine('끝났어요. 시험 모두 통과.\n\n자세히는 아래.'), '끝났어요. 시험 모두 통과.');
-  assert.equal(firstLine('## **결론**: `npm test` 통과\n본문'), '결론: npm test 통과');
-  assert.equal(firstLine('- 첫 항목 [문서](https://x.y/z) 확인\n- 둘째'), '첫 항목 문서 확인');
-  assert.equal(firstLine('1. 하나\n2. 둘'), '하나');
-  assert.equal(firstLine('\n\n---\n```\n실제 결론 *강조* 줄\n'), '실제 결론 강조 줄');
-});
-
-test('first line: quoted head lines (이어서 and the like) are passed over; quotes only give the first', () => {
-  assert.equal(firstLine('> 이어서: 어제 하던 알림 일.\n\n알림 코드 다 됐어요.\n다음 행동 및 순서: 없음'), '알림 코드 다 됐어요.');
-  assert.equal(firstLine('> 🎤 받은 말: "상태 알려줘"\n> 이어서: x\n서버 둘 다 켜져 있어요.'), '서버 둘 다 켜져 있어요.');
-  assert.equal(firstLine('> 인용만 있는 답'), '인용만 있는 답');
-  assert.equal(firstLine(''), '');
-  assert.equal(firstLine('```\n```'), '');
-});
-
-test('first line: cut to about 200 characters', () => {
-  const long = '가'.repeat(500);
-  const out = firstLine(long);
-  assert.equal([...out].length, 200);
-  assert.ok(out.endsWith('…'));
-  assert.equal(firstLine('a'.repeat(200)), 'a'.repeat(200));
-});
-
 // ---- settings ---------------------------------------------------------------------------------------------------------
-
-/** The phone-push section of this-secretary.local.json (core/this-secretary.ts). */
-const pp = (v: unknown) => JSON.stringify({ 'phone-push': v });
-
-test('settings: no file is nothing (no problem); enabled false is nothing; a bad file is nothing with the reason', () => {
-  const root = tempDir('notify-');
-  const file = path.join(root, 'this-secretary.local.json');
-  assert.deepEqual(readNotifySettings(root), { settings: null, problem: null });
-  write(file, pp({ url: 'http://127.0.0.1:2586', topic: 't', enabled: false }));
-  assert.deepEqual(readNotifySettings(root), { settings: null, problem: null });
-  write(file, pp({ url: 'ftp://x', topic: 'bad topic!' }));
-  const bad = readNotifySettings(root);
-  assert.equal(bad.settings, null);
-  assert.match(bad.problem!, /url/);
-  assert.match(bad.problem!, /topic/);
-  write(file, '{ not json');
-  assert.match(readNotifySettings(root).problem!, /못 읽음/);
-});
-
-test('settings: defaults, trailing slash off, token file from the root', () => {
-  const root = tempDir('notify-');
-  const file = path.join(root, 'this-secretary.local.json');
-  write(file, pp({ url: 'http://127.0.0.1:2586/', topic: 'secretary-a', tokenFile: 'keys/ntfy.env', priority: 9 }));
-  const { settings, problem } = readNotifySettings(root);
-  assert.deepEqual(settings, { url: 'http://127.0.0.1:2586', topic: 'secretary-a', title: '{session}', priority: 4, click: 'session', tokenFile: path.join(root, 'keys', 'ntfy.env'), timeoutMs: 2500 });
-  assert.match(problem!, /priority=9 무시/);
-  // click: this session's conversation (the default), a fixed https address, or nothing; anything else is told and left at the default.
-  const clickOf = (click: unknown) => (write(file, pp({ url: 'http://127.0.0.1:2586', topic: 't', click })), readNotifySettings(root));
-  assert.equal(clickOf('https://claude.ai/code').settings?.click, 'https://claude.ai/code');
-  assert.equal(clickOf(false).settings?.click, null);
-  assert.equal(clickOf('session').settings?.click, 'session');
-  const bad = clickOf('javascript:alert(1)');
-  assert.equal(bad.settings?.click, 'session');
-  assert.match(bad.problem!, /click=.* 무시/);
-  // A file PowerShell wrote with a BOM reads the same.
-  write(file, `﻿${pp({ url: 'http://127.0.0.1:2586', topic: 't', priority: 5 })}`);
-  assert.equal(readNotifySettings(root).settings?.priority, 5);
-});
-
-test('click: this session’s Remote Control conversation from Claude Code’s session files, else the app’s code page', () => {
-  const dir = tempDir('notify-sessions-');
-  write(path.join(dir, '111.json'), JSON.stringify({ pid: 111, sessionId: 'other', bridgeSessionId: 'session_01Other' }));
-  write(path.join(dir, '222.json'), JSON.stringify({ pid: 222, sessionId: 's-remote', bridgeSessionId: 'session_01XVbCmomk4GahT8X8tuGrt8' }));
-  write(path.join(dir, '333.json'), JSON.stringify({ pid: 333, sessionId: 's-local' }));
-  write(path.join(dir, '444.json'), JSON.stringify({ pid: 444, sessionId: 's-odd', bridgeSessionId: 'session_x/../evil' }));
-  write(path.join(dir, 'broken.json'), '{');
-  assert.equal(remoteSessionUrl('s-remote', dir), 'https://claude.ai/code/session_01XVbCmomk4GahT8X8tuGrt8');
-  assert.equal(remoteSessionUrl('s-local', dir), null);
-  assert.equal(remoteSessionUrl('s-odd', dir), null);
-  assert.equal(remoteSessionUrl(undefined, dir), null);
-  assert.equal(remoteSessionUrl('s-remote', path.join(dir, 'none')), null);
-  const session = { ...SETTINGS, click: 'session' };
-  assert.equal(clickUrl(session, 's-remote', dir), 'https://claude.ai/code/session_01XVbCmomk4GahT8X8tuGrt8');
-  assert.equal(clickUrl(session, 's-local', dir), 'https://claude.ai/code');
-  assert.equal(clickUrl({ ...SETTINGS, click: 'https://x.example/y' }, 's-remote', dir), 'https://x.example/y');
-  assert.equal(clickUrl(SETTINGS, 's-remote', dir), undefined);
-  // The plan carries it to the sender.
-  const plan = planNotice({ session_id: 's-remote', hook_event_name: 'Stop' }, { answer: '끝.' }, { ...ON, settings: session, sessionsDir: dir });
-  assert.ok('notice' in plan);
-  assert.deepEqual(plan.notice, { title: '비서', message: '끝.', click: 'https://claude.ai/code/session_01XVbCmomk4GahT8X8tuGrt8' });
-});
-
-test('token: the file alone or its NTFY_TOKEN line; none otherwise', () => {
-  const root = tempDir('notify-');
-  const a = write(path.join(root, 'a.env'), 'tk_abc123\n');
-  const b = write(path.join(root, 'b.env'), '# ntfy\nNTFY_TOKEN="tk_xyz"\n');
-  const c = write(path.join(root, 'c.env'), 'OTHER=1\n');
-  assert.equal(readToken(a), 'tk_abc123');
-  assert.equal(readToken(b), 'tk_xyz');
-  assert.equal(readToken(c), null);
-  assert.equal(readToken(path.join(root, 'none.env')), null);
-  assert.equal(readToken(null), null);
-});
 
 // ---- when it is sent --------------------------------------------------------------------------------------------------
 
@@ -134,21 +38,11 @@ test('plan: the answer the checks read, titled with the session name (else 비�
   assert.equal(sessionName(path.join(root, 'none.jsonl')), null);
 });
 
-test('plan: nothing for a turn sent back, a subagent, no settings, an empty answer, a feature turned off', () => {
-  const skip = (p: ReturnType<typeof planNotice>) => ('skip' in p ? p.skip : 'sent');
-  const input = { session_id: 's', hook_event_name: 'Stop' };
-  assert.equal(skip(planNotice(input, { block: '[답변 검사·Stop 훅] …', answer: '영어 답' }, { ...ON, settings: SETTINGS })), 'turn sent back');
-  assert.equal(skip(planNotice({ ...input, agent_id: 'a1' }, { answer: 'x' }, { ...ON, settings: SETTINGS })), 'not the main session');
-  assert.equal(skip(planNotice({ ...input, hook_event_name: 'SubagentStop' }, { answer: 'x' }, { ...ON, settings: SETTINGS })), 'not the main session');
-  assert.equal(skip(planNotice(input, { answer: 'x' }, { ...ON, settings: null })), 'no settings');
-  assert.equal(skip(planNotice(input, { answer: '' }, { ...ON, settings: SETTINGS })), 'empty answer');
-  const off = tempDir('notify-off-');
-  write(path.join(off, 'features.json'), JSON.stringify({ features: [{ id: 'phone-push', enabled: false }] }));
-  assert.equal(skip(planNotice(input, { answer: 'x' }, { ...ON, settings: SETTINGS, root: off })), 'feature off');
-  // A copy without the settings file (this test copy has none) sends nothing.
-  assert.equal(skip(planNotice(input, { answer: 'x' }, { ...ON, root: tempDir('notify-none-') })), 'no settings');
-});
+// ---- the POST ---------------------------------------------------------------------------------------------------------
 
+// ---- the server's stuck states (scripts/phone-push/server-alert.ts, called by scripts/remote-server/remote-server.ps1) -------
+
+// [늘 남김] 없으면 놓치는 실수: 시험을 돌릴 때 실제 폰 알림이 보내진다.
 test('in tests nothing is ever handed to the sender, settings or not', () => {
   assert.ok(process.env[NO_MODEL_ENV], 'test/env.ts sets the mark');
   let launched = 0;
@@ -165,67 +59,43 @@ test('in tests nothing is ever handed to the sender, settings or not', () => {
   assert.match(fs.readFileSync(log, 'utf8'), /알림 준비 실패: boom\r?\n$/);
 });
 
-// ---- the POST ---------------------------------------------------------------------------------------------------------
-
-/** A fake ntfy server on 127.0.0.1; `hang` never answers. */
-async function fakeServer(hang = false): Promise<{ url: string; got: { method?: string; url?: string; auth?: string; body: string }[]; close: () => Promise<void> }> {
-  const got: { method?: string; url?: string; auth?: string; body: string }[] = [];
-  const server = http.createServer((req, res) => {
-    let body = '';
-    req.setEncoding('utf8');
-    req.on('data', (c) => (body += c));
-    req.on('end', () => {
-      got.push({ method: req.method, url: req.url, auth: req.headers.authorization, body });
-      if (!hang) res.end('{"id":"x"}');
-    });
-  });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  const { port } = server.address() as AddressInfo;
-  return {
-    url: `http://127.0.0.1:${port}`,
-    got,
-    close: () =>
-      new Promise((r) => {
-        server.closeAllConnections();
-        server.close(() => r());
-      }),
-  };
-}
-
-test('post: JSON publish to the server root with topic, title, message, priority and the token', async () => {
-  const srv = await fakeServer();
-  const log = path.join(tempDir('notify-log-'), 'notify.log');
-  try {
-    const ok = await postNotice({ ...SETTINGS, url: srv.url, priority: 4 }, { title: '비서', message: '다 됐어요 ✅', click: 'https://claude.ai/code/session_01A' }, { token: 'tk_test', logFile: log });
-    assert.equal(ok, true);
-    assert.equal(srv.got.length, 1);
-    assert.equal(srv.got[0].method, 'POST');
-    assert.equal(srv.got[0].url, '/');
-    assert.equal(srv.got[0].auth, 'Bearer tk_test');
-    assert.deepEqual(JSON.parse(srv.got[0].body), { topic: 'secretary-test', title: '비서', message: '다 됐어요 ✅', priority: 4, click: 'https://claude.ai/code/session_01A' });
-    assert.equal(fs.existsSync(log), false, 'nothing logged on success');
-  } finally {
-    await srv.close();
-  }
-  assert.equal(ntfyRequest(SETTINGS, { title: 't', message: 'm' }, null).init.headers && 'Authorization' in (ntfyRequest(SETTINGS, { title: 't', message: 'm' }, null).init.headers as object), false);
-});
-
-test('post: a server that is not there or does not answer in time is one log line, never thrown', async () => {
-  const log = path.join(tempDir('notify-log-'), 'notify.log');
-  const srv = await fakeServer();
-  const gone = srv.url;
-  await srv.close();
-  assert.equal(await postNotice({ ...SETTINGS, url: gone }, { title: 't', message: 'm' }, { logFile: log }), false);
-  const hang = await fakeServer(true);
-  const started = Date.now();
-  try {
-    assert.equal(await postNotice({ ...SETTINGS, url: hang.url, timeoutMs: 300 }, { title: 't', message: 'm' }, { logFile: log }), false);
-    assert.ok(Date.now() - started < 2000, 'gives up at the timeout');
-  } finally {
-    await hang.close();
-  }
-  const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
-  assert.equal(lines.length, 2);
-  assert.match(lines[0], /ntfy 실패/);
-  assert.match(lines[1], /300ms 시간 초과/);
+// 없으면 놓치는 실수: 비서 서버가 로그인이 풀리거나 연결되지 못한 채 계속 다시 켜져도 폰에 알리지 않아 사용자는 오프라인인 까닭을 모르거나,
+// 같은 상태가 이어지는 동안 5분마다 되풀이해 보내거나, 보내지 못한 알림을 보낸 것으로 쳐서 다시 시도하지 않는다.
+test('server alert: a stuck state is sent once until it clears, a failed send is tried again, nothing without settings or in a test run', async () => {
+  const state = path.join(tempDir('server-alert-'), 'server-a', 'phone-alert.json');
+  const sent: Notice[] = [];
+  let ok = true;
+  const d = { env: LIVE_ENV, root: ON.root, settings: { ...SETTINGS, click: 'https://claude.ai/code' }, send: async (_s: NotifySettings, n: Notice) => (sent.push(n), ok) };
+  assert.match(await alertServer(state, '비서', 'login', undefined, d), /^보냄\(login\)/);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].title, '비서');
+  assert.match(sent[0].message, /로그인이 풀렸어요.*claude auth login/);
+  assert.equal(sent[0].click, 'https://claude.ai/code');
+  assert.match(await alertServer(state, '비서', 'login', undefined, d), /^이미 알림/);
+  assert.equal(sent.length, 1, 'the same state is not sent again');
+  // Another problem is new; clearing one that is not the kept one leaves it.
+  assert.match(await alertServer(state, '비서', 'restart-loop', '69', d), /^보냄\(restart-loop\)/);
+  assert.match(sent[1].message, new RegExp(`${RESTART_LOOP_MINUTES}분 넘게.*종료 코드 69`));
+  assert.equal(clearServerAlert(state, 'login'), '');
+  assert.ok(fs.existsSync(state));
+  assert.match(clearServerAlert(state, 'restart-loop'), /풀림\(restart-loop\)/);
+  assert.ok(!fs.existsSync(state));
+  assert.equal(clearServerAlert(state, 'all'), '', 'nothing to clear');
+  // The server did not take it: not kept, so the next call tries again.
+  ok = false;
+  assert.match(await alertServer(state, '비서-b', 'login', undefined, d), /^못 보냄/);
+  assert.ok(!fs.existsSync(state));
+  ok = true;
+  assert.match(await alertServer(state, '비서-b', 'login', undefined, d), /^보냄/);
+  assert.equal(sent.length, 4);
+  assert.match(clearServerAlert(state, 'all'), /풀림/);
+  assert.match(await alertServer(state, '비서', 'login', undefined, { ...d, settings: null }), /설정 없음/);
+  assert.match(await alertServer(state, '비서', 'login', undefined, { ...d, env: process.env }), /시험 실행/);
+  assert.equal(sent.length, 4);
+  // The command line: a usage problem is told, not thrown.
+  assert.equal((await serverAlertMain(['--state', state, '--problem', 'nope', '--server', 'x'], d)).ok, false);
+  assert.equal((await serverAlertMain(['--state', state, '--clear', 'all'], d)).ok, true);
+  // The server window calls it for both states, with the same restart-loop minutes.
+  const ps = fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'remote-server', 'remote-server.ps1'), 'utf8');
+  for (const k of ['server-alert.ts', "'--problem', 'login'", "'--problem', 'restart-loop'", "Clear-ServerAlert 'login'", "Clear-ServerAlert 'restart-loop'", `$restartLoopMinutes = ${RESTART_LOOP_MINUTES}`]) assert.ok(ps.includes(k), k);
 });

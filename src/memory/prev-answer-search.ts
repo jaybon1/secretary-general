@@ -6,11 +6,12 @@
  * Tried on 129 real questions (2026-11-02): question alone F1 0.25, merged with question + compressed
  * answer 0.37 (the whole answer helped less: its other topics pulled in unrelated memories).
  */
-import { tailLines } from '../hooks/context-size-nudge.ts';
-import { parseTranscriptLine } from '../log/ingest-transcript.ts';
-import { relayedLogText } from '../hooks/prompt-sender.ts';
+import { parseLine, tailLines } from '../core/transcript.ts';
+import { parseTranscriptLine } from '../log/transcript-entries.ts';
+import { relayedLogText } from '../core/prompt-sender.ts';
 import { SEM_POOL } from './recall.ts';
 import { SEARCH_TIMEOUT_MS, semanticClient, START_WAIT_MS, type SemanticHits, type SemanticSearch } from '../semantic-search/client.ts';
+import { PROMPT_HOOK_BUDGET_MS } from '../core/config.ts';
 
 /** The second search drifts more than the question alone, so its lead counts this much less. */
 export const PREV_PENALTY = 0.02;
@@ -21,8 +22,6 @@ export const PREV_PENALTY = 0.02;
  */
 const QUESTION_FEATURE = '질문마다 기억 자동 주입(질문)';
 const PREV_FEATURE = '질문마다 기억 자동 주입(질문+이전 답)';
-/** The prompt hook's time limit (.claude/settings.json UserPromptSubmit timeout 330 s) less room for the rest. */
-export const PROMPT_HOOK_BUDGET_MS = 300_000;
 
 /** How long the prompt's searches may wait for the server to come up: START_WAIT_MS, or what the hook has left. */
 export function promptWaitMs(elapsedMs = process.uptime() * 1000): number {
@@ -49,12 +48,8 @@ export function lastAnswer(transcriptPath: string, prompt: string): string {
   const lines = tailLines(transcriptPath);
   const parts: string[] = [];
   for (let i = lines.length - 1; i >= 0; i--) {
-    let o: { type?: string; isSidechain?: boolean; message?: { content?: unknown } };
-    try {
-      o = JSON.parse(lines[i]);
-    } catch {
-      continue;
-    }
+    const o = parseLine(lines[i]);
+    if (!o) continue;
     if (o.type === 'user') {
       const p = parseTranscriptLine(lines[i]);
       if (p[0]?.kind !== 'prompt') continue;

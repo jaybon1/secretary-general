@@ -8,9 +8,7 @@ node_modules/
 backups/
 
 .claude/settings.local.json
-# This PC's own settings, one section per feature (src/core/this-secretary.ts; example this-secretary.local.example.json). The separate
-# scripts/*.local.json files below were merged into it on 2026-11-10 (node src/cli.ts this-secretary-merge): their lines stay
-# until no PC has them, so a file not yet merged is never committed.
+# This PC's own settings, one section per feature (src/core/this-secretary.ts; example this-secretary.local.example.json)
 /this-secretary.local.json
 # This install's own id (src/core/secretary-id.ts): made on first use, kept across updates, never in git or a release
 .secretary-id
@@ -25,14 +23,6 @@ models/
 *.semantic-search-misses.json
 # Last install check (src/setup/setup-check.ts), read by the prompt hook
 *.db.setup-check.json
-# This PC's dashboard settings (src/dashboard/settings.ts: addresses, port, share folders)
-scripts/dashboard.local.json
-# This PC's choice of providers whose usage is read and shown (src/usage/usage-settings.ts, written by the dashboard's /settings page)
-scripts/usage.local.json
-# This PC's answer-check settings (src/mistake-guards/mistake-guard-settings.ts: the other PC's path to the results folder, check levels)
-scripts/mistake-guards.local.json
-# This PC's end notice settings (src/phone-push/ntfy.ts: ntfy server, topic, token file)
-scripts/phone-push.local.json
 
 # Skills: the real skill folders are .agents/skills/<name>/ (in git). Claude Code reads .claude/skills, one link to
 # .agents/skills; .agents/skills also holds links to the common skills (common-*, workspaces/_skills, from
@@ -43,3 +33,6 @@ scripts/phone-push.local.json
 /.agents/skills/common-*
 /.agents/skills.json
 /.agents/skills/ego-browser
+
+# CPU profiles node --cpu-prof writes into the folder it ran in (not ours; test:changed would take one as a change and run every test)
+*.cpuprofile

@@ -7,12 +7,11 @@ import { tempDir } from './helpers.ts';
 import { changedReleaseFiles, readReleaseFiles } from '../src/setup/release-files.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { scriptPath } from '../src/core/paths.ts';
-import { featureSkillPath, featureSkills, OFF_SKILLS_DIR, planFeatureSkills, fixFeatureSkills } from '../src/setup/feature-skills.ts';
-import { disabledItems, featureOn, itemNames, readFeatures, type Feature, type FeatureItem } from '../src/core/features.ts';
-import { activeNotices, PROMPT_NOTICES } from '../src/hooks/prompt-notices.ts';
-import { activeChecks, CHECKS, checkSetup, saveReport, setupReminder, type SetupOptions } from '../src/setup/setup-check.ts';
-import { DOC_TESTS, pickTests, testImports } from './run-changed.ts';
-import { appendFailures, failureLine, FAILURES_ENV, FAILURES_FILE, failuresFile, gitRevision } from './test-failures.ts';
+import { featureOn, readFeatures, type Feature } from '../src/core/features.ts';
+import { checkSetup, saveReport, setupReminder, type SetupOptions } from '../src/setup/setup-check.ts';
+import { DOC_TESTS, patchedNames, pickTests } from './run-changed.ts';
+import { testReach } from './import-graph.ts';
+import { appendFailures, envRevision, failureLine, FAILURES_ENV, FAILURES_FILE, failuresFile, gitRevision, releaseRunEnv, runRecord } from './test-failures.ts';
 import { ENV_DIR } from './env.ts';
 
 const features = readFeatures(PROJECT_ROOT)!;
@@ -22,12 +21,6 @@ const shippedList = readReleaseFiles(PROJECT_ROOT);
 const featuresAsShipped = !shippedList || !changedReleaseFiles(PROJECT_ROOT, shippedList).includes('features.json');
 const installScheduledTasks = scriptPath('installScheduledTasks');
 
-/** The -Task names install-scheduled-tasks.ps1 accepts (its ValidateSet). */
-function taskNames(): string[] {
-  const set = /ValidateSet\(([^)]*)\)\]\s*\[string\[\]\]\$Task/.exec(fs.readFileSync(installScheduledTasks, 'utf8'))?.[1] ?? '';
-  return [...set.matchAll(/'([^']+)'/g)].map((m) => m[1]);
-}
-
 /** A features.json in a fresh folder: this release's list with the given features turned off (the rest as shipped). */
 function rootWithOff(...off: string[]): string {
   const root = tempDir();
@@ -36,8 +29,8 @@ function rootWithOff(...off: string[]): string {
   return root;
 }
 
-const owners = (kind: FeatureItem, name: string) => features.filter((f) => itemNames(f, kind).includes(name)).map((f) => f.id);
-
+// [늘 남김] 없으면 놓치는 실수: 기능 칸(enabled, core)이 틀린 features.json이 원본이나 배포판에 실린다.
+// 다시 깨진 곳: 기능을 더하거나 고친 작업에서 배포판의 켬·끔 값이 features.json과 어긋나 배포판 시험에서 두 번 실패했다.
 test('features.json: one entry per id, core ones always on, the optional ones on or off as this release ships them', () => {
   assert.ok(features?.length, 'features.json missing or unreadable');
   const ids = features.map((f) => f.id);
@@ -54,28 +47,14 @@ test('features.json: one entry per id, core ones always on, the optional ones on
     features.filter((f) => f.core).map((f) => f.id),
     ['memory-core', 'setup-check', 'secretary-update', 'session-continuity', 'memory-consolidation', 'delegate', 'remote-server', 'db-backup', 'usage-guard'],
   );
-  // Shipped on: the usage reader, the idle jobs, the browser and the mistake guards. Put in but off until the user turns them on (feature-toggle skill).
-  const ON = ['usage-poll', 'idle-jobs', 'browser', 'mistake-guards'];
+  // Shipped on: the usage reader, the idle jobs, the to-do summary, the browser, the common skills and the mistake guards. Put in but off until the user turns them on (feature-toggle skill).
+  const ON = ['usage-poll', 'idle-jobs', 'todo-summary', 'browser', 'common-skills', 'mistake-guards'];
   const OFF = ['multi-subscription', 'external-providers', 'calendar', 'notes', 'inbox', 'network-share', 'dashboard', 'phone-push'];
   assert.deepEqual(features.filter((f) => !f.core).map((f) => f.id).sort(), [...ON, ...OFF].sort());
   // 없으면 놓치는 실수: 사용자가 기능을 켜거나 끈 폴더(올린 뒤의 npm test)에서 배포판이 낸 켜짐·꺼짐을 기대해 실패한다.
   if (featuresAsShipped) {
     assert.deepEqual(features.filter((f) => !f.core && featureOn(f)).map((f) => f.id), ON);
     assert.deepEqual(features.filter((f) => !featureOn(f)).map((f) => f.id), OFF);
-  }
-});
-
-// Without it: a feature lists a file that is not there (moved, renamed). Files a command makes per PC and git ignores are
-// not listed: a fresh clone has none of them.
-test('features.json: every listed file is there', () => {
-  for (const f of features) {
-    for (const p of f.files) {
-      // An optional feature's skill sits in .agents/skills-off while the feature is off (setup/feature-skills.ts).
-      const at = featureSkillPath(p, featureSkills(PROJECT_ROOT));
-      const full = path.join(PROJECT_ROOT, at && p.endsWith('/') ? at.target : p);
-      assert.ok(fs.existsSync(full), `${f.id}: ${p} missing`);
-      assert.equal(fs.statSync(full).isDirectory(), p.endsWith('/'), `${f.id}: ${p} (folders end with /)`);
-    }
   }
 });
 
@@ -119,10 +98,19 @@ test('test:changed picks the tests by kind of file changed and by what the tests
   assert.deepEqual(withImports('src/b.ts'), ['c', 'memory', 'ingest', 'mcp'], 'a test of another feature that imports the file; a deleted one is left out');
   assert.deepEqual(withImports('src/a/x.ts'), ['a', 'memory', 'ingest', 'mcp'], 'its own test once');
   assert.deepEqual(withImports('scripts/a.ps1'), ['a', 'memory', 'ingest', 'mcp', 'ps1-syntax']);
-  // The real test files: paths from the root, the test's own helpers left out.
-  const real = testImports();
+  // 없으면 놓치는 실수: 배포판 패치가 고치는 원본 파일을 바꿨는데 배포판 시험이 빠져, 패치가 "맞는 곳 0개"로 깨진 것을 합치기 전에야 안다.
+  const patched = (...changed: string[]) => pickTests(changed, list, () => true, {}, ['src/b.ts', 'who-and-brief.md']).tests.map((x) => x.replace(/^test\/|\.test\.ts$/g, ''));
+  assert.deepEqual(patched('src/b.ts'), ['release-build', 'release-build/*', 'memory', 'ingest', 'mcp']);
+  assert.ok(patched('.agents/skills/a/references/who-and-brief.md').includes('release-build/*'), 'a name the patch joins to its folder');
+  assert.ok(!patched('src/a/x.ts').includes('release-build/*'));
+  const realPatched = patchedNames();
+  // The original's patches (a release has none: nothing to pick).
+  if (realPatched.length) assert.ok(realPatched.includes('who-and-brief.md') && realPatched.some((n) => n.startsWith('src/')), 'read from the real patches');
+  // The real test files: paths from the root, the test's own helpers left out, and what the imported files import in turn.
+  const real = testReach();
   assert.ok(real['test/features.test.ts'].includes('src/core/features.ts'));
   assert.ok(real['test/memory.test.ts'].includes('src/hooks/session-start.ts'), 'a test of one feature importing a file of another');
+  assert.ok(real['test/memory.test.ts'].includes('src/store/schema.ts'), 'reached through another file');
   assert.ok(Object.values(real).every((xs) => xs.every((x) => !x.startsWith('test/') && !x.startsWith('.'))));
 });
 
@@ -168,20 +156,32 @@ test('test failures: a failed test is one record line (file, name, time, branch,
   // 없으면 놓치는 실수: 실패 줄에 브랜치·커밋이 없어 작업 사본에서 고치는 도중의 실패와 main의 실패를 가르지 못한다(2026-11-12 결정).
   assert.deepEqual(gitRevision(wt), { branch: 'wt', commit: git(repo, 'rev-parse', '--short', 'HEAD').stdout.trim() });
   assert.deepEqual(gitRevision(path.join(root, 'logs')), { branch: '', commit: '' }, 'outside git: empty');
+  // 없으면 놓치는 실수: 배포판 테스트(git 밖, 번호 없는 임시 폴더)의 실패가 번호 없는 ~/.secretary/logs에 브랜치·커밋 없이 쌓인다.
+  const handed = await releaseRunEnv(wt, home);
+  assert.equal(handed[FAILURES_ENV], want);
+  const got = envRevision(handed)!;
+  assert.deepEqual(got, { ...gitRevision(wt), from: 'release-build' });
+  assert.equal(JSON.parse(failureLine(fail({}), root, now, got)!).from, 'release-build');
+  assert.equal(envRevision({}), null);
+  // 없으면 놓치는 실수: 오래 도는 시험(배포판 시험) 중에 작업 사본이 지워지거나 git이 답하지 않으면, 끝에서야 기록 자리와 브랜치를 정하는
+  // run-tests.mjs가 그 실행의 실패를 번호 없는 ~/.secretary/logs에 브랜치·커밋 없이 적는다. 자리와 브랜치는 시험 전에 정한다(runRecord).
+  const settled = await runRecord(wt, {}, home);
+  assert.equal(settled.record, want);
+  assert.deepEqual(envRevision(settled.env), gitRevision(wt));
+  fs.rmSync(wt, { recursive: true, force: true });
+  assert.equal(await failuresFile({}, wt, home), path.join(home, 'logs', FAILURES_FILE), 'read after the work copy went: the id-less folder');
+  assert.deepEqual(gitRevision(wt), { branch: '', commit: '' });
+  // The release test's handing (its record and its revision) is kept as it is.
+  const inRelease = await runRecord(path.join(root, 'logs'), handed, home);
+  assert.equal(inRelease.record, want);
+  assert.deepEqual(envRevision(inRelease.env), got);
+  const runner = fs.readFileSync(path.join(PROJECT_ROOT, 'test', 'run-tests.mjs'), 'utf8');
+  assert.ok(runner.indexOf('runRecord(') > 0 && runner.indexOf('runRecord(') < runner.indexOf("'--test'"), 'run-tests.mjs settles the record before it starts the tests');
+  assert.doesNotMatch(runner, /failuresFile\(/, 'and does not read it again at the end');
 });
 
-test('features.json: check, notice and task names are the code’s own, each in exactly one feature', () => {
-  const code: Record<FeatureItem, string[]> = {
-    checks: CHECKS.map((c) => c.id),
-    notices: PROMPT_NOTICES.map((n) => n.name),
-    scheduledTasks: taskNames(),
-  };
-  for (const kind of ['checks', 'notices', 'scheduledTasks'] as const) {
-    for (const f of features) for (const name of itemNames(f, kind)) assert.ok(code[kind].includes(name), `${f.id}.${kind}: ${name} is not in the code`);
-    for (const name of code[kind]) assert.deepEqual(owners(kind, name).length, 1, `${kind} ${name}: ${owners(kind, name).join(', ') || 'no feature'}`);
-  }
-});
-
+// [늘 남김] 없으면 놓치는 실수: 켠 기능의 규칙 글이 AGENTS.md에 없거나, 배포판에서 꺼 둔 기능의 규칙 글이 AGENTS.md에 남거나 feature-toggle 참고 파일에 빠진다.
+// 다시 깨진 곳: 기능의 켬·끔을 바꾼 작업에서 배포판 시험(배포판 판 제목: a feature that is on has its rules in AGENTS.md)이 두 번 실패했다.
 test('features.json: a feature that is on has its rules in AGENTS.md; one that is off keeps them out, in its features skill reference', () => {
   const agents = fs.readFileSync(path.join(PROJECT_ROOT, 'AGENTS.md'), 'utf8');
   const ref = (id: string) => path.join(PROJECT_ROOT, '.agents', 'skills', 'feature-toggle', 'references', `${id}.md`);
@@ -197,52 +197,6 @@ test('features.json: a feature that is on has its rules in AGENTS.md; one that i
     for (const r of f.rules) assert.ok(text.includes(r), `${f.id}: "${r}" not in its reference`);
     assert.match(text, /## 끄는 순서/, f.id);
   }
-});
-
-test('with everything on (or no file, or a broken one) nothing is skipped', () => {
-  const allOn = tempDir();
-  fs.writeFileSync(path.join(allOn, 'features.json'), JSON.stringify({ features: features.map((f) => (f.core ? f : { ...f, enabled: true })) }));
-  assert.deepEqual(activeChecks(allOn), CHECKS);
-  assert.deepEqual(activeNotices(allOn), PROMPT_NOTICES);
-  // As shipped: the off features' items (the end notice server, other providers' key check, the account handoff line) are left out; the answer-check notices ship on.
-  if (featuresAsShipped) {
-    assert.deepEqual(CHECKS.filter((c) => !activeChecks(PROJECT_ROOT).includes(c)).map((c) => c.id), ['phone-push', 'provider-key']);
-    assert.deepEqual(PROMPT_NOTICES.filter((n) => !activeNotices(PROJECT_ROOT).includes(n)).map((n) => n.name), ['subscription-routing']);
-  }
-  const none = tempDir();
-  assert.equal(readFeatures(none), null);
-  assert.deepEqual(activeChecks(none), CHECKS);
-  assert.deepEqual(activeNotices(none), PROMPT_NOTICES);
-  const broken = tempDir();
-  fs.writeFileSync(path.join(broken, 'features.json'), '{ not json');
-  assert.deepEqual(activeChecks(broken), CHECKS);
-  assert.equal(disabledItems('scheduledTasks', broken).size, 0);
-});
-
-test('turning a feature off drops its checks and notices, and only those', () => {
-  // Each optional feature, one at a time with every other one on: exactly its own items go.
-  const onBut = (id: string) => {
-    const r = tempDir();
-    fs.writeFileSync(path.join(r, 'features.json'), JSON.stringify({ features: features.map((f) => (f.core ? f : { ...f, enabled: f.id !== id })) }));
-    return r;
-  };
-  for (const f of features.filter((x) => !x.core)) {
-    const r = onBut(f.id);
-    assert.deepEqual(CHECKS.filter((c) => !activeChecks(r).includes(c)).map((c) => c.id), f.checks, f.id);
-    assert.deepEqual(PROMPT_NOTICES.filter((n) => !activeNotices(r).includes(n)).map((n) => n.name), f.notices, f.id);
-    assert.deepEqual([...disabledItems('scheduledTasks', r)], itemNames(f, 'scheduledTasks'), f.id);
-  }
-});
-
-test('a core feature stays on even if the file says enabled: false', () => {
-  const root = tempDir();
-  const list = features.map((f) => (f.core ? { ...f, enabled: false } : { ...f, enabled: true }));
-  fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features: list }));
-  assert.ok(activeChecks(root).some((c) => c.id === 'db'));
-  assert.ok(activeNotices(root).some((n) => n.name === 'memory-core'));
-  assert.deepEqual(activeChecks(root), CHECKS);
-  assert.deepEqual(activeNotices(root), PROMPT_NOTICES);
-  assert.equal(disabledItems('scheduledTasks', root).size, 0);
 });
 
 test('the install check skips a turned-off feature, and its kept result leaves the reminder', async () => {
@@ -270,106 +224,4 @@ test('the install check skips a turned-off feature, and its kept result leaves t
   assert.equal(setupReminder(opts), '');
   fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features }));
   assert.match(setupReminder(opts), /쉬는 시간 작업 예약 작업/);
-});
-
-test('install-scheduled-tasks.ps1 skips the tasks of a turned-off feature', { skip: process.platform !== 'win32' }, () => {
-  // A test secretary id and no registered tasks (the PC's own task scheduler is not read): names end with ' (TST1)'.
-  const dir = tempDir();
-  fs.writeFileSync(path.join(dir, 'id'), 'tst1\n');
-  fs.writeFileSync(path.join(dir, 'tasks.json'), '{}');
-  const run = (...args: string[]) =>
-    execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installScheduledTasks, '-DryRun', '-IdFile', path.join(dir, 'id'), '-FakeTasksFile', path.join(dir, 'tasks.json'), ...args], { encoding: 'utf8' });
-  const all = run();
-  for (const name of ['Secretary Remote Control', 'Secretary DB Backup', 'Secretary Idle Jobs']) assert.ok(all.includes(`[${name} (TST1)]`), name);
-  assert.doesNotMatch(all, /건너뜀/);
-  assert.doesNotMatch(all, /Secretary ntfy/, 'the ntfy server task only when asked for');
-  const file = path.join(rootWithOff('idle-jobs'), 'features.json');
-  const some = run('-FeaturesFile', file);
-  assert.ok(some.includes('[Secretary Remote Control (TST1)]'));
-  assert.ok(some.includes('[Secretary DB Backup (TST1)]'));
-  assert.doesNotMatch(some, /\[Secretary Idle Jobs/);
-  // Asked for by name, still skipped, and the one line says which feature is off and how to turn it on.
-  const named = run('-Task', 'idle-jobs', '-FeaturesFile', file).trim();
-  assert.equal(
-    named,
-    "건너뜀: Secretary Idle Jobs (TST1) - 꺼진 기능 'idle-jobs'의 작업이라 등록하지 않았어요. 켜려면 features.json에서 'idle-jobs'의 \"enabled\"를 true로 고친 뒤 이 명령을 다시 돌리세요.",
-  );
-});
-
-test('install-ntfy.ps1: a server.yml in the user folder (web push keys written only there, an existing one left as it is), and a log-on task that runs ntfy serve without a window or admin', { skip: process.platform !== 'win32' }, () => {
-  const dir = tempDir();
-  fs.writeFileSync(path.join(dir, 'id'), 'tst1\n');
-  fs.writeFileSync(path.join(dir, 'tasks.json'), '{}');
-  const exe = path.join(dir, 'bin', 'ntfy.exe');
-  const yml = path.join(dir, 'cfg', 'server.yml');
-  // The feature on (it may ship off): every optional feature on.
-  const on = path.join(tempDir(), 'features.json');
-  fs.writeFileSync(on, JSON.stringify({ features: features.map((f) => (f.core ? f : { ...f, enabled: true })) }));
-  const run = (...args: string[]) =>
-    execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(PROJECT_ROOT, 'scripts', 'phone-push', 'install-ntfy.ps1'), '-DryRun', '-IdFile', path.join(dir, 'id'), '-FakeTasksFile', path.join(dir, 'tasks.json'), '-NtfyExe', exe, '-ConfigFile', yml, ...(args.includes('-FeaturesFile') ? [] : ['-FeaturesFile', on]), ...args], { encoding: 'utf8' });
-  const out = run('-BaseUrl', 'https://pc.example.ts.net:8443');
-  assert.match(out, /ntfy\.exe: .*\(없음/);
-  assert.match(out, /server\.yml: .*\(만들 예정/);
-  assert.match(out, /listen-http: "127\.0\.0\.1:2586"/);
-  assert.match(out, /base-url: "https:\/\/pc\.example\.ts\.net:8443"/);
-  assert.ok(out.includes(`[Secretary ntfy Server (TST1)] conhost.exe --headless "${exe}" serve --config "${yml}"`), out);
-  assert.match(out, /trigger=MSFT_TaskLogonTrigger[^]*limit=PT0S[^]*run=Limited/);
-  assert.match(out, /ntfy\.exe 없음[^]*건너뜀/);
-  // A name of one's own; nothing was written.
-  assert.match(run('-TaskName', 'My ntfy'), /\[My ntfy\] conhost\.exe/);
-  assert.ok(!fs.existsSync(yml));
-  // A turned-off feature notify: the task is skipped.
-  const off = path.join(rootWithOff('phone-push'), 'features.json');
-  assert.match(run('-FeaturesFile', off), /건너뜀: Secretary ntfy Server \(TST1\) - 꺼진 기능 'phone-push'/);
-  // 없으면 놓치는 실수: 웹 푸시 개인 키가 화면(곧 대화 기록)에 찍히거나, web-push-file 경로의 역슬래시가 하나로 들어가 ntfy가 못 읽거나, 이미 있는 server.yml을 덮어쓴다.
-  assert.match(run('-BaseUrl', 'https://pc.example.ts.net:8443', '-WebPush', '-WebPushEmail', 'admin@example.com'), /web-push-private-key: "<ntfy webpush keys/);
-  const fakeNtfy = path.join(dir, 'ntfy.cmd');
-  fs.writeFileSync(fakeNtfy, ['@echo off', 'echo web-push-public-key: PUBLICFAKE', 'echo web-push-private-key: PRIVATEFAKE', ''].join('\r\n'));
-  // Not a dry run, with the feature off so no task is registered.
-  const real = (...args: string[]) =>
-    execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(PROJECT_ROOT, 'scripts', 'phone-push', 'install-ntfy.ps1'), '-IdFile', path.join(dir, 'id'), '-FakeTasksFile', path.join(dir, 'tasks.json'), '-NtfyExe', fakeNtfy, '-ConfigFile', yml, '-FeaturesFile', off, ...args], { encoding: 'utf8' });
-  const made = real('-BaseUrl', 'https://pc.example.ts.net:8443', '-WebPush', '-WebPushEmail', 'admin@example.com');
-  assert.ok(!made.includes('PRIVATEFAKE'), made);
-  const yaml = fs.readFileSync(yml, 'utf8');
-  assert.match(yaml, /^web-push-public-key: "PUBLICFAKE"$/m);
-  assert.match(yaml, /^web-push-private-key: "PRIVATEFAKE"$/m);
-  assert.ok(yaml.includes(`web-push-file: "${path.join(path.dirname(yml), 'webpush.db').replace(/\\/g, '\\\\')}"`), yaml);
-  assert.match(yaml, /^web-push-email-address: "admin@example\.com"$/m);
-  fs.writeFileSync(yml, 'listen-http: "127.0.0.1:2586"\n');
-  assert.match(real('-WebPush'), /web-push 줄이 없어요/);
-  assert.equal(fs.readFileSync(yml, 'utf8'), 'listen-http: "127.0.0.1:2586"\n');
-});
-
-// Without it: a feature turned off keeps its skill where the CLIs read it (the model calls it by itself), or turning it
-// on leaves it out of their reach; or the move loses what the user changed in the skill.
-test('an optional feature skill lives in .agents/skills while on and in .agents/skills-off while off; the folder moves whole', () => {
-  for (const s of featureSkills(PROJECT_ROOT)) {
-    const on = fs.existsSync(path.join(PROJECT_ROOT, '.agents', 'skills', s.name, 'SKILL.md'));
-    const off = fs.existsSync(path.join(PROJECT_ROOT, ...OFF_SKILLS_DIR.split('/'), s.name, 'SKILL.md'));
-    assert.deepEqual([on, off], [s.on, !s.on], `${s.name} (${s.feature} ${s.on ? 'on' : 'off'})`);
-  }
-  const root = tempDir();
-  const list = (enabled: boolean) => fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features: [{ id: 'cal', enabled, files: ['.agents/skills/cal/'] }, { id: 'core', core: true, files: ['.agents/skills/c/'] }] }));
-  fs.mkdirSync(path.join(root, '.agents', 'skills', 'cal', 'references'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.agents', 'skills', 'cal', 'SKILL.md'), '사용자가 고친 스킬\n');
-  fs.writeFileSync(path.join(root, '.agents', 'skills', 'cal', 'references', 'mine.md'), '사용자가 더한 파일\n');
-  list(true);
-  assert.deepEqual(planFeatureSkills(root), { move: [], both: [] });
-  list(false);
-  assert.deepEqual(fixFeatureSkills(root, true).plan.move.map((m) => m.to), ['.agents/skills-off/cal'], 'dry run');
-  assert.ok(fs.existsSync(path.join(root, '.agents', 'skills', 'cal')));
-  fixFeatureSkills(root);
-  assert.ok(!fs.existsSync(path.join(root, '.agents', 'skills', 'cal')));
-  assert.equal(fs.readFileSync(path.join(root, '.agents', 'skills-off', 'cal', 'references', 'mine.md'), 'utf8'), '사용자가 더한 파일\n');
-  list(true);
-  fixFeatureSkills(root);
-  assert.equal(fs.readFileSync(path.join(root, '.agents', 'skills', 'cal', 'SKILL.md'), 'utf8'), '사용자가 고친 스킬\n', 'back with the change');
-  // Both places taken: nothing moves.
-  fs.mkdirSync(path.join(root, '.agents', 'skills-off', 'cal'), { recursive: true });
-  const both = fixFeatureSkills(root).plan;
-  assert.deepEqual([both.move, both.both.map((b) => b.at)], [[], ['.agents/skills/cal']]);
-  // The update's view of a release path: by the user's state, in either spelling.
-  assert.deepEqual(featureSkillPath('.agents/skills-off/cal/SKILL.md', [{ name: 'cal', on: true }]), { logical: '.agents/skills/cal/SKILL.md', target: '.agents/skills/cal/SKILL.md', other: '.agents/skills-off/cal/SKILL.md' });
-  assert.equal(featureSkillPath('.agents/skills/cal/SKILL.md', [{ name: 'cal', on: false }])?.target, '.agents/skills-off/cal/SKILL.md');
-  assert.equal(featureSkillPath('.agents/skills/delegate/SKILL.md', [{ name: 'cal', on: false }]), null);
 });

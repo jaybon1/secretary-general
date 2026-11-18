@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -13,17 +12,15 @@ import {
   PURGE_REASON,
   purgeHook,
   purgeNotice,
-  QUARANTINE_FILE,
-  quarantinePath,
-  restorePurged,
   type HookAction,
   type HookDeps,
   type PurgePlan,
   type PurgeSpec,
 } from '../src/log/purge.ts';
+import { QUARANTINE_FILE, quarantinePath, restorePurged } from '../src/log/log-delete.ts';
 import { runPreview } from '../src/log/purge-initials.ts';
 import type { LogEntry, Store } from '../src/store/store.ts';
-import { tempDir, tempStore } from './helpers.ts';
+import { tempStore } from './helpers.ts';
 
 /** A marker only the "bad" rows hold, to prove their text went nowhere it should not. */
 const BAD = 'ZQXBADMARK';
@@ -67,8 +64,9 @@ function conversation(): { s: Store; id: (uuid: string) => number; rows: Row[] }
   return { s, id, rows };
 }
 
-const uuids = (plan: PurgePlan | { error: string }) => ('error' in plan ? plan.error : plan.rows.map((r) => r.message_uuid));
 const sessionUuids = (s: Store, sid: string) => s.sessionTail(sid, 50).map((e) => e.message_uuid);
+
+const uuids = (plan: PurgePlan | { error: string }) => ('error' in plan ? plan.error : plan.rows.map((r) => r.message_uuid));
 
 // [늘 남김] 없으면 놓치는 실수: 지우라는 말이 섞인 보통 대화가 삭제 문구로 읽혀 대화가 지워진다(대화 지우기).
 test('the phrase: only the whole message "비서 대화 삭제 N턴 | #번호 | #번호-#번호", spaces anywhere aside; the old "대화 지워" and anything around it are plain talk', () => {
@@ -100,6 +98,7 @@ test('the phrase: only the whole message "비서 대화 삭제 N턴 | #번호 | 
   ]) assert.equal(parsePurgeCommand(p), null, p);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 대화 지우기가 고르는 줄이 압축 요약이나 다른 세션의 줄을 넣거나, 범위가 세션을 넘어 엉뚱한 대화를 지운다.
 test('choosing rows: turns skip the compaction summary and other sessions; a turn by id; a range stays in one session', () => {
   const { s, id } = conversation();
   // Two turns back is p2, not the summary: the summary rides along inside the turn it follows.
@@ -208,17 +207,6 @@ test('the hook: the phrase gets only the preview order, the code deletes, and th
   assert.equal(purgeNotice(s), '');
 });
 
-test('a deletion run directly (purge-log --confirm) is told once on the next prompt, numbers only', () => {
-  const { s, id } = conversation();
-  const [p3, a3] = [id('p3'), id('a3')];
-  const doomed = s.remember({ kind: 'fact', content: '지울 턴의 기억', sourceLogId: p3 }).id;
-  executePurge(s, planPurge(s, { kind: 'turns', n: 1 }, { sessionId: 's1', dirs: [] }) as PurgePlan);
-  const notice = purgeNotice(s);
-  assert.match(notice, new RegExp(`<secretary-purge>.*#${p3}~#${a3}\\(2줄\\).*#${doomed}`));
-  assert.doesNotMatch(notice, new RegExp(`${BAD}|지울 턴의 기억`));
-  assert.equal(purgeNotice(s), '');
-});
-
 // [늘 남김] 없으면 놓치는 실수: 지난 코드나 다른 줄의 코드, 글 속에 섞인 코드로 대화가 지워진다(대화 지우기).
 test('the approval code: the whole message only (spaces around it aside), within 30 minutes, for the very rows and memories it was made for', async () => {
   const { s, id } = conversation();
@@ -265,6 +253,7 @@ test('the approval code: the whole message only (spaces around it aside), within
   assert.equal(s.stats().logEntries, 9);
 });
 
+// [늘 남김] 없으면 놓치는 실수: "N턴" 지우기가 삭제 문구·미리보기 답·승인 코드 줄까지 턴으로 세어 사용자가 고른 것과 다른 턴을 지운다.
 test('turn counting leaves out the delete phrase, its preview answer, the code message and its result answer', async () => {
   const { s, id } = conversation();
   const shown = preview(s, { kind: 'turns', n: 1 });
@@ -293,39 +282,6 @@ test('turn counting leaves out the delete phrase, its preview answer, the code m
   s.appendLog([row('s1', 'c4', 'user', code), row('s1', 'c5', 'assistant', result)]);
   assert.deepEqual(uuids(planPurge(s, { kind: 'turns', n: 1 }, { sessionId: 's1', dirs: [] })), ['p2', 'a2', 'sum']);
   assert.match((planPurge(s, { kind: 'turn', id: id('c5') }, { dirs: [] }) as { error: string }).error, /미리 보기 줄이라/);
-});
-
-test('a turn that ended in an error: its memories are found from the remember results in the transcript', async () => {
-  clock = Date.now() - 30_000;
-  const s = tempStore();
-  const dir = tempDir();
-  const memory = s.remember({ kind: 'fact', content: '오류 난 턴의 기억' }).id; // never linked: the Stop hook did not run
-  const t = () => at();
-  const line = (o: object) => JSON.stringify({ isSidechain: false, sessionId: 'e1', timestamp: t(), ...o });
-  fs.writeFileSync(
-    path.join(dir, 'e1.jsonl'),
-    [
-      line({ type: 'user', uuid: 'q1', parentUuid: null, message: { role: 'user', content: '앞 질문' } }),
-      line({ type: 'assistant', uuid: 'r1', parentUuid: 'q1', message: { role: 'assistant', content: [{ type: 'text', text: '앞 답' }] } }),
-      line({ type: 'user', uuid: 'q2', parentUuid: 'r1', message: { role: 'user', content: `오류 질문 ${BAD}` } }),
-      line({ type: 'assistant', uuid: 'u1', parentUuid: 'q2', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'c1', name: 'mcp__secretary__remember', input: {} }] } }),
-      line({ type: 'user', uuid: 'u2', parentUuid: 'u1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: [{ type: 'text', text: `기억 #${memory} 저장` }] }] } }),
-      line({ type: 'assistant', uuid: 'r2', parentUuid: 'u2', message: { role: 'assistant', content: [{ type: 'text', text: 'API Error' }] } }),
-      '',
-    ].join('\n'),
-  );
-  // The hook logs the transcript first (the errored turn was never logged); the preview then lists it.
-  const file = path.join(dir, 'e1.jsonl');
-  assert.match(ctx(purgeHook(s, '비서 대화 삭제 1턴', 'e1', file, noCatchUp)), /preview 1턴 --here e1/);
-  const shown = runPreview(s, { kind: 'turns', n: 1 }, { here: 'e1', dirs: [dir] });
-  assert.match(shown, new RegExp(`무효 처리할 기억\\(그 턴에 저장된 것\\) 1개:\n기억 #${memory} \\d+자 · \\d+단어 — .+$`, 'm'));
-  assert.match(done(purgeHook(s, codeIn(shown), 'e1', file, { ...noCatchUp, dirs: [dir] })), /지웠어요/);
-  assert.deepEqual(sessionUuids(s, 'e1'), ['q1', 'r1']);
-  assert.equal(s.getMemory(memory)?.invalid_reason, PURGE_REASON);
-  // Read again from the start (e.g. the offset was lost): still not logged.
-  s.deleteMeta(`ingest_offset:${file}`);
-  purgeHook(s, '비서 대화 삭제 1턴', 'e1', file, noCatchUp);
-  assert.deepEqual(sessionUuids(s, 'e1'), ['q1', 'r1']);
 });
 
 // [늘 남김] 없으면 놓치는 실수: 격리 파일을 덮어써 앞서 지운 대화를 되살릴 수 없게 된다(대화 지우기).
@@ -388,45 +344,9 @@ test('nothing that searches, injects or serves tools names the quarantine', () =
   const src = path.join(PROJECT_ROOT, 'src');
   const files = (fs.readdirSync(src, { recursive: true }) as string[]).map((f) => f.split(path.sep).join('/'));
   assert.ok(files.includes('log/purge.ts') && files.length > 40, 'the walk reaches the area folders');
-  for (const f of files.filter((f) => f.endsWith('.ts') && f !== 'log/purge.ts')) {
+  // The deletion's own files: log/log-delete.ts keeps the quarantine, log/purge.ts tells what a deletion does.
+  for (const f of files.filter((f) => f.endsWith('.ts') && f !== 'log/purge.ts' && f !== 'log/log-delete.ts')) {
     const text = fs.readFileSync(path.join(src, f), 'utf8');
     for (const word of [QUARANTINE_FILE, 'quarantined_log', 'ATTACH']) assert.ok(!text.includes(word), `${f} mentions ${word}`);
   }
-});
-
-test('cli: the phrase reaches the model with only the preview order, the preview prints a code, the code deletes and only its result reaches the model', () => {
-  const home = tempDir();
-  const db = path.join(home, 'test.db');
-  const s = conversation().s;
-  const source = s.db.location()!;
-  s.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-  s.db.close();
-  fs.copyFileSync(source, db);
-  // No real transcripts or keys: an empty home.
-  const env = { ...process.env, SECRETARY_DB: db, USERPROFILE: home, HOME: home, SECRETARY_KEYS_DIR: home, CLAUDE_CONFIG_DIR: '', SECRETARY_SEMANTIC_SEARCH: 'off' };
-  const cli = (args: string[], input = '') => execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'cli.ts'), ...args], { input, encoding: 'utf8', env });
-  const run = (prompt: string) => cli(['hook', 'prompt'], JSON.stringify({ session_id: 's1', prompt, hook_event_name: 'UserPromptSubmit' }));
-  const first = JSON.parse(run('비서 대화 삭제 1턴'));
-  assert.equal(first.decision, undefined, 'not blocked: a block reason does not show on the phone');
-  const context: string = first.hookSpecificOutput.additionalContext;
-  assert.match(context, /^<secretary-purge-preview>[^]*purge-log preview 1턴 --here s1\n<\/secretary-purge-preview>$/);
-  assert.doesNotMatch(context, /<secretary-(memory|board|continuity|usage|consolidate)/, 'nothing else on this prompt');
-  const shown = cli(['purge-log', 'preview', '1턴', '--here', 's1']);
-  assert.match(shown, /^#\d+ 사용자 \d+자 · \d+단어 — \S( \S)*$/m, 'first letters, no model call');
-  assert.doesNotMatch(shown, new RegExp(BAD));
-  const second = JSON.parse(run(` ${codeIn(shown)} `));
-  assert.equal(second.decision, undefined, 'not blocked: the secretary passes the result on');
-  const told: string = second.hookSpecificOutput.additionalContext;
-  assert.match(told, /^<secretary-purge-done>[^]*지웠어요[^]*<\/secretary-purge-done>$/);
-  assert.doesNotMatch(told, /<secretary-(memory|board|continuity|usage|consolidate|purge>)/, 'nothing else on this prompt');
-  assert.doesNotMatch(told, new RegExp(BAD));
-  // Nothing waits for the next prompt: no second notice of it.
-  const meta = new DatabaseSync(db);
-  const pending = meta.prepare("SELECT value FROM meta WHERE key = 'purge_notice'").get() as { value: string } | undefined;
-  meta.close();
-  assert.ok(!pending || JSON.parse(pending.value).length === 0, 'no next-prompt notice queued');
-  const check = new DatabaseSync(db);
-  assert.equal(Number((check.prepare("SELECT count(*) AS n FROM raw_log WHERE session_id = 's1'").get() as { n: number }).n), 5);
-  check.close();
-  assert.ok(fs.existsSync(path.join(home, 'backups', 'error', QUARANTINE_FILE)));
 });

@@ -3,27 +3,50 @@
 // stops, and it ends every time the worker ends a turn, so forgetting to relaunch it means a
 // finished task goes unnoticed. The watcher writes its PID to watch/<id>.pid in this secretary's records folder
 // (~/.secretary/<id>/state, core/paths.ts secretaryStateDir).
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { LEGACY_USAGE_DIR, legacySecretaryStateDir, SCRIPTS, secretaryStateDir } from '../core/paths.ts';
+import { SCRIPTS, secretaryStateDir } from '../core/paths.ts';
 import type { Store } from '../store/store.ts';
 import { listProcessesSync, pidAlive } from '../core/windows-process.ts';
 import { TAG } from '../core/names.ts';
 
 export const WATCH_DIR = path.join(secretaryStateDir(), 'watch');
-/**
- * Where watchers started before the records folder moved wrote their pid (~/.secretary/state/<id>/watch until 2026-11-09;
- * ~/.claude/usage/watch in a copy without an id): read when WATCH_DIR has none.
- */
-export const OLD_WATCH_DIR = path.join(legacySecretaryStateDir() ?? LEGACY_USAGE_DIR, 'watch'); // legacy-name: state-dir
 
-/** The pid file's text: in `dir`, else (a watcher started before the move) in `old`. Throws when neither has it. */
-function readPidFile(id: string, dir: string, old: string): string {
+/**
+ * The pid file in `dir`: the watcher's PID on the first line and, since it also writes it, its start time (UTC, ISO) on the
+ * second (NaN when an older watcher wrote the PID only). Throws when the file is not there.
+ */
+function readPidFile(id: string, dir: string): { pid: number; startedMs: number } {
+  const [pid, started] = fs.readFileSync(path.join(dir, `${id}.pid`), 'utf8').split(/\r?\n/);
+  return { pid: Number(pid.trim()), startedMs: Date.parse((started ?? '').trim()) };
+}
+
+/** How far the recorded start time may be from the process's own (both come from the same creation time; this is slack). */
+const START_SLACK_MS = 2000;
+
+/**
+ * When process `pid` started (ms since epoch), from one WMI query: null when there is no such process, undefined when the
+ * query fails. Asked only for a watcher whose PID is alive, so a hook pays it only while a task runs.
+ */
+export function processStartMs(pid: number): number | null | undefined {
+  const script = [
+    '[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false',
+    `$p = @(([wmisearcher]"SELECT CreationDate FROM Win32_Process WHERE ProcessId=${Math.trunc(pid)}").Get())`,
+    "if ($p.Count) { [Management.ManagementDateTimeConverter]::ToDateTime($p[0].CreationDate).ToUniversalTime().ToString('o') } else { 'none' }",
+  ].join('\n');
   try {
-    return fs.readFileSync(path.join(dir, `${id}.pid`), 'utf8');
-  } catch (e) {
-    if (old === dir) throw e;
-    return fs.readFileSync(path.join(old, `${id}.pid`), 'utf8');
+    const out = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (out === 'none') return null;
+    const ms = Date.parse(out);
+    return Number.isFinite(ms) ? ms : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -34,16 +57,23 @@ function readPidFile(id: string, dir: string, old: string): string {
  */
 export const WATCH_TIMEOUT_MS = 3_600_000;
 
-/** The old folder to fall back on: only for the real one (a test's own folder has none). */
-const oldFor = (dir: string) => (dir === WATCH_DIR ? OLD_WATCH_DIR : dir);
-
-export function watcherAlive(id: string, dir = WATCH_DIR, isAlive = pidAlive, old = oldFor(dir)): boolean {
+/**
+ * Is the watcher for id alive: its PID is alive and, when the file has the start time, the process with that PID started
+ * then. A PID alone is taken again by another process after the watcher ends, which hid a watcher that was off. When the
+ * start time cannot be read (an older file, a failed query) the PID alone decides, as before.
+ */
+export function watcherAlive(id: string, dir = WATCH_DIR, isAlive = pidAlive, startOf: (pid: number) => number | null | undefined = processStartMs): boolean {
+  let rec: { pid: number; startedMs: number };
   try {
-    const pid = Number(readPidFile(id, dir, old).trim());
-    return Number.isInteger(pid) && pid > 0 && isAlive(pid);
+    rec = readPidFile(id, dir);
   } catch {
     return false;
   }
+  if (!(Number.isInteger(rec.pid) && rec.pid > 0 && isAlive(rec.pid))) return false;
+  if (!Number.isFinite(rec.startedMs)) return true;
+  const actual = startOf(rec.pid);
+  if (actual === undefined) return true;
+  return actual !== null && Math.abs(actual - rec.startedMs) <= START_SLACK_MS;
 }
 
 export type ProcTable = Map<number, { ppid: number; name: string }>;
@@ -72,11 +102,11 @@ export function claudeOwner(pid: number, table: ProcTable): number | undefined {
  * end notice reach this conversation (after /clear it does; checked 2026-11-06). A watcher under another
  * Claude process (handoff, an older session) wakes that session instead, so it does not count.
  */
-export function watcherOurs(id: string, table: ProcTable | null, selfPid = process.pid, dir = WATCH_DIR, old = oldFor(dir)): boolean {
+export function watcherOurs(id: string, table: ProcTable | null, selfPid = process.pid, dir = WATCH_DIR): boolean {
   if (!table) return false;
   let pid: number;
   try {
-    pid = Number(readPidFile(id, dir, old).trim());
+    pid = readPidFile(id, dir).pid;
   } catch {
     return false;
   }
@@ -122,7 +152,12 @@ const RUNNING_TASKS_MAX = 20;
  */
 export function runningTaskLines(store: Store, isWatched?: (bg: string) => boolean): string[] {
   const tasks = store.listTasks({ status: 'running', limit: RUNNING_TASKS_MAX });
-  if (tasks.length === 0) return [];
+  // Stopped on a [질문] (status asking): nothing to watch until the answer goes back, but the new session must know of them.
+  const asking = store.listTasks({ status: 'asking', limit: RUNNING_TASKS_MAX }).map(
+    (t) => `- 업무 ${t.id} "${t.title}" · ${t.session_ref ?? 'session_ref 없음'} · 질문 대기(답을 보낼 때 update_task로 running으로 바꾸고 모니터링을 다시 띄운다)`,
+  );
+  const askingPart = asking.length ? ['질문 대기인 업무(기억 DB status asking, 업무 세션이 [질문]으로 멈춰 답을 기다린다):', ...asking] : [];
+  if (tasks.length === 0) return askingPart;
   if (!isWatched) {
     let table: ProcTable | null | undefined;
     isWatched = (bg) => {
@@ -144,5 +179,6 @@ export function runningTaskLines(store: Store, isWatched?: (bg: string) => boole
     unwatched === 0
       ? '모두 모니터링이 살아 있으니 다시 띄우지 않는다(겹친다).'
       : `"모니터링 살아 있음"이 없는 업무만 첫 답에서 ${SCRIPTS.watchWorker} -Id <id>를 백그라운드 명령(시간제한 ${WATCH_TIMEOUT_MS}ms)으로 다시 띄운다.`,
+    ...askingPart,
   ];
 }

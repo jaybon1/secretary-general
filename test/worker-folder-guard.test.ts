@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { PROJECT_ROOT } from '../src/core/config.ts';
+import { tempDir } from './helpers.ts';
 // @ts-expect-error plain .mjs hook script without types
-import { check, parseArgs } from '../scripts/worker/worker-folder-guard.mjs';
+import { check } from '../scripts/worker/worker-folder-guard.mjs';
 
 const WS = path.join(PROJECT_ROOT, '..', 'some-space-20261023');
 const write = (file: string) => ({ file_path: file });
@@ -33,6 +35,7 @@ test('publishing, pushing and recursive deletes are blocked; ordinary commands p
   assert.equal(check('Read', write('C:/anything'), WS), null);
 });
 
+
 // [늘 남김] 없으면 놓치는 실수: 막지 않을 때도 훅이 거부 결정을 내어 업무 세션의 모든 명령이 막힌다(훅이 도구를 잘못 막음).
 test('as a hook it prints a deny decision only when blocking', () => {
   const run = (input: object) =>
@@ -41,6 +44,7 @@ test('as a hook it prints a deny decision only when blocking', () => {
   assert.equal(run({ tool_name: 'Bash', tool_input: shell('git status') }), '');
 });
 
+// [늘 남김] 없으면 놓치는 실수: 업무 세션이 비서 폴더의 bin 진입점 밖 파일을 부르거나 비서 폴더 옆에 쓰는 것을 막지 못하거나, bin 진입점 부르기까지 막는다(훅이 잘못 막음).
 test('the secretary folder: only its bin entries may be called; anything else in it, or a write next to it, is blocked', () => {
   const sec = PROJECT_ROOT;
   const short = 'C:\\PROGRA~9\\SECRET~1';
@@ -80,25 +84,99 @@ test('the secretary folder: only its bin entries may be called; anything else in
   assert.equal(check('PowerShell', shell(`node "${path.join(sec, 'src', 'cli.ts')}"`), WS), null);
 });
 
-test('as a hook it takes the secretary folders after --secretary (start-worker passes the long and the short name)', () => {
-  const run = (input: object) =>
-    execFileSync('node', [path.join(PROJECT_ROOT, 'scripts', 'worker', 'worker-folder-guard.mjs'), WS, '--lock-tests', '--secretary', PROJECT_ROOT, '--secretary', 'C:\\X~1'], {
-      input: JSON.stringify(input),
-      encoding: 'utf8',
-    });
-  assert.match(run({ tool_name: 'PowerShell', tool_input: shell(`node "${path.join(PROJECT_ROOT, 'src', 'cli.ts')}" stats`) }), /"permissionDecision":"deny"/);
-  assert.match(run({ tool_name: 'Bash', tool_input: shell('cat C:/X~1/AGENTS.md') }), /"permissionDecision":"deny"/);
-  assert.equal(run({ tool_name: 'PowerShell', tool_input: shell(`& "${path.join(PROJECT_ROOT, 'bin', 'run-job.ps1')}" -Model sonnet`) }), '');
-  // --lock-tests is still read with --secretary after it.
-  assert.match(run({ tool_name: 'Edit', tool_input: { file_path: path.join(WS, 'tests', 'a.ts') } }), /테스트 잠금/);
-  assert.deepEqual(parseArgs(['ws', '--secretary', 'A', '--lock-tests', '--secretary', 'B']), { folder: 'ws', lockTests: true, secretary: ['A', 'B'] });
+// [늘 남김] 없으면 놓치는 실수: 개인정보를 넣으면 안 되는 공급자의 run-job이 _run-job-home 전체를 읽어, 다른 run-job의 결과 폴더(개인 내용이 든 보고)를
+// 그 공급자에게 내보내거나, 반대로 자기 결과 폴더·AGENTS.md·공통 스킬까지 막혀 일을 못 한다.
+test('--read-scope: a run-job reads only its result folder, its folder\'s AGENTS.md and the common skills; other result folders are blocked in shell commands too', () => {
+  const top = tempDir();
+  const home = path.join(top, 'workspaces', '_run-job-home');
+  const mine = path.join(home, 'output', 'research', '20261118-mine');
+  const other = path.join(home, 'output', 'research', '20261117-other');
+  const skills = path.join(top, 'workspaces', '_skills');
+  for (const d of [mine, other, skills]) fs.mkdirSync(d, { recursive: true });
+  const opts = { limitReads: true, readRoots: [skills], readScope: [mine, path.join(home, 'AGENTS.md'), path.join(home, 'CLAUDE.md')], siblingPrivate: [mine], aiRoot: top, home: path.join(top, 'home'), cwd: home };
+  const run = (tool: string, input: object) => check(tool, input, home, opts);
+  for (const [tool, input] of [
+    ['Read', { file_path: path.join(home, 'AGENTS.md') }],
+    ['Read', { file_path: path.join(mine, 'REPORT.md') }],
+    ['Grep', { pattern: 'x', path: mine }],
+    ['Glob', { pattern: 'output/research/20261118-mine/**' }],
+    ['Read', { file_path: path.join(skills, 'common-x', 'SKILL.md') }],
+  ] as const)
+    assert.equal(run(tool, input), null, `${tool} ${JSON.stringify(input)}`);
+  for (const [tool, input] of [
+    ['Read', { file_path: path.join(other, 'REPORT.md') }],
+    ['Grep', { pattern: 'x' }],
+    ['Glob', { pattern: 'output/research/**' }],
+    ['Read', { file_path: path.join(home, 'notes.md') }],
+  ] as const)
+    assert.match(run(tool, input) ?? '', /공통 스킬 폴더 밖은 읽지 않는다/, `${tool} ${JSON.stringify(input)}`);
+  for (const cmd of ['cat output/research/20261118-mine/a.md', `Get-Content "${mine}\\a.md"`, 'python tool.py']) assert.equal(run('PowerShell', { command: cmd }), null, cmd);
+  for (const cmd of ['cat output/research/20261117-other/REPORT.md', `Get-Content "${other}\\REPORT.md"`, 'ls output/research'])
+    assert.match(run('PowerShell', { command: cmd }) ?? '', /다른 일의 결과 폴더/, cmd);
+  // Writes stay where they were (the work folder).
+  assert.equal(run('Write', { file_path: path.join(home, 'tmp', 'x.txt') }), null);
 });
 
-test('start-worker hands the hook this secretary folder, long and 8.3 short name (worker-lib.ps1 Get-SecretaryGuardArgs)', { skip: process.platform !== 'win32' }, () => {
-  const lib = path.join(PROJECT_ROOT, 'scripts', 'worker', 'worker-lib.ps1');
-  const out = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `. '${lib}'; Get-SecretaryGuardArgs`], { encoding: 'utf8' }).trim();
-  assert.ok(out.startsWith(`--secretary "${PROJECT_ROOT}"`), out);
-  const forms = [...out.matchAll(/--secretary "([^"]+)"/g)].map((m) => m[1]);
-  assert.ok(forms.length >= 1 && forms.length <= 2, out);
-  for (const f of forms) assert.equal(fs.realpathSync.native(f).toLowerCase(), fs.realpathSync.native(PROJECT_ROOT).toLowerCase());
+// [늘 남김] 없으면 놓치는 실수: 개인정보를 넣으면 안 되는 공급자(외부 중개 서버 등)로 도는 세션이 Read·Grep·Glob이나 셸 명령으로 키 폴더·노트·
+// 받은 파일·~/.secretary·Claude 대화 기록을 읽어 그 서버로 내보내거나, 반대로 공간 폴더·공통 스킬·자기 임시 파일 읽기까지 막혀 일을 못 한다(훅이 도구를 잘못 막음).
+test('--limit-reads: reads stay in the workspace, the common skills and the session\'s own files; shell commands naming private places are blocked', () => {
+  const top = tempDir();
+  const ws = path.join(top, 'workspaces', 'space-1');
+  const skills = path.join(top, 'workspaces', '_skills');
+  const notes = path.join(top, 'notes');
+  const inbox = path.join(top, 'inbox');
+  const keys = path.join(top, 'keys');
+  const home = path.join(top, 'home');
+  for (const d of [path.join(ws, 'output'), path.join(skills, 'common-x'), notes, inbox, keys, path.join(home, '.claude-b', 'projects', 'p')]) fs.mkdirSync(d, { recursive: true });
+  const transcriptPath = path.join(home, '.claude-b', 'projects', 'p', 'sess-1.jsonl');
+  const opts = { limitReads: true, readRoots: [skills], privateDirs: [keys], aiRoot: top, home, sessionId: 'sess-1', transcriptPath, cwd: ws, secretary: [PROJECT_ROOT] };
+  const run = (tool: string, input: object) => check(tool, input, ws, opts);
+  const fwd = (p: string) => p.replace(/\\/g, '/');
+  for (const [tool, input] of [
+    ['Read', { file_path: path.join(ws, 'notes', 'history.md') }],
+    ['Read', { file_path: path.join(skills, 'common-x', 'SKILL.md') }],
+    ['Grep', { pattern: 'x' }],
+    ['Grep', { pattern: 'x', path: 'output' }],
+    ['Glob', { pattern: '**/*.md' }],
+    ['Glob', { pattern: `${fwd(skills)}/**/*.md` }],
+    ['Read', { file_path: path.join(home, '.claude-b', 'projects', 'p', 'sess-1', 'tool-results', 'a.txt') }],
+    ['Read', { file_path: path.join(os.tmpdir(), 'claude', 'h1', 'sess-1', 'scratchpad', 'a.md') }],
+  ] as const)
+    assert.equal(run(tool, input), null, `${tool} ${JSON.stringify(input)}`);
+  for (const [tool, input] of [
+    ['Read', { file_path: path.join(keys, 'gw.env') }],
+    ['Read', { file_path: path.join(notes, 'a.md') }],
+    ['Read', { file_path: path.join(PROJECT_ROOT, 'AGENTS.md') }],
+    ['Read', { file_path: path.join(home, '.claude-b', 'projects', 'p', 'other-session', 'tool-results', 'a.txt') }],
+    ['Read', { file_path: path.join(os.tmpdir(), 'claude', 'h1', 'other-session', 'scratchpad', 'a.md') }],
+    ['Grep', { pattern: 'token', path: top }],
+    ['Glob', { pattern: `${fwd(top)}/**/*.env` }],
+    ['Glob', { pattern: '../**' }],
+    ['Glob', { pattern: '**/../../../keys/*' }],
+  ] as const)
+    assert.match(run(tool, input) ?? '', /공통 스킬 폴더 밖은 읽지 않는다/, `${tool} ${JSON.stringify(input)}`);
+  // A link made inside the workspace to a private folder is judged by where it leads.
+  fs.symlinkSync(keys, path.join(ws, 'link'), 'junction');
+  assert.match(run('Read', { file_path: path.join(ws, 'link', 'gw.env') }) ?? '', /공통 스킬 폴더 밖/);
+  // Without --limit-reads (a provider that may see personal data) reads are not looked at.
+  assert.equal(check('Read', { file_path: path.join(keys, 'gw.env') }, ws, { ...opts, limitReads: false }), null);
+
+  for (const cmd of ['cat notes/history.md', 'python tool.py', 'Get-Content output/a.txt', `cat ${fwd(skills)}/common-x/SKILL.md`, 'curl https://example.com/notes/inbox/x', 'git status'])
+    assert.equal(run('PowerShell', { command: cmd }), null, cmd);
+  for (const cmd of [
+    'cat ../../notes/a.md',
+    `Get-Content "${inbox}\\a.txt"`,
+    `type ${keys}\\gw.env`,
+    `cat /${keys[0].toLowerCase()}${fwd(keys.slice(2))}/gw.env`,
+    'cat ~/.secretary/keys/gw.env',
+    'Get-Content $env:USERPROFILE\\.secretary\\usage\\x.json',
+    'echo $env:SECRETARY_KEYS_DIR',
+    'sqlite3 secretary.db .dump',
+    'cat ~/.claude/projects/x/y.jsonl',
+    'Get-ChildItem $env:USERPROFILE\\.claude-b\\projects',
+  ])
+    assert.match(run('Bash', { command: cmd }) ?? '', /개인 자료 자리는 읽지 않는다/, cmd);
+  // The secretary folder keeps its own rule (bin entries only), as for every provider.
+  assert.match(run('PowerShell', { command: `Get-Content ${path.join(PROJECT_ROOT, 'AGENTS.md')}` }) ?? '', /비서 폴더는 진입점/);
+  assert.equal(check('Bash', { command: 'cat ../../notes/a.md' }, ws, { ...opts, limitReads: false }), null);
 });

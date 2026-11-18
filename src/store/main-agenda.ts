@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './schema.ts';
-import { assertNoThreat } from '../memory/injection-screen.ts';
+import { assertNoThreat } from './injection-screen.ts';
 import { userWords } from './user-title.ts';
 import { formatLocal, nowIso } from '../core/kst-time.ts';
 

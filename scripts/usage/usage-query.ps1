@@ -1,5 +1,5 @@
 ﻿# 구독 공급자의 사용량을 토큰 없이 조회해 공급자·계정별 파일(~/.secretary/usage/subscription-<계정>.json, 이름 규칙은 providers.ps1 Get-UsageKey)에
-# 저장하고 한 줄로 보여 준다. 쓴 바로 뒤 옛 이름(<공급자>.json·<공급자>-<계정>.json과 .refresh)은 지운다(Remove-LegacyUsageFiles).
+# 저장하고 한 줄로 보여 준다.
 # claude -p "/usage"는 모델을 부르지 않는다(토큰 0). 빈 폴더에서 MCP 없이 돌려 다른 설정이 끼지 않게 한다.
 # agy(antigravity)도 /usage로 토큰 없이 조회한다. 나머지는 무료 조회 명령이 없어 건너뛴다(Copilot의 /usage는 -p에서
 # 일반 질문으로 처리돼 크레딧을 쓰고, Bedrock은 AWS CLI가 있어야 조회된다).
@@ -73,7 +73,6 @@ function Save-AntigravityUsage([string]$name) {
   $state = [ordered]@{ groups = @($list); updated_at = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'); source = 'agy-usage' }
   Write-Utf8File (Get-UsageFile $name) ($state | ConvertTo-Json -Compress -Depth 4)
   Clear-UsageFailure (Get-UsageKey $name)
-  Remove-LegacyUsageFiles $name (Get-UsageKey $name)
   Write-Output ("${name}: " + (($list | ForEach-Object { "$($_.name) 주간 $($_.used_pct)% (초기화 $(& $fmt $_.resets_at))" }) -join ' · '))
 }
 
@@ -122,7 +121,6 @@ foreach ($name in $names) {
   }
   Write-Utf8File (Join-Path $outDir "$key.json") ($state | ConvertTo-Json -Compress)
   Clear-UsageFailure $key
-  Remove-LegacyUsageFiles $name $key
 
   $line = "${name}: 5시간 $($state.five_hour_pct)% (초기화 $(& $fmt $state.resets_at))"
   if ($state.week_pct -ne $null) { $line += " · 주간 $($state.week_pct)% (초기화 $(& $fmt $state.week_resets_at))" }

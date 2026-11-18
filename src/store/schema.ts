@@ -3,12 +3,15 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH } from '../core/config.ts';
 import { formatLocal, nowIso } from '../core/kst-time.ts';
+import { indexText } from './search-terms.ts';
+import { tagList } from './tag-names.ts';
 
 /**
  * Schema migrations, applied in order. PRAGMA user_version records how many ran.
- * Append new entries; never edit a shipped one.
+ * Append new entries; never edit a shipped one. One that needs code (not SQL alone) is a function, run in the same transaction.
  */
-const MIGRATIONS: string[] = [
+type Migration = string | ((db: DatabaseSync) => void);
+const MIGRATIONS: Migration[] = [
   `
   CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
@@ -376,7 +379,165 @@ const MIGRATIONS: string[] = [
     ) THEN 0 ELSE 1 END
     WHERE group_name = '확인 없이 추천';
   `,
+  // 2026-11-14 (the user's calls): the to-do summary (feature todo-summary). (1) An action memory's owner, due date and
+  // condition, in a table of its own so the memories table is not rebuilt: an action memory without a row is simply not
+  // in the summary. The row follows its memory: once the memory is invalidated or replaced the summary leaves it out.
+  // state is the condition's (waiting, met: checked by code, maybe_met: the board model thinks so); marked_* say who set it
+  // and on which conversation row. done_* is the board model's "seems done", only shown: the secretary checks and closes
+  // the memory. (2) Calendar occurrences fetched from the iCal address, one row per occurrence (a recurring event
+  // expanded), times as UTC ISO (an all-day one from 00:00 KST of its date).
+  `
+  CREATE TABLE IF NOT EXISTS memory_actions (
+    memory_id     INTEGER PRIMARY KEY REFERENCES memories (id),
+    owner         TEXT NOT NULL CHECK (owner IN ('user', 'secretary')),
+    due_at        TEXT,
+    cond_kind     TEXT CHECK (cond_kind IN ('date', 'task_done', 'commit_in_main', 'question_answered', 'text')),
+    cond_value    TEXT,
+    state         TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting', 'met', 'maybe_met')),
+    marked_by     TEXT,
+    marked_at     TEXT,
+    marked_log_id INTEGER REFERENCES raw_log (id),
+    done_log_id   INTEGER REFERENCES raw_log (id),
+    done_at       TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS calendar_events (
+    id            INTEGER PRIMARY KEY,
+    uid           TEXT NOT NULL,
+    recurrence_at TEXT NOT NULL,
+    start_at      TEXT NOT NULL,
+    end_at        TEXT,
+    all_day       INTEGER NOT NULL DEFAULT 0,
+    title         TEXT NOT NULL,
+    location      TEXT,
+    fetched_at    TEXT NOT NULL,
+    UNIQUE (uid, recurrence_at)
+  );
+  CREATE INDEX IF NOT EXISTS calendar_events_start ON calendar_events (start_at);
+  `,
+  // 2026-11-14 (the user's call): a work session stopped on a [질문] waits for the user, not running: the status 'asking'
+  // (the watch check sets it when it sees the question, the secretary sets running again when it hands the answer back).
+  // SQLite can't alter a CHECK, so tasks is rebuilt keeping ids and records, like migration 16.
+  `
+  CREATE TABLE tasks_v20 (
+    id           INTEGER PRIMARY KEY,
+    workspace_id INTEGER NOT NULL REFERENCES workspaces (id),
+    name         TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    goal         TEXT NOT NULL,
+    output_dir   TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK (status IN ('ready', 'running', 'asking', 'done', 'failed', 'cancelled')),
+    session_ref  TEXT,
+    result       TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    UNIQUE (workspace_id, output_dir)
+  );
+  INSERT INTO tasks_v20 (id, workspace_id, name, title, goal, output_dir, status, session_ref, result, created_at, updated_at)
+    SELECT id, workspace_id, name, title, goal, output_dir, status, session_ref, result, created_at, updated_at
+    FROM tasks ORDER BY id;
+  DROP TABLE tasks;
+  ALTER TABLE tasks_v20 RENAME TO tasks;
+  CREATE INDEX tasks_status ON tasks (status, updated_at);
+  CREATE INDEX tasks_workspace ON tasks (workspace_id, id);
+  `,
+  // 2026-11-18 (the user's calls, before v0.12.0): tags and the word indexes (migrateTagsAndIndexes).
+  (db) => migrateTagsAndIndexes(db),
+  // 2026-11-18 (the user's call): the answer checks' English and path slips were recorded under the checks' ids ('english',
+  // 'path-prose', 'path-pair', 'path-link') apart from the groups people wrote them under; they become those groups
+  // (mistake-guards/answer-check-table.ts ENGLISH_ANSWER, PATH_FORM), and the repeat flag is counted again in each, as
+  // migration 18 did: the first by time is not a repeat, every later one is.
+  `
+  UPDATE mistakes SET group_name = '영어 답' WHERE group_name = 'english';
+  UPDATE mistakes SET group_name = '경로 표기' WHERE group_name IN ('path-prose', 'path-pair', 'path-link');
+  UPDATE mistakes SET recurred = CASE WHEN id = (
+      SELECT m2.id FROM mistakes m2 WHERE m2.group_name = mistakes.group_name ORDER BY m2.happened_at, m2.id LIMIT 1
+    ) THEN 0 ELSE 1 END
+    WHERE group_name IN ('영어 답', '경로 표기');
+  `,
 ];
+
+/**
+ * Migration 21. (1) A memory's tags move from one space-joined string (memories.tags) to the tag tables: `tags` (each name
+ * once; `alias_of` makes a name another's alias, read as that one) and `memory_tags` (a memory's tags in order, the first,
+ * position 0, its topic). The old string could not tell a tag of two words ("할 일", "모종 가게") from two tags, so it is split
+ * by spaces for now; live memories with two tags or more go on `memory_tag_checks`, where the memory consolidation sets
+ * the right boundaries a few a run (consolidate skill references/procedure.md). Joined again by spaces the tags read as
+ * before, so the word index and the meaning vectors stay as they were (a string that held a word twice, "비서 실수 줄이기
+ * 범용 비서 배포판", keeps one; its index entry and vector are kept too, made again when its tags are next set).
+ * `memory_pair_checks` keeps which pairs of close memories the consolidation has judged (memory/memory-pairs.ts).
+ * (2) The two word indexes keep no copy of the text (contentless FTS5, `content=''` with `contentless_delete=1`): only
+ * bm25 and the rowid were ever read, and the copy was bigger than the conversation itself. The index entries are copied
+ * as they are, so searches find what they found before. (3) usage_log gets an index on its event (each prompt reads the
+ * session's auto_recall rows).
+ */
+function migrateTagsAndIndexes(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE tags (
+      id         INTEGER PRIMARY KEY,
+      name       TEXT NOT NULL UNIQUE,
+      alias_of   INTEGER REFERENCES tags (id),
+      created_at TEXT NOT NULL,
+      CHECK (alias_of IS NULL OR alias_of != id)
+    );
+    CREATE TABLE memory_tags (
+      memory_id INTEGER NOT NULL REFERENCES memories (id),
+      tag_id    INTEGER NOT NULL REFERENCES tags (id),
+      position  INTEGER NOT NULL CHECK (position >= 0),
+      is_topic  INTEGER NOT NULL CHECK (is_topic = (position = 0)),
+      PRIMARY KEY (memory_id, tag_id),
+      UNIQUE (memory_id, position)
+    ) WITHOUT ROWID;
+    CREATE INDEX memory_tags_tag ON memory_tags (tag_id, memory_id);
+    CREATE TABLE memory_tag_checks (
+      memory_id INTEGER PRIMARY KEY REFERENCES memories (id),
+      tags      INTEGER NOT NULL
+    );
+    CREATE TABLE memory_pair_checks (
+      older_id   INTEGER NOT NULL REFERENCES memories (id),
+      newer_id   INTEGER NOT NULL REFERENCES memories (id),
+      verdict    TEXT NOT NULL CHECK (verdict IN ('unrelated', 'repeats', 'changes')),
+      checked_at TEXT NOT NULL,
+      PRIMARY KEY (older_id, newer_id)
+    );
+    CREATE INDEX usage_log_event ON usage_log (event, id);
+  `);
+  const now = nowIso();
+  const addTag = db.prepare('INSERT INTO tags (name, created_at) VALUES (?, ?) ON CONFLICT (name) DO NOTHING');
+  const tagId = db.prepare('SELECT id FROM tags WHERE name = ?');
+  const link = db.prepare('INSERT INTO memory_tags (memory_id, tag_id, position, is_topic) VALUES (?, ?, ?, ?)');
+  const toCheck = db.prepare('INSERT INTO memory_tag_checks (memory_id, tags) VALUES (?, ?)');
+  const indexed = new Set((db.prepare('SELECT rowid AS id FROM memories_fts').all() as Array<{ id: number }>).map((r) => r.id));
+  const reindex: Array<{ id: number; terms: string }> = [];
+  const memories = db.prepare('SELECT id, content, tags, valid_to FROM memories ORDER BY id').all() as Array<{ id: number; content: string; tags: string; valid_to: string | null }>;
+  for (const m of memories) {
+    const names = tagList(m.tags.split(' '));
+    names.forEach((name, position) => {
+      addTag.run(name, now);
+      link.run(m.id, (tagId.get(name) as { id: number }).id, position, position === 0 ? 1 : 0);
+    });
+    if (m.valid_to === null && names.length >= 2) toCheck.run(m.id, names.length);
+    // Index entries are copied as they are (a memory whose old string held a word twice keeps it in its entry until its
+    // tags are set again), so every search ranks as before; only a memory missing from the index is indexed now.
+    if (!indexed.has(m.id)) reindex.push({ id: m.id, terms: indexText(m.content, names.join(' ')) });
+  }
+  db.exec(`
+    DROP TABLE memories_vocab;
+    CREATE VIRTUAL TABLE memories_fts_v21 USING fts5 (terms, content='', contentless_delete=1);
+    INSERT INTO memories_fts_v21 (rowid, terms) SELECT rowid, terms FROM memories_fts;
+    DROP TABLE memories_fts;
+    ALTER TABLE memories_fts_v21 RENAME TO memories_fts;
+    CREATE VIRTUAL TABLE memories_vocab USING fts5vocab (memories_fts, 'row');
+    CREATE VIRTUAL TABLE raw_log_fts_v21 USING fts5 (terms, content='', contentless_delete=1);
+    INSERT INTO raw_log_fts_v21 (rowid, terms) SELECT rowid, terms FROM raw_log_fts;
+    DROP TABLE raw_log_fts;
+    ALTER TABLE raw_log_fts_v21 RENAME TO raw_log_fts;
+    ALTER TABLE memories DROP COLUMN tags;
+  `);
+  const index = db.prepare('INSERT INTO memories_fts (rowid, terms) VALUES (?, ?)');
+  for (const r of reindex) index.run(r.id, r.terms);
+}
 
 /** The schema a fully migrated DB has (its PRAGMA user_version). */
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -436,7 +597,9 @@ function migrate(db: DatabaseSync, upTo: number): void {
       transaction(db, () => {
         // Another process (MCP server, a hook) may have run it while this one waited for the write lock.
         if (userVersion(db) > v) return;
-        db.exec(MIGRATIONS[v]);
+        const m = MIGRATIONS[v];
+        if (typeof m === 'string') db.exec(m);
+        else m(db);
         const broken = db.prepare('PRAGMA foreign_key_check').all();
         if (broken.length) throw new Error(`migration ${v + 1} broke ${broken.length} foreign keys`);
         db.exec(`PRAGMA user_version = ${v + 1}`);
@@ -445,6 +608,15 @@ function migrate(db: DatabaseSync, upTo: number): void {
   } finally {
     db.exec('PRAGMA foreign_keys = ON');
   }
+}
+
+/**
+ * A read-then-write of shared state (a meta JSON value other processes rewrite too: the open questions, a job's claim) in
+ * one transaction, so two processes cannot both read the old value and the later write drop the earlier one. Inside a
+ * caller's transaction it simply runs (SQLite has no nested BEGIN).
+ */
+export function atomic<T>(db: DatabaseSync, fn: () => T): T {
+  return db.isTransaction ? fn() : transaction(db, fn);
 }
 
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {

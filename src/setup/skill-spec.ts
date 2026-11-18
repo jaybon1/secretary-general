@@ -8,7 +8,7 @@
  * named common-* (the common skills' names, workspace/common-skills.ts).
  *
  * Read by the install check ('skills' for the secretary and _skills, 'workspace-links' for workspaces) and by npm test
- * (the skills in this repository). Kept free of the rest of src/ (only node: imports), like setup/skill-links.ts.
+ * (the skills in this repository). Kept free of the rest of src/ (only node: imports), like workspace/skill-links.ts.
  */
 import fs from 'node:fs';
 import path from 'node:path';

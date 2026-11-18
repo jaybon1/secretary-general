@@ -3,7 +3,7 @@
 // 사용량은 이 세션 공급자·계정의 파일(usage-file.mjs, subscription-<계정>.json)에서 읽는다. 기록이 5분 넘게 오래되면 usage-query.ps1(/usage, 토큰 0)을
 // 뒤에서 띄워 갱신하고, 이번 판정은 있는 기록으로 한다. 원격·백그라운드 세션은 상태줄이 돌지 않아 이 갱신에 기댄다.
 // 기능 usage-poll(비서 서버와 같이 뜨는 조회기)이 켜져 있으면 그쪽이 5분마다 조회하며 같은 이름의 .refresh 표시를 남기므로, 이 갱신은 그때 예비다.
-// 끄기: ~/.secretary/usage-guard-off 파일을 만든다(2026-11-10 전 자리 ~/.claude/usage-guard-off도 한동안 읽는다, usage-files.ts guardOff).
+// 끄기: ~/.secretary/usage-guard-off 파일을 만든다(usage-files.ts guardOff).
 // 구독 한도만 다루므로, 다른 공급자(Bedrock, Vertex, API 키, 게이트웨이)로 도는 세션은 막지 않는다. 기록이 없으면(조회가 안 되는 로그인 포함) 막지 않는다.
 // 조회가 거듭 실패하면(/usage가 사용량을 주지 않는 API 키 로그인 등, <같은 이름>.fail) 다음 갱신을 5분부터 두 배씩 최대 6시간 미룬다(usage-files.ts failureWait).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -12,14 +12,14 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { usageDir, readUsage, refreshFile, failureWait, currentProvider, onSubscription, readOverrideUntil, guardOff } from './usage-file.mjs';
 
-// 기준 SECRETARY_USAGE_GUARD_PCT(2026-11-09부터, 옛 이름 USAGE_PAUSE_PCT도 한동안 읽는다).
-const limit = Number(process.env.SECRETARY_USAGE_GUARD_PCT ?? process.env.USAGE_PAUSE_PCT ?? 90); // legacy-name: env-usage-guard-pct
+// 기준 SECRETARY_USAGE_GUARD_PCT.
+const limit = Number(process.env.SECRETARY_USAGE_GUARD_PCT ?? 90);
 const REFRESH_AFTER = 5 * 60 * 1000;
 const WRAP_UP_TOOLS = /^(Read|Write|Edit|Glob|Grep|SendMessage|mcp__secretary__(remember|update_task|get_task|set_main_agenda))$/;
 
 let input = {}, state = null;
 try { input = JSON.parse(readFileSync(0, 'utf8')); } catch {}
-// 새 폴더(~/.secretary/usage)와 옛 폴더(~/.claude/usage, 옛 사본이 아직 쓰는 동안) 가운데 새 기록.
+// 사용량 폴더(~/.secretary/usage)의 이 계정 기록.
 try { state = readUsage(currentProvider()); } catch {}
 
 const now = Date.now();

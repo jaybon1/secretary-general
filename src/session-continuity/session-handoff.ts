@@ -10,7 +10,8 @@ import { transcriptDirs } from '../log/catch-up.ts';
 import { ingestTranscript } from '../log/ingest-transcript.ts';
 import type { Store } from '../store/store.ts';
 import { boardBlock } from './situation-board-notice.ts';
-import { BOARD_WAIT_MS, readBoard, runBoardUpdate, waitForJob } from './situation-board.ts';
+import { BOARD_WAIT_MS, runBoardUpdate, waitForJob } from './situation-board.ts';
+import { readBoard } from '../store/board-state.ts';
 
 export { HANDOFF_MARK } from './situation-board-notice.ts';
 

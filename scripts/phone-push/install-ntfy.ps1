@@ -1,4 +1,4 @@
-﻿# 끝 알림(기능 notify)의 ntfy 서버를 관리자 없이 이 사용자로 띄우게 준비한다. 다시 실행해도 안전하다.
+﻿# 끝 알림(기능 phone-push)의 ntfy 서버를 관리자 없이 이 사용자로 띄우게 준비한다. 다시 실행해도 안전하다.
 #   1. server.yml이 없으면 만든다(사용자 폴더, 있으면 그대로 둔다). 이 PC 안(127.0.0.1)에서만 듣고, 폰은 Tailscale Serve를 거쳐 들어온다.
 #   2. 예약 작업 'Secretary ntfy Server (고유 번호)'를 등록한다: 로그인할 때, 로그온한 경우에만, 창 없이 ntfy.exe serve --config <server.yml>.
 #      등록은 scripts/scheduled/install-scheduled-tasks.ps1 -Task ntfy가 한다(작업 이름·고유 번호·다른 비서 작업 보호가 다른 예약 작업과 같다).

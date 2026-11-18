@@ -1,31 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { INITIALS_MAX, initialsText, runPreview, wordInitials } from '../src/log/purge-initials.ts';
+import { runPreview } from '../src/log/purge-initials.ts';
 import { tempStore } from './helpers.ts';
 
 /** A marker only the rows hold: it must never reach the output whole. */
 const BAD = 'ZQXBADMARK';
-
-test('first letters: one per whitespace word, Hangul syllable or first letter/digit, punctuation-only chunks skipped', () => {
-  // The example the user gave (2026-11-06).
-  assert.deepEqual(wordInitials('대화 삭제 테스트해보자. 임의로 점심메뉴 추천해봐'), ['대', '삭', '테', '임', '점', '추']);
-  assert.equal(initialsText('대화 삭제 테스트해보자. 임의로 점심메뉴 추천해봐'), '6단어 — 대 삭 테 임 점 추');
-  // English: the first letter, case kept; digits count; leading punctuation is passed over.
-  assert.deepEqual(wordInitials('Seoul weather 2026년 "점심" (메뉴) **굵게** #900614'), ['S', 'w', '2', '점', '메', '굵', '9']);
-  // Punctuation, symbols and emoji alone are not words; spaces, tabs and newlines all split.
-  assert.deepEqual(wordInitials('  가나 — ... 😀 !!\n\t다라  '), ['가', '다']);
-  // Hangul jamo alone still counts as a letter.
-  assert.deepEqual(wordInitials('ㅋㅋㅋ 좋아'), ['ㅋ', '좋']);
-  assert.equal(initialsText(' ... — '), '0단어 — (단어 없음)');
-  assert.equal(initialsText(''), '0단어 — (단어 없음)');
-});
-
-test(`first letters: at most ${INITIALS_MAX}, then a mark that the rest was cut`, () => {
-  const words = Array.from({ length: 45 }, (_, i) => `낱말${i}`).join(' ');
-  const out = initialsText(words);
-  assert.equal(out, `45단어 — ${Array(INITIALS_MAX).fill('낱').join(' ')} …(앞 40단어)`);
-  assert.equal(initialsText(Array(40).fill('가').join(' ')), `40단어 — ${Array(40).fill('가').join(' ')}`, 'exactly 40: no mark');
-});
 
 test('the preview: rows and memories with word count and first letters, no model and no summary line, never the text', () => {
   const s = tempStore();

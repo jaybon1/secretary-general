@@ -2,7 +2,8 @@
 // 조사 업무에서 연 페이지를 그대로 남겨 두면, 검증 에이전트가 보고서 주장을 원문과 대조하기 쉽다.
 //
 // 예: 작업 폴더에 아래 같은 파일을 만들고 ego-browser nodejs -e "await import('file:///<그 파일>')"로 실행한다.
-//   import { grab } from "file:///<비서 폴더>/scripts/browser/ego-grab.mjs";
+// 부를 때는 비서 진입점 bin/ego-grab.mjs의 전체 경로를 쓴다(업무 세션은 비서 폴더의 다른 파일을 부를 수 없다. 공간이 쓰는 법은 공통 스킬 common-web-research).
+//   import { grab } from "file:///<비서 진입점 폴더 bin>/ego-grab.mjs";
 //   await grab([{ name: "remotion-license", url: "https://..." }], { out: "<업무 폴더>/pages", space: "<업무이름>" });
 // 파일 머리에 URL·최종 URL·제목·받은 시각(FETCHED, KST)이 붙는다. max는 저장할 글자 수(기본 20000).
 //

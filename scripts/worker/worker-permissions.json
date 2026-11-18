@@ -43,6 +43,7 @@
       "PowerShell(node *)",
       "PowerShell(ego-browser *)",
       "Bash(ego-browser *)",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File {SECRETARY_DIR}\\bin\\wait-job.ps1 *)",
       "PowerShell(npm *)",
       "PowerShell(npx *)",
       "PowerShell(Get-ChildItem *)",

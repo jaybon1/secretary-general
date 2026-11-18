@@ -2,29 +2,19 @@
 # 왜: 비서가 백그라운드 명령으로 기다리면 시간제한(1시간 이하)에 닿을 때 그 명령과 아래 프로세스가 함께 꺼진다(2026-11-05 확인).
 # 대화 캐시가 1시간이라 시간제한을 더 늘리지 않고, 일은 따로 띄운 뒤 scripts/run-job/wait-job.ps1로 55분($CacheWakeMinutes)씩 나눠 기다린다.
 # 띄운 일의 기록은 이 비서의 기록 폴더(~/.secretary/<비서 번호>/state, common.ps1 Get-SecretaryStateDir)의 bg-jobs/<id>/:
-# job.json(id, pid, script, label, started_at), out.txt(출력), err.txt(오류 출력),
+# job.json(id, pid, script, label, started_at), launch.ps1(띄운 글: 받은 인자를 넣어 스크립트를 부른다), out.txt(출력), err.txt(오류 출력),
 # exit.txt(끝나면 종료 코드). 띄우는 명령이 바로 끝나므로 띄운 프로세스는 그 명령의 시간제한에 걸리지 않는다.
 
 . "$PSScriptRoot\common.ps1"
 function Get-BgJobRoot { Join-Path (Get-SecretaryStateDir) 'bg-jobs' }
-# 그 일의 기록 폴더. 기록 폴더를 옮기기 전에 띄운 일(옛 자리 ~/.secretary/state/<번호>/bg-jobs/<id>, 그 전의 ~/.claude/usage/bg-jobs/<id>)도
-# 끝까지 기다릴 수 있게, 새 자리에 없고 옛 자리에 있으면 옛 자리를 준다(어디에도 없으면 새 자리).
-function Get-BgJobDir([string]$Id) {
-  $dir = Join-Path (Get-BgJobRoot) $Id
-  if (Test-Path -LiteralPath $dir) { return $dir }
-  foreach ($base in @((Get-LegacySecretaryStateDir), (Get-LegacyUsageDir))) { # legacy-name: state-dir
-    if (-not $base) { continue }
-    $old = Join-Path (Join-Path $base 'bg-jobs') $Id
-    if (Test-Path -LiteralPath $old) { return $old }
-  }
-  $dir
-}
+# 그 일의 기록 폴더.
+function Get-BgJobDir([string]$Id) { Join-Path (Get-BgJobRoot) $Id }
 
 # PowerShell 작은따옴표 글(' 와 둥근 작은따옴표는 두 번 써서 감싼다).
 function ConvertTo-PsLiteral([string]$Text) { "'" + ($Text -replace "['‘’‚‛]", '$0$0') + "'" }
 
 # 스크립트를 받은 인자 그대로(-Detach만 빼고) 따로 띄우고, 기다리는 법을 출력한다.
-# 인자는 인코딩한 명령(-EncodedCommand)에 넣어 따옴표·공백·한글이 깨지지 않게 하고, 긴 지시(-Prompt)는 파일로 넘긴다.
+# 인자는 작은따옴표 글로 띄우는 스크립트(기록 폴더의 launch.ps1)에 넣어 따옴표·공백·한글·;·|가 깨지지 않게 하고, 긴 지시(-Prompt)는 파일로 넘긴다.
 # 작업 폴더는 지금 위치 그대로라 상대 경로 인자도 같은 곳을 가리킨다.
 function Start-DetachedSelf([string]$ScriptPath, $BoundParams, [string]$Label) {
   $id = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + (Get-Random -Maximum 9999)
@@ -53,12 +43,17 @@ function Start-DetachedSelf([string]$ScriptPath, $BoundParams, [string]$Label) {
     "try { & $(ConvertTo-PsLiteral $ScriptPath) @p; if (`$null -ne `$LASTEXITCODE) { `$code = `$LASTEXITCODE } } catch { [Console]::Error.WriteLine(`"`$_`"); `$code = 1 }"
     "Set-Content -LiteralPath $(ConvertTo-PsLiteral $exitFile) -Value `$code -Encoding ascii"
     'exit $code'
-  ) -join "`n"
-  $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
-  $proc = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $enc" -WindowStyle Hidden -PassThru `
+  ) -join "`r`n"
+  # 띄우는 글은 명령줄(-EncodedCommand) 대신 기록 폴더의 .ps1로 써서 -File로 부른다: 인자(-ToolArgs 등)가 길면 명령줄 한도(32,767자)에 닿기 때문이다.
+  # BOM을 붙여야 PowerShell 5.1이 한글을 ANSI로 잘못 읽지 않는다.
+  $launch = Join-Path $dir 'launch.ps1'
+  [IO.File]::WriteAllText($launch, $cmd, (New-Object Text.UTF8Encoding $true))
+  $proc = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -OutputFormat Text -File `"$launch`"" -WindowStyle Hidden -PassThru `
     -WorkingDirectory (Get-Location).Path -RedirectStandardOutput (Join-Path $dir 'out.txt') -RedirectStandardError (Join-Path $dir 'err.txt')
   $job = [ordered]@{ id = $id; pid = $proc.Id; script = (Split-Path -Leaf $ScriptPath); label = $Label; started_at = [DateTime]::UtcNow.ToString('o') }
   [IO.File]::WriteAllText((Join-Path $dir 'job.json'), ($job | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding $false))
   "뒤에서 시작: $id (PID $($proc.Id)) $Label"
-  "기다리기: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job/wait-job.ps1 -Id $id"
+  # 기다리기 명령은 비서 진입점(bin\wait-job.ps1)의 전체 경로로 적는다: 업무 세션은 비서 폴더의 진입점만 부를 수 있고,
+  # 그 허용 목록(scripts/worker/worker-permissions.json)도 이 꼴이다. 비서 자신도 어느 폴더에서든 그대로 쓸 수 있다.
+  "기다리기: powershell -NoProfile -ExecutionPolicy Bypass -File $(Join-Path $SecretaryRoot 'bin\wait-job.ps1') -Id $id"
 }

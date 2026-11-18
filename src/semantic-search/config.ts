@@ -6,8 +6,8 @@ import path from 'node:path';
 import { DB_PATH, PROJECT_ROOT } from '../core/config.ts';
 import { readJsonFile } from '../core/json-file.ts';
 
-/** Environment names (2026-11-09): SECRETARY_SEMANTIC_SEARCH_*; the old SECRETARY_EMBED_* are still read for a while. */
-export const semanticSearchEnv = (name: string, env: NodeJS.ProcessEnv = process.env): string | undefined => env[`SECRETARY_SEMANTIC_SEARCH_${name}`] ?? env[`SECRETARY_EMBED_${name}`]; // legacy-name: env-semantic-search
+/** Environment names: SECRETARY_SEMANTIC_SEARCH_*. */
+export const semanticSearchEnv = (name: string, env: NodeJS.ProcessEnv = process.env): string | undefined => env[`SECRETARY_SEMANTIC_SEARCH_${name}`];
 
 /** Korean fine-tune of bge-m3 (q8 ONNX build), same size and speed; downloaded into models/ on first start. */
 export const EMBED_MODEL = 'jaybon1840/BGE-m3-ko-onnx';
@@ -34,10 +34,9 @@ export const MEMORY_FILE = `${DB_PATH}.semantic-search-server-memory.json`;
  */
 export const SERVER_NEED_MB = 1500;
 export const IDLE_MS = (Number(semanticSearchEnv('IDLE_MIN')) || 60) * 60_000;
-/** The env variable that turns semantic search off (value off); the old name SECRETARY_EMBED is still read for a while (2026-11-09). */
+/** The env variable that turns semantic search off (value off). */
 export const OFF_ENV = 'SECRETARY_SEMANTIC_SEARCH';
-export const OLD_OFF_ENV = 'SECRETARY_EMBED'; // legacy-name: env-semantic-search
-export const disabled = (env: NodeJS.ProcessEnv = process.env) => env[OFF_ENV] === 'off' || (env[OFF_ENV] === undefined && env[OLD_OFF_ENV] === 'off');
+export const disabled = (env: NodeJS.ProcessEnv = process.env) => env[OFF_ENV] === 'off';
 
 export interface ServerState {
   pid: number;

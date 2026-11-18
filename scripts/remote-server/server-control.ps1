@@ -64,17 +64,7 @@ function Get-ConsoleWindow([int]$processId) {
 
 if ($Action -eq 'log') {
   $file = Get-ChildItem (Get-ServerLogDir $Provider) -Filter *.log -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-  # 기록 폴더를 옮긴 뒤 서버를 아직 다시 켜지 않았으면 기록이 옛 폴더에만 있다. 그때만 그쪽을 보여 준다(공용 폴더면 다른 비서 것이 섞였을 수 있다고 적는다).
-  $legacy = $false
-  if (-not $file -and (Get-LegacyServerLogDir $Provider) -ne (Get-ServerLogDir $Provider)) {
-    $file = Get-ChildItem (Get-LegacyServerLogDir $Provider) -Filter *.log -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-    $legacy = [bool]$file
-  }
   if (-not $file) { Write-Host "계정 $account 서버 기록이 아직 없어요 ($(Get-ServerLogDir $Provider))."; exit 0 }
-  if ($legacy) {
-    $shared = (Split-Path -Leaf (Split-Path -Parent $file.FullName | Split-Path -Parent)) -eq 'logs'
-    Write-Host "(이 비서 기록 폴더 $(Get-ServerLogDir $Provider)에 아직 기록이 없어 옛 폴더를 보여 줘요. 서버를 다시 켜면 새 폴더에 쌓여요.$(if ($shared) { ' 옛 공용 폴더에는 이 PC의 다른 비서 기록이 섞였을 수 있어요.' }))"
-  }
   Write-Host "== $($file.FullName) (끝 ${Lines}줄)"
   Get-Content $file.FullName -Encoding UTF8 -Tail $Lines
   exit 0

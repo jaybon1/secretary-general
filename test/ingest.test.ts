@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { ingestTranscript, parseTranscriptLine } from '../src/log/ingest-transcript.ts';
-import { formatLocal } from '../src/core/kst-time.ts';
+import { ingestTranscript } from '../src/log/ingest-transcript.ts';
+import { parseTranscriptLine } from '../src/log/transcript-entries.ts';
 import { planPurge, type PurgePlan } from '../src/log/purge.ts';
 import { tempDir, tempStore } from './helpers.ts';
 
@@ -42,9 +42,30 @@ test('incremental, idempotent, and safe with a half-written last line', () => {
   assert.equal(s.searchLog('두 번째', { limit: 5 })[0]?.message_uuid, 'u2');
 });
 
+// [늘 남김] 없으면 놓치는 실수: 기록에 객체가 아닌 JSON 줄(null 등)이 하나 끼면 대화 저장이 오류로 멈춰, 그 뒤 대화가 저장되지 않는다(대화 저장).
+test('lines that are not JSON objects are skipped and the rest is stored as before', () => {
+  const junk = ['null', '123', '[]', '"글"', '{not json'];
+  for (const j of junk) assert.deepEqual(parseTranscriptLine(j), [], j);
+
+  const real = [userMsg('u1', '첫 질문'), asstMsg('a1', [{ type: 'text', text: '첫 답' }]), userMsg('u2', '두 번째 질문'), asstMsg('a2', [{ type: 'text', text: '두 번째 답' }])];
+  const clean = tempStore();
+  const cleanFile = path.join(tempDir(), 'clean.jsonl');
+  fs.writeFileSync(cleanFile, `${real.join('\n')}\n`);
+  const mixed = tempStore();
+  const mixedFile = path.join(tempDir(), 'mixed.jsonl');
+  fs.writeFileSync(mixedFile, `${[junk[0], real[0], junk[1], real[1], junk[2], real[2], junk[4], real[3], junk[3]].join('\n')}\n`);
+
+  assert.equal(ingestTranscript(clean, cleanFile).added, 4);
+  assert.equal(ingestTranscript(mixed, mixedFile).added, 4);
+  const rows = (s: typeof clean) => s.sessionTail('s1', 20).map((r) => [r.message_uuid, r.role, r.content]);
+  assert.equal(rows(clean).length, 4);
+  assert.deepEqual(rows(mixed), rows(clean));
+});
+
 const wrapUp = (uuid: string, input: object) =>
   asstMsg(uuid, [{ type: 'tool_use', id: uuid, name: 'mcp__ccd_turn__wrap_up', input }]);
 
+// [늘 남김] 없으면 놓치는 실수: 사용자가 선택창(AskUserQuestion)에서 고른 답과 턴 끝 요약이 대화 기록에 저장되지 않는다.
 test('archives AskUserQuestion picks and end-of-turn recaps', () => {
   const answered = line({
     type: 'user',
@@ -140,11 +161,4 @@ test('stores a message the user sent mid-turn once, when it was sent, and no mac
   assert.equal(rows[1].created_at, at(15));
   // It is said inside the turn: deleting the last turn takes it along, and it does not count as a turn of its own.
   assert.deepEqual((planPurge(s, { kind: 'turns', n: 1 }, { sessionId: 's1', dirs: [] }) as PurgePlan).rows.map((r) => r.message_uuid), ['u1', 'q1', 'a3']);
-});
-
-test('formats stored UTC as Korean time, 24-hour', () => {
-  assert.equal(formatLocal('2026-10-16T11:43:00.000Z'), '2026-10-16 20:43');
-  assert.equal(formatLocal('2026-10-16T15:30:00Z'), '2026-10-17 00:30');
-  assert.equal(formatLocal('2026-10-16T15:30:00Z', true), '2026-10-17');
-  assert.equal(formatLocal('not a date'), 'not a date');
 });

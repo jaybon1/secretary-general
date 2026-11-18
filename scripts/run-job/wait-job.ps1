@@ -4,7 +4,8 @@
 # 비서는 이 명령을 백그라운드 명령(시간제한 3600000ms)으로 띄우고, "아직 도는 중"이 오면 알림 없이 같은 명령을 다시 띄운다.
 # 끝나면 그 일의 출력 전부(out.txt, 오류 출력이 있으면 err.txt)를 내고, 그 일의 종료 코드로 끝난다.
 #
-# 예: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-job/wait-job.ps1 -Id <id> [-MaxMinutes 55] [-IntervalSec 15]
+# 비서 폴더 밖(업무 세션 등)에서는 진입점 bin/wait-job.ps1로 부른다(-Detach 출력의 "기다리기:" 줄이 그 전체 경로를 적는다).
+# 예: powershell -NoProfile -ExecutionPolicy Bypass -File bin/wait-job.ps1 -Id <id> [-MaxMinutes 55] [-IntervalSec 15]
 
 param(
   [Parameter(Mandatory)] [string]$Id,

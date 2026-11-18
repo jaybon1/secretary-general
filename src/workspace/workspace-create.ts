@@ -29,7 +29,7 @@ import {
   type WorkspaceSpec,
 } from './workspace-paths.ts';
 import { renderAgent, renderCharter, renderHistory, renderMemory, renderTaskBrief } from './rules-text.ts';
-import { SKILL_GITIGNORE_LINES } from '../setup/skill-links.ts';
+import { SKILL_GITIGNORE_LINES } from './skill-links.ts';
 import { GITIGNORE_LINES, LINK_FILE, writeLink } from './secretary-link.ts';
 
 export * from './workspace-paths.ts';

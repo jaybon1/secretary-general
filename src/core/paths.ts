@@ -18,18 +18,11 @@ export const SECRETARY_HOME = path.join(os.homedir(), '.secretary');
 /**
  * This secretary's own logs: ~/.secretary/<its id>/logs (the id in .secretary-id, core/secretary-id.ts): server, idle
  * jobs, end notices. Two secretaries on one PC never write into one log. A copy without an id yet writes into
- * ~/.secretary/logs itself, as before ids. The logs from before stay where they are (logs/<id>/ until 2026-11-09, logs/
- * itself before ids; legacySecretaryLogDir). The PowerShell side: Get-SecretaryLogDir in scripts/lib/common.ps1.
+ * ~/.secretary/logs itself. The PowerShell side: Get-SecretaryLogDir in scripts/lib/common.ps1.
  */
 export function secretaryLogDir(root = PROJECT_ROOT, home = SECRETARY_HOME): string {
   const id = readSecretaryId(root);
   return id ? path.join(home, id, 'logs') : path.join(home, 'logs');
-}
-
-/** Where this secretary's logs were until 2026-11-09 (~/.secretary/logs/<id>); null without an id. Read only, never written. */
-export function legacySecretaryLogDir(root = PROJECT_ROOT, home = SECRETARY_HOME): string | null { // legacy-name: log-dir
-  const id = readSecretaryId(root);
-  return id ? path.join(home, 'logs', id) : null;
 }
 
 /**
@@ -40,30 +33,15 @@ export function legacySecretaryLogDir(root = PROJECT_ROOT, home = SECRETARY_HOME
 export const USAGE_DIR = path.join(SECRETARY_HOME, 'usage');
 
 /**
- * ~/.claude/usage: the same until 2026-11-09 (it sat in Claude Code's own folder, where nothing said it was the
- * secretary's). Only read, while copies of the secretary that still write there are about: the usage guard, the status
- * line's readers and the dashboard take the newer of the two (usage/usage-files.ts readUsage, readOverrideUntil). Nothing
- * new is written there. Its old run-job records are compared and removed by state-dir-migrate.ts legacyRunJobCleanup.
- */
-export const LEGACY_USAGE_DIR = path.join(os.homedir(), '.claude', 'usage'); // legacy-name: usage-dir
-
-/**
  * This secretary's own records: ~/.secretary/<its id>/state (core/secretary-id.ts): its work sessions
  * (worker-sessions.json, worker-reuse.jsonl), run-jobs (run-job-sessions.json, run-job-calls.jsonl, run-job-active/),
  * detached jobs (bg-jobs/) and work-session watchers (watch/), so two secretaries on one PC never read or write each
- * other's. A copy without an id yet keeps them in USAGE_DIR. Its records from before (~/.secretary/state/<id> until
- * 2026-11-09, ~/.claude/usage before ids) are copied in once (core/state-dir-migrate.ts). The PowerShell side:
- * Get-SecretaryStateDir in scripts/lib/common.ps1.
+ * other's. A copy without an id yet keeps them in USAGE_DIR. The PowerShell side: Get-SecretaryStateDir in
+ * scripts/lib/common.ps1.
  */
 export function secretaryStateDir(root = PROJECT_ROOT, home = SECRETARY_HOME, usageDir = USAGE_DIR): string {
   const id = readSecretaryId(root);
   return id ? path.join(home, id, 'state') : usageDir;
-}
-
-/** Where this secretary's records were until 2026-11-09 (~/.secretary/state/<id>); null without an id. */
-export function legacySecretaryStateDir(root = PROJECT_ROOT, home = SECRETARY_HOME): string | null { // legacy-name: state-dir
-  const id = readSecretaryId(root);
-  return id ? path.join(home, 'state', id) : null;
 }
 
 /** The secretary's scripts and local settings files that the TypeScript side starts, reads or names in its texts. */
@@ -72,6 +50,8 @@ export const SCRIPTS = {
   runJob: 'scripts/run-job/run-job.ps1',
   /** Makes and removes the work copy (git worktree with a node_modules junction) for the secretary's own code work through run-job. */
   runJobWorktree: 'scripts/run-job/run-job-worktree.ps1',
+  /** Waits up to 55 minutes for a job started with -Detach (scripts/lib/detached-job.ps1) and prints its output; workspace sessions call it too. */
+  waitJob: 'scripts/run-job/wait-job.ps1',
   remoteServer: 'scripts/remote-server/remote-server.ps1',
   serverControl: 'scripts/remote-server/server-control.ps1',
   installScheduledTasks: 'scripts/scheduled/install-scheduled-tasks.ps1',
@@ -99,12 +79,10 @@ export type ScriptName = keyof typeof SCRIPTS;
 /**
  * The secretary's own skills (delegate, consolidate, …), each <name>/SKILL.md, read where they really are:
  * .agents/skills/, here and in the general release (.claude/skills is only a link to it, which a fresh clone, a release
- * and an update do not have: setup/skill-links.ts). A workspace keeps its own the same way (workspace/workspace-paths.ts SKILLS_DIR).
+ * and an update do not have: workspace/skill-links.ts). A workspace keeps its own the same way (workspace/workspace-paths.ts SKILLS_DIR).
  */
 export const SECRETARY_SKILLS_DIR = '.agents/skills';
 
-/** Absolute path of skill <name>'s SKILL.md in this copy (or in `root`). */
-export const skillFile = (name: string, root = PROJECT_ROOT) => path.join(root, ...SECRETARY_SKILLS_DIR.split('/'), name, 'SKILL.md');
 
 /** Absolute path of one of them in this copy (or in `root`). */
 export const scriptPath = (name: ScriptName, root = PROJECT_ROOT) => path.join(root, ...SCRIPTS[name].split('/'));
@@ -115,24 +93,23 @@ export const scriptPath = (name: ScriptName, root = PROJECT_ROOT) => path.join(r
  * workspace's secretary-link.local.json (the secretary writes it with bin/ only, never its own folder: workspace/secretary-link.ts),
  * else under the secretary's own environment variable SECRETARY_<id>_DIR (the secretary id from core/secretary-id.ts, so
  * two secretaries on one PC each have their own); where a path is written once (scheduled tasks, user settings), by its
- * full path. Texts and the workspace charter's code no longer name the old SECRETARY_DIR (2026-11-10). Each passes everything through to the real script, so moving a script changes SCRIPTS
+ * full path. Each passes everything through to the real script, so moving a script changes SCRIPTS
  * and its bin file only (test/entry-points.test.ts keeps each bin file equal to entryText). The scripts in
- * scripts/lib/common.ps1 set the variables for what they start; the install check (setup/check-items.ts) looks for the
- * user's own. The old name without the id (SECRETARY_DIR) is only read while tools outside move on.
+ * scripts/lib/common.ps1 set the variable for what they start; the install check (setup/check-items.ts) looks for the
+ * user's own.
  */
 export const ENTRY_DIR = 'bin';
 /** The variable's name as texts write it for any install. */
 export const SECRETARY_DIR_ENV_TEXT = 'SECRETARY_<번호>_DIR';
 /** How a tool outside finds the entrance folder, as texts write it. */
 export const FIND_SECRETARY_TEXT = `작업 공간에서는 맨 위 secretary-link.local.json의 bin, 없으면 환경변수 ${SECRETARY_DIR_ENV_TEXT} 아래 ${ENTRY_DIR}`;
-/** The name before secretary ids: set for what the scripts start and read as a fallback while tools outside move on. */
-export const LEGACY_SECRETARY_DIR_ENV = 'SECRETARY_DIR'; // legacy-name: env-secretary-dir
-/** One install's variable, e.g. SECRETARY_A3F9_DIR; the old name while there is no id yet. */
-export const secretaryDirEnv = (id: string | null | undefined): string => (id ? `SECRETARY_${id.toUpperCase()}_DIR` : LEGACY_SECRETARY_DIR_ENV);
+/** One install's variable, e.g. SECRETARY_A3F9_DIR; SECRETARY_DIR while there is no id yet. */
+export const secretaryDirEnv = (id: string | null | undefined): string => (id ? `SECRETARY_${id.toUpperCase()}_DIR` : 'SECRETARY_DIR');
 
 export const ENTRY_POINTS = {
   'run-job.ps1': 'runJob',
   'run-job-worktree.ps1': 'runJobWorktree',
+  'wait-job.ps1': 'waitJob',
   'ego-grab.mjs': 'egoGrab',
   'usage-guard.mjs': 'usageGuard',
   'usage-statusline.mjs': 'usageStatusline',

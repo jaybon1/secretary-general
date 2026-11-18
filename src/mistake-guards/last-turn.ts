@@ -4,6 +4,7 @@
  * no tool calls, so this is the only place they are seen.
  */
 import fs from 'node:fs';
+import { blocks, parseLine, parseLines, tailLines, type Block } from '../core/transcript.ts';
 
 export interface Turn {
   /** uuid of the transcript line that started it (a user prompt, a background notification), '' when none was read. */
@@ -22,13 +23,6 @@ export interface Turn {
   lastUuid: string;
 }
 
-export interface Block {
-  type?: string;
-  id?: string;
-  text?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-}
 export interface Line {
   type?: string;
   uuid?: string;
@@ -38,32 +32,44 @@ export interface Line {
   message?: { model?: string; content?: unknown };
 }
 
-/** The transcript's last part read for a turn (a turn longer than this is read from where this starts). */
+/**
+ * The transcript's last part read for the last turn (readLastTurn: a turn longer than this is read from where this
+ * starts). Not cut at the last compaction: a compaction in the middle of a turn would lose where the turn began.
+ */
 const TAIL_BYTES = 8 * 1024 * 1024;
 
-export function tailLines(file: string): string[] {
-  const size = fs.statSync(file).size;
-  const start = Math.max(0, size - TAIL_BYTES);
-  const fd = fs.openSync(file, 'r');
-  try {
-    const buf = Buffer.alloc(size - start);
-    fs.readSync(fd, buf, 0, buf.length, start);
-    const lines = buf.toString('utf8').split('\n');
-    if (start > 0) lines.shift(); // cut mid-line
-    return lines.filter(Boolean);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
+/** The transcript's last part as whole lines (core/transcript.ts tailLines). */
+export const turnTailLines = (file: string): string[] => tailLines(file, TAIL_BYTES, { wholeOnly: true });
 
-export const blocks = (content: unknown): Block[] => (Array.isArray(content) ? (content as Block[]) : typeof content === 'string' ? [{ type: 'text', text: content }] : []);
+const COMPACTION_MARK = Buffer.from('"compact_boundary"');
 
 /**
- * What a Stop hook that sent the turn back says to the model (the app's own words, or this hook's reason). The head is
- * "[답변 검사·Stop 훅]"; it was the shorter form without 변 until 2026-11-11 and "[답변 검사]" for a day after, and a
- * session open across a change still has the older head in its transcript.
+ * The transcript's lines from its last compaction line on (that line included), or every line when there is none (a
+ * /clear starts a new file): what a check over the conversation so far reads, the basis-source check
+ * (seen-sources.ts readSeen). Read whole, not cut at a byte count: a cut tail did not hold the sources opened earlier in a
+ * long session and called them never opened. The compaction line is looked for from the end; a line that only quotes
+ * the mark (a message about compactions) is passed over.
  */
-export const HOOK_FEEDBACK = /^\s*(Stop hook feedback|\[답(?:변)? 검사(?:·Stop 훅)?\])/; // legacy-name: answer-check-head
+export function linesSinceCompaction(file: string): string[] {
+  const buf = fs.readFileSync(file);
+  let from = 0;
+  for (let at = buf.lastIndexOf(COMPACTION_MARK); at >= 0; at = at > 0 ? buf.lastIndexOf(COMPACTION_MARK, at - 1) : -1) {
+    const start = buf.lastIndexOf(0x0a, at) + 1;
+    const nl = buf.indexOf(0x0a, at);
+    const o = parseLine(buf.subarray(start, nl < 0 ? buf.length : nl).toString('utf8')) as (Line & { subtype?: string }) | null;
+    if (o?.type === 'system' && o.subtype === 'compact_boundary') {
+      from = start;
+      break;
+    }
+  }
+  return buf.subarray(from).toString('utf8').split('\n').filter(Boolean);
+}
+
+/**
+ * What a Stop hook that sent the turn back says to the model (the app's own words, or this hook's reason, whose head is
+ * "[답변 검사·Stop 훅]": stop-guard.ts FILL_HEAD).
+ */
+export const HOOK_FEEDBACK = /^\s*(Stop hook feedback|\[답변 검사·Stop 훅\])/;
 
 /**
  * A user line that starts a turn: not a tool result, not text the app adds inside a turn (isMeta, e.g. a loaded skill),
@@ -87,12 +93,7 @@ export function toolName(b: Block): string {
  * back) the answer is only what was written after that line.
  */
 export function lastTurn(lines: string[], afterUuid = ''): Turn {
-  const parsed: Line[] = [];
-  for (const l of lines) {
-    try {
-      parsed.push(JSON.parse(l) as Line);
-    } catch {}
-  }
+  const parsed = parseLines(lines) as Line[];
   let start = -1;
   for (let i = parsed.length - 1; i >= 0; i--) {
     if (startsTurn(parsed[i])) {
@@ -133,7 +134,7 @@ export function lastTurn(lines: string[], afterUuid = ''): Turn {
 
 export function readLastTurn(transcriptPath: string, afterUuid = ''): Turn | null {
   try {
-    return lastTurn(tailLines(transcriptPath), afterUuid);
+    return lastTurn(turnTailLines(transcriptPath), afterUuid);
   } catch {
     return null;
   }

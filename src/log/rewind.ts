@@ -17,12 +17,13 @@
  * 질문의 <secretary-rewind> 알림으로 한 번 알린다. Stop 훅(ingestTranscript)과 질문 훅(기억 주입보다 먼저)에서 돈다.
  */
 import fs from 'node:fs';
-import { boardReflects } from '../session-continuity/situation-board.ts';
-import { dropQuestionsFrom } from '../session-continuity/open-questions.ts';
-import { parseTranscriptLine } from './ingest-transcript.ts';
-import { deleteLogRows } from './purge.ts';
+import { boardReflects } from '../store/board-state.ts';
+import { dropQuestionsFrom } from '../store/open-questions.ts';
+import { parseTranscriptLine } from './transcript-entries.ts';
+import { deleteLogRows } from './log-delete.ts';
 import type { LogRowInfo, Store } from '../store/store.ts';
 import { nowIso } from '../core/kst-time.ts';
+import { parseLine } from '../core/transcript.ts';
 import { TAG } from '../core/names.ts';
 
 export const REWIND_REASON = '되감기로 버려진 대화에서 저장됨';
@@ -83,13 +84,8 @@ export function findAbandoned(text: string): Branch[] {
   const lines: Line[] = [];
   const markers: Marker[] = [];
   text.split('\n').forEach((raw, i) => {
-    if (!raw) return;
-    let o: Record<string, unknown>;
-    try {
-      o = JSON.parse(raw);
-    } catch {
-      return;
-    }
+    const o = parseLine(raw) as Record<string, unknown> | null;
+    if (!o) return;
     if (o.type === 'last-prompt' && o.rewound === true && typeof o.cutUuid === 'string' && typeof o.leafUuid === 'string') {
       markers.push({ n: i, cut: o.cutUuid, leaf: o.leafUuid });
     }

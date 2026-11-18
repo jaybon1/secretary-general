@@ -31,7 +31,7 @@ export const RUN_JOB_HOME = '_run-job-home';
  * Workers fix skills on a user correction; anything they find on their own waits in
  * pending/ until the secretary gets it approved. Quick has none of these.
  */
-/** Same place as the secretary's own (setup/skill-links.ts): real folders, .claude/skills is a link to it. */
+/** Same place as the secretary's own (workspace/skill-links.ts): real folders, .claude/skills is a link to it. */
 export const SKILLS_DIR = '.agents/skills';
 export const MEMORY_FILE = 'MEMORY.md';
 export const PENDING_DIR = 'notes/pending';

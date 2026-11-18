@@ -1,13 +1,13 @@
 /**
  * The devices of this PC's tailnet, as `tailscale status --json` lists them: an external device is named by its Tailscale
- * device name (the name `tailscale status` shows, the first label of its MagicDNS name). Used by the merge of a device's old
- * settings file (core/this-secretary.ts: its host address gets the device's name) and the install check (setup/check-items.ts:
- * device names that are not in the tailnet). Never called under the test mark: tests hand in the output.
+ * device name (the name `tailscale status` shows, the first label of its MagicDNS name). Used by the install check
+ * (setup/check-items.ts: device names that are not in the tailnet). Never called under the test mark: tests hand in the output.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { NO_LOCAL_ENV } from './local-settings.ts';
+import { parseJsonText } from './json-file.ts';
 
 export interface TailscaleDevice {
   /** The name `tailscale status` shows (MagicDNS name's first label, lower case). */
@@ -21,7 +21,7 @@ export interface TailscaleDevice {
 export function parseTailscaleStatus(text: string): TailscaleDevice[] {
   let v: { Self?: Peer; Peer?: Record<string, Peer> };
   try {
-    v = JSON.parse(text.replace(/^\uFEFF/, ''));
+    v = parseJsonText(text);
   } catch {
     return [];
   }
@@ -45,13 +45,4 @@ export function readTailscaleStatus(env: NodeJS.ProcessEnv = process.env): strin
   if (env[NO_LOCAL_ENV]) return null;
   const r = spawnSync(tailscaleExe(env), ['status', '--json'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
   return r.status === 0 && r.stdout ? r.stdout : null;
-}
-
-/** The device a host (an address, a MagicDNS name, or a device name) is, or null. */
-export function findTailscaleDevice(devices: TailscaleDevice[], host: string): TailscaleDevice | null {
-  const h = host.trim().toLowerCase().replace(/\.$/, '');
-  const label = h.split('.')[0];
-  const byIp = devices.find((d) => d.ips.includes(h));
-  if (byIp || /^[\d.]+$|:/.test(h)) return byIp ?? null;
-  return devices.find((d) => d.name === h || d.name === label || d.hostName === h) ?? null;
 }

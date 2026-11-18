@@ -12,12 +12,14 @@
     "cli": "node src/cli.ts",
     "test": "node test/run-tests.mjs",
     "test:changed": "node test/run-changed.ts",
+    "graph": "node test/import-graph.ts --check",
     "typecheck": "tsc -p ."
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "markdown-it": "^15.0.3",
+    "node-ical": "^0.27.6",
     "zod": "^4.6.7"
   },
   "devDependencies": {

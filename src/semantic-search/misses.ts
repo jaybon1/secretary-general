@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DB_PATH } from '../core/config.ts';
 import { formatLocal } from '../core/kst-time.ts';
-import { readJsonFile } from '../core/json-file.ts';
+import { appendJsonLine, readJsonFile } from '../core/json-file.ts';
 import { secretaryLogDir } from '../core/paths.ts';
 import { hookNoticeText } from '../core/hook-notice-text.ts';
 import { TAG } from '../core/names.ts';
@@ -25,9 +25,6 @@ import { MISS_STREAK_FILE } from './config.ts';
 export const MISS_LOG_NAME = 'semantic-search-misses.jsonl';
 /** Overrides where the misses are written (tests and the evaluation set write into their own folder). */
 export const MISS_LOG_ENV = 'SECRETARY_SEMANTIC_SEARCH_MISS_LOG';
-/** The record keeps about this many last lines (trimmed once it passes MISS_LOG_MAX_BYTES). */
-export const MISS_LOG_KEEP_LINES = 2000;
-const MISS_LOG_MAX_BYTES = 1024 * 1024;
 /**
  * A streak this long is told: a cold start after the server idled out answers again within seconds (the server's own
  * failure log shows recoveries 3 and 7 s after a crash), while two minutes without an answer means something is wrong.
@@ -52,17 +49,10 @@ export interface MissStreak {
 
 export const readStreak = () => readJsonFile<MissStreak>(MISS_STREAK_FILE);
 
+/** A line in the record (cut to its last lines past a size: core/json-file.ts appendJsonLine). */
 function append(line: object): void {
-  const file = missLogFile();
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    try {
-      if (fs.statSync(file).size > MISS_LOG_MAX_BYTES) {
-        const kept = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-MISS_LOG_KEEP_LINES);
-        fs.writeFileSync(file, kept.join('\n') + '\n');
-      }
-    } catch {}
-    fs.appendFileSync(file, JSON.stringify(line) + '\n');
+    appendJsonLine(missLogFile(), line);
   } catch {}
 }
 

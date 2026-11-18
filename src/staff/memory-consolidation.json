@@ -18,7 +18,12 @@
     "list_main_agenda",
     "set_main_agenda",
     "list_memories",
-    "list_topics"
+    "list_topics",
+    "get_memory_pairs",
+    "judge_memory_pair",
+    "get_tag_checks",
+    "set_memory_tags",
+    "merge_tags"
   ],
   "deniedTools": ["Bash", "PowerShell", "Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Monitor"],
   "timeoutMinutes": 45,

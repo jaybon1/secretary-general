@@ -4,11 +4,12 @@
  * memory-consolidation)에만 등록한다(mcp/server.ts). 비서 자신의 서버에는 없다.
  */
 import { z } from 'zod';
-import { fail, ok, type ToolContext } from './tool-common.ts';
+import { ACTION_FIELDS, actionValues, fail, ok, type ToolContext } from './tool-common.ts';
 import { CANDIDATE_KINDS, DURATIONS, VERDICTS } from '../memory/consolidate-verdicts.ts';
 import { QUOTE_DESCRIBE } from '../memory/source-quote.ts';
+import { resolveQuestionCondition } from '../store/open-questions.ts';
 
-export function registerConsolidateTools({ server, candidates, tally }: ToolContext): void {
+export function registerConsolidateTools({ server, store, candidates, tally }: ToolContext): void {
   if (!candidates) return;
   server.registerTool(
     'propose_memory',
@@ -24,10 +25,18 @@ export function registerConsolidateTools({ server, candidates, tally }: ToolCont
         importance: z.number().int().min(1).max(5).optional().describe('1 사소함 ~ 5 매우 중요 (기본 3)'),
         source_log_id: z.number().int().describe('근거가 된 대화 로그 id ([log #N]의 N, 사용자 말이 있으면 그 줄). 그 대화 시각으로 가까운 기억과 때를 견준다'),
         quote: z.string().optional().describe(QUOTE_DESCRIBE),
+        ...ACTION_FIELDS,
       },
     },
-    async ({ kind, content, tags, importance, source_log_id, quote }) =>
-      ok(await candidates.propose({ kind: kind as (typeof CANDIDATE_KINDS)[number], content, tags, importance, sourceLogId: source_log_id, quote })),
+    async ({ kind, content, tags, importance, source_log_id, quote, owner, due, condition }) => {
+      // An action carries who is to do it and when or after what (the to-do summary reads them); refused without an owner.
+      const action = kind === 'action' ? actionValues({ owner, due, condition }) : undefined;
+      if (action && 'error' in action) return fail(action.error);
+      // A question's label is kept as the row that asked it, as remember and the board's to-dos keep it (labels are given
+      // again in a new session): resolved now, so the candidate is saved with it as proposed.
+      if (action?.condition) action.condition = resolveQuestionCondition(store, action.condition);
+      return ok(await candidates.propose({ kind: kind as (typeof CANDIDATE_KINDS)[number], content, tags, importance, sourceLogId: source_log_id, quote, action }));
+    },
   );
 
   server.registerTool(

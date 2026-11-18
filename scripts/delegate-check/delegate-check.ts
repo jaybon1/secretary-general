@@ -1,6 +1,6 @@
 // 위임 앞뒤 대조(기능 'mistake-guards'). 비서 폴더 밖에서는 진입점 bin/delegate-check.mjs로 부른다.
 //   node bin/delegate-check.mjs brief <지시 파일> --tag <태그> [--tag <태그>]... [--query <말>] [--db <DB 파일>] [--memories <개수>] [--rules <줄 수>]
-//     지시서(TASK.md나 지시 파일)와 그 공간·업무 태그가 붙은 결정(decision) 기억을 대조해, 지시서에 안 들어간 듯한 결정 가운데
+//     지시서(TASK.md나 지시 파일)와 그 공간·업무 태그가 붙은 결정(decision)·할 일(action) 기억을 대조해, 지시서에 안 들어간 듯한 것 가운데
 //     지시서와 단어가 겹치는(드문 단어일수록 무겁게) 것을 관련 높은 순으로 위 몇 개(기본 10) 보여 주고, 들어간 듯한 결정을 잇는다.
 //     이어서 지시서가 있는 공간의 스킬(.agents/skills/*/SKILL.md, common-skills.json의 공통 스킬)에서 지시서와 단어가 겹치는
 //     규칙 줄을 점수 순으로 위 몇 줄(기본 10) 보여 준다(어긋났는지는 비서가 대조한다).
@@ -11,13 +11,20 @@
 //     보고의 "지웠다·없다·남지 않았다" 류 주장과 언급된 경로를 실제 파일·폴더와 대조하고, --root 아래 남은 테스트·임시 폴더 후보와
 //     결과물 상위 폴더(기본: 비서 폴더의 상위)의 낯선 항목·최근 바뀐 항목을 보여 준다.
 // 둘 다 판단은 하지 않고 대조표만 낸다: 빠진 듯한 결정은 지시서에 넣을지, 어긋난 주장은 업무 세션에 물을지 비서가 정한다.
-// 종료 코드: 0 = 걸린 것 없음, 1 = 걸린 것 있음(빈 지시서 칸, 지시서와 단어가 겹치는데 빠진 듯한 결정, 주장과 다른 실제, 없는 경로), 2 = 쓰는 법 오류.
+//   node bin/delegate-check.mjs private <지시 파일>... --provider <공급자> [--folder <보낼 공간 폴더>] [--db <DB 파일>] [--providers <providers.json>]
+//     개인정보를 넣으면 안 되는 공급자(providers.json의 personalDataAllowed가 true가 아님)로 보내는 지시와, 거기 적힌 TASK.md에서
+//     사용자 호칭(DB의 호칭 값과 핵심 프로필의 "호칭:" 줄), 기억·대화 번호(#1234 꼴), 다른 작업 공간 이름(DB의 공간 목록)을 찾는다.
+//     start-worker.ps1·run-job.ps1이 그런 공급자일 때 스스로 불러, 걸리면 띄우지 않고 멈춘다. 개인정보를 넣어도 되는 공급자면 검사하지 않는다.
+// 종료 코드: 0 = 걸린 것 없음, 1 = 걸린 것 있음(빈 지시서 칸, 지시서와 단어가 겹치는데 빠진 듯한 결정, 주장과 다른 실제, 없는 경로, 개인정보), 2 = 쓰는 법 오류.
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH, PROJECT_ROOT } from '../../src/core/config.ts';
 import { formatLocal } from '../../src/core/kst-time.ts';
-import { queryTerms, searchTerms } from '../../src/memory/search-terms.ts';
+import { scriptPath } from '../../src/core/paths.ts';
+import { queryTerms, searchTerms } from '../../src/store/search-terms.ts';
+import { getUserTitle, normalizeTitle, USER_WORD } from '../../src/store/user-title.ts';
+import { cleanTag, TAGS_SQL } from '../../src/store/tag-names.ts';
 
 // ---- brief: the parts on what the user wants -------------------------------------------------------------------------
 // A brief without the user's intent, what is out of scope and the user's own words sends the worker off on a retelling
@@ -69,10 +76,15 @@ export function briefPartsReport(brief: string): { text: string; empty: string[]
 
 export interface Decision {
   id: number;
+  /** 'decision', or 'action' (a to-do: a step the user asked for is left out of a brief as easily as a decision). */
+  kind: string;
   content: string;
   tags: string;
   created_at: string;
 }
+
+/** The memories a brief is held against: the user's decisions and the to-dos (action memories). */
+export const BRIEF_KINDS = ['decision', 'action'] as const;
 
 export interface Coverage {
   decision: Decision;
@@ -85,14 +97,19 @@ export interface Coverage {
 /** Below this share of its terms a decision counts as left out of the brief. */
 export const LEFT_OUT_BELOW = 0.5;
 
-/** Active decision memories carrying any of the tags (a tag may hold spaces, e.g. "업무 20"), plus those a query finds. */
+/**
+ * Active decision and action memories carrying any of the tags, plus those a query finds. A tag matches whole words of the
+ * memory's tags in order, so "모종 가게" finds a memory tagged "모종 가게" and one whose old tags were split into "모종", "가게"
+ * (the tag tables, migration 21).
+ */
 export function decisionsFor(db: DatabaseSync, tags: string[], query?: string): Decision[] {
   const byId = new Map<number, Decision>();
+  const kinds = BRIEF_KINDS.map((k) => `'${k}'`).join(', ');
   const tagged = db.prepare(
-    `SELECT id, content, tags, created_at FROM memories
-     WHERE valid_to IS NULL AND kind = 'decision' AND (' ' || tags || ' ') LIKE ? ORDER BY id`,
+    `SELECT id, kind, content, ${TAGS_SQL('m')} AS tags, created_at FROM memories m
+     WHERE valid_to IS NULL AND kind IN (${kinds}) AND (' ' || ${TAGS_SQL('m')} || ' ') LIKE ? ORDER BY id`,
   );
-  for (const t of tags.map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+  for (const t of tags.map((x) => cleanTag(x)).filter(Boolean)) {
     for (const r of tagged.all(`% ${t.replace(/[%_]/g, '')} %`) as unknown as Decision[]) byId.set(r.id, r);
   }
   if (query?.trim()) {
@@ -101,8 +118,8 @@ export function decisionsFor(db: DatabaseSync, tags: string[], query?: string): 
       const match = terms.map((t) => `"${t.replaceAll('"', '""')}"`).join(' OR ');
       const rows = db
         .prepare(
-          `SELECT m.id, m.content, m.tags, m.created_at FROM memories_fts f JOIN memories m ON m.id = f.rowid
-           WHERE memories_fts MATCH ? AND m.valid_to IS NULL AND m.kind = 'decision' ORDER BY bm25(memories_fts) LIMIT 30`,
+          `SELECT m.id, m.kind, m.content, ${TAGS_SQL('m')} AS tags, m.created_at FROM memories_fts f JOIN memories m ON m.id = f.rowid
+           WHERE memories_fts MATCH ? AND m.valid_to IS NULL AND m.kind IN (${kinds}) ORDER BY bm25(memories_fts) LIMIT 30`,
         )
         .all(match) as unknown as Decision[];
       for (const r of rows) byId.set(r.id, r);
@@ -179,7 +196,7 @@ export function rankCoverage(brief: string, coverage: Coverage[], corpus: string
 
 function decisionLine(c: RankedCoverage, mark: string): string {
   return (
-    `- [${mark} ${Math.round(c.covered * 100)}% · 관련 ${c.relevance.toFixed(1)}] #${c.decision.id} (${formatLocal(c.decision.created_at)}, ${c.decision.tags}) ${c.decision.content}` +
+    `- [${mark} ${Math.round(c.covered * 100)}% · 관련 ${c.relevance.toFixed(1)}] #${c.decision.id}${c.decision.kind === 'action' ? ' 할 일' : ''} (${formatLocal(c.decision.created_at)}, ${c.decision.tags}) ${c.decision.content}` +
     (c.shared.length ? `\n    겹친 말: ${c.shared.slice(0, 8).join(', ')}` : '') +
     (c.missingNames.length ? `\n    지시서에 없는 이름·숫자: ${c.missingNames.join(', ')}` : '')
   );
@@ -196,7 +213,7 @@ export function briefReport(briefFile: string, ranked: RankedCoverage[], tags: s
   const inBrief = ranked.filter((c) => c.covered >= LEFT_OUT_BELOW);
   const lines = [
     `지시서 대조: ${briefFile}`,
-    `대조한 결정 기억 ${ranked.length}개(태그: ${tags.join(', ') || '없음'}). 지시서에 안 들어간 듯 ${left.length}개 중 지시서와 단어가 겹치는 것 ${related.length}개, 관련 높은 위 ${shown.length}개(최대 ${top}, --memories로 바꿈):`,
+    `대조한 결정·할 일 기억 ${ranked.length}개(태그: ${tags.join(', ') || '없음'}). 지시서에 안 들어간 듯 ${left.length}개 중 지시서와 단어가 겹치는 것 ${related.length}개, 관련 높은 위 ${shown.length}개(최대 ${top}, --memories로 바꿈):`,
   ];
   for (const c of shown) lines.push(decisionLine(c, '빠진 듯'));
   if (!shown.length && ranked.length) lines.push('(지시서와 겹치는 빠진 결정 없음)');
@@ -206,7 +223,7 @@ export function briefReport(briefFile: string, ranked: RankedCoverage[], tags: s
     lines.push(`지시서에 들어간 듯 ${inBrief.length}개(관련 높은 순):`);
     for (const c of inBrief) lines.push(decisionLine(c, c.missingNames.length ? '일부' : '들어 있음'));
   }
-  if (!ranked.length) lines.push('(이 태그의 결정 기억이 없음: 태그가 맞는지 list_topics로 확인한다)');
+  if (!ranked.length) lines.push('(이 태그의 결정·할 일 기억이 없음: 태그가 맞는지 list_topics로 확인한다)');
   lines.push('→ "빠진 듯"·"일부"는 지시서에 넣을지 정한다. 이 일과 상관없는 결정이면 그냥 둔다.');
   return { text: lines.join('\n'), leftOut: related.length };
 }
@@ -485,12 +502,151 @@ export function reportCheck(reportText: string, opts: { reportFile: string; root
   return { text: lines.join('\n'), findings };
 }
 
+// ---- private: what must not go to a provider personal data may not go to --------------------------------------------
+// A gateway or a free plan may keep or learn from what it is sent (2026-11-13 the user's call), so a brief going there carries
+// only what the work needs. Whatever the secretary writes, three things are caught before the session or run-job starts:
+// the name the user is called by, memory and conversation numbers (they point into the user's records), and the names of
+// the user's other workspaces (other work, other people). The values come from the DB, never from the code.
+
+/** A provider personal data may go to: its personalDataAllowed is the JSON true (as providers.ps1 Test-PersonalDataAllowed). Unknown or unreadable: no. */
+export function personalDataAllowed(provider: string, providersFile = scriptPath('providers')): boolean {
+  try {
+    const raw = fs.readFileSync(providersFile, 'utf8');
+    const j = JSON.parse(raw.startsWith('﻿') ? raw.slice(1) : raw) as { providers?: Record<string, { personalDataAllowed?: unknown } | null> };
+    return j.providers?.[provider]?.personalDataAllowed === true;
+  } catch {
+    return false;
+  }
+}
+
+/** The titles in the profile's "호칭: …" line ("호칭: **홍길동** / **홍길동님**." → 홍길동), without 님 and 사용자. */
+export function profileTitles(profile: string): string[] {
+  const out = new Set<string>();
+  for (const line of profile.split(/\r?\n/)) {
+    const m = /호칭\s*\**\s*[:：]\s*(.+)$/.exec(line);
+    if (!m) continue;
+    for (const part of m[1].replace(/[*`_]/g, '').split(/[/,·|]|\s또는\s/)) {
+      const t = normalizeTitle(part.replace(/[.。!]+\s*$/, '').replace(/\(.*?\)/g, ''));
+      if (Array.from(t).length >= 2 && t !== USER_WORD) out.add(t);
+    }
+  }
+  return [...out];
+}
+
+export interface PrivateWords {
+  /** The names the user is called by. */
+  titles: string[];
+  /** The other workspaces: each with the words that name it (its name, title and folder name). */
+  workspaces: Array<{ label: string; words: string[] }>;
+}
+
+const samePath = (a: string, b: string) => path.resolve(a).replace(/[\\/]+$/, '').toLowerCase() === path.resolve(b).replace(/[\\/]+$/, '').toLowerCase();
+
+/** The words to look for, from the DB: the title (the user_title value and the profile's 호칭 line) and the workspaces other than `folder` (the shared quick one names no one). */
+export function privateWords(db: DatabaseSync, folder?: string): PrivateWords {
+  const titles = new Set<string>();
+  const t = getUserTitle(db);
+  if (t) titles.add(t);
+  try {
+    const p = db.prepare('SELECT content FROM profile ORDER BY version DESC LIMIT 1').get() as { content: string } | undefined;
+    for (const x of profileTitles(p?.content ?? '')) titles.add(x);
+  } catch {}
+  const workspaces: PrivateWords['workspaces'] = [];
+  let rows: Array<{ kind: string; name: string; title: string; folder: string }> = [];
+  try {
+    rows = db.prepare('SELECT kind, name, title, folder FROM workspaces ORDER BY id').all() as typeof rows;
+  } catch {}
+  for (const r of rows) {
+    if (r.kind === 'quick' || (folder && samePath(r.folder, folder))) continue;
+    const words = [...new Set([r.title, r.name, path.basename(r.folder)].map((w) => (w ?? '').trim()).filter((w) => Array.from(w).length >= 2))];
+    if (words.length) workspaces.push({ label: r.title || r.name, words });
+  }
+  return { titles: [...titles], workspaces };
+}
+
+/** A word as a pattern: Latin ends must not run into other Latin letters or digits ("site" not in "website"); Korean may (조사 follow). */
+function wordPattern(w: string): RegExp {
+  const esc = w.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  const pre = /^[A-Za-z0-9]/.test(w) ? '(?<![A-Za-z0-9])' : '';
+  const post = /[A-Za-z0-9]$/.test(w) ? '(?![A-Za-z0-9])' : '';
+  return new RegExp(`${pre}${esc}${post}`, 'i');
+}
+
+/**
+ * A memory or conversation number: # and up to seven digits, not part of a word, an HTML entity or a URL fragment,
+ * and not followed by a letter or digit (a hex colour with letters). A 3- or 6-digit one on a line about colours is a colour.
+ */
+export const RECORD_NUMBER = /(?<![\w&#/])#\d{1,7}(?![\w])/g;
+const COLOUR_LINE = /색|colou?r|background|배경|fill|stroke|border|hex|css/i;
+
+export interface PrivateHit {
+  file: string;
+  line: number;
+  kind: '호칭' | '기억·대화 번호' | '다른 작업 공간';
+  what: string;
+  text: string;
+}
+
+/** Every hit in a text, line by line. */
+export function privateHits(text: string, file: string, words: PrivateWords): PrivateHit[] {
+  const hits: PrivateHit[] = [];
+  const pats = {
+    titles: words.titles.map((t) => ({ t, re: wordPattern(t) })),
+    spaces: words.workspaces.map((s) => ({ s, res: s.words.map((w) => ({ w, re: wordPattern(w) })) })),
+  };
+  text.split(/\r?\n/).forEach((l, i) => {
+    const at = (kind: PrivateHit['kind'], what: string) => hits.push({ file, line: i + 1, kind, what, text: l.trim().slice(0, 120) });
+    for (const { t, re } of pats.titles) if (re.test(l)) at('호칭', t);
+    for (const m of l.matchAll(RECORD_NUMBER)) if (!((m[0].length === 4 || m[0].length === 7) && COLOUR_LINE.test(l))) at('기억·대화 번호', m[0]);
+    for (const { s, res } of pats.spaces) {
+      const hit = res.find(({ re }) => re.test(l));
+      if (hit) at('다른 작업 공간', `${s.label}(${hit.w})`);
+    }
+  });
+  return hits;
+}
+
+/** The TASK.md files a brief names (paths ending in TASK.md, from the brief's folder or the workspace), that exist. */
+export function briefsNamedIn(text: string, from: string[]): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/(?:[A-Za-z]:)?[^\s`'"<>()|*?]*TASK\.md\b/gi)) {
+    const p = m[0];
+    const candidates = path.isAbsolute(p) ? [p] : from.map((d) => path.resolve(d, p));
+    const hit = candidates.find((c) => fs.existsSync(c) && fs.statSync(c).isFile());
+    if (hit && !out.some((o) => samePath(o, hit))) out.push(hit);
+  }
+  return out;
+}
+
+/** Checks the brief files and the TASK.md files they name; the hits and the report text. */
+export function privateCheck(files: string[], words: PrivateWords, folder?: string): { text: string; hits: PrivateHit[]; checked: string[] } {
+  const checked: string[] = [];
+  const queue = [...files];
+  while (queue.length) {
+    const f = path.resolve(queue.shift() as string);
+    if (checked.some((c) => samePath(c, f))) continue;
+    checked.push(f);
+    const text = fs.readFileSync(f, 'utf8');
+    queue.push(...briefsNamedIn(text, [path.dirname(f), ...(folder ? [folder] : [])]));
+  }
+  const hits = checked.flatMap((f) => privateHits(fs.readFileSync(f, 'utf8'), f, words));
+  const lines = [`개인정보 검사(개인정보를 넣으면 안 되는 공급자): ${checked.join(', ')}`];
+  if (!hits.length) lines.push('걸린 것 없음(호칭, 기억·대화 번호, 다른 작업 공간 이름)');
+  else {
+    lines.push(`걸린 것 ${hits.length}개:`);
+    for (const h of hits) lines.push(`- ${h.file}:${h.line} [${h.kind}] ${h.what} · ${h.text}`);
+    lines.push('→ 그 줄을 이 업무에 필요한 말로 고쳐 쓴 뒤 다시 띄운다: 호칭은 "사용자"로, 기억·대화 번호는 빼거나 그 내용을 풀어 쓰고, 다른 작업 공간 이야기는 뺀다.');
+  }
+  return { text: lines.join('\n'), hits, checked };
+}
+
 // ---- command line ---------------------------------------------------------------------------------------------------
 
 const USAGE = [
   '사용:',
   '  node bin/delegate-check.mjs brief <지시 파일> --tag <태그> [--tag <태그>]... [--query <말>] [--db <DB 파일>] [--memories <개수>] [--rules <줄 수>]',
   '  node bin/delegate-check.mjs report <보고 파일> [--root <폴더>]... [--top <결과물 상위 폴더>] [--hours <시간>]',
+  '  node bin/delegate-check.mjs private <지시 파일>... --provider <공급자> [--folder <보낼 공간 폴더>] [--db <DB 파일>] [--providers <providers.json>]',
 ].join('\n');
 
 function flags(args: string[]): { pos: string[]; multi: Record<string, string[]> } {
@@ -553,6 +709,34 @@ export function main(argv: string[], out: (s: string) => void = console.log): nu
     });
     out(r.text);
     return r.findings.some((f) => f.kind !== 'top-unknown') ? 1 : 0;
+  }
+  if (cmd === 'private' && pos.length >= 1 && multi.provider?.[0]) {
+    const provider = multi.provider[0];
+    if (personalDataAllowed(provider, multi.providers?.[0])) {
+      out(`개인정보 검사 안 함: ${provider}는 개인정보를 넣어도 되는 공급자(providers.json의 personalDataAllowed가 true)`);
+      return 0;
+    }
+    const missing = pos.find((f) => !fs.existsSync(f));
+    if (missing) {
+      out(`지시 파일이 없음: ${missing}`);
+      return 2;
+    }
+    // Without the DB the title and the workspace names are unknown: stop rather than let a brief through unchecked.
+    const dbFile = multi.db?.[0] ?? DB_PATH;
+    if (!fs.existsSync(dbFile)) {
+      out(`기억 DB가 없어 호칭·작업 공간 이름을 못 읽음: ${dbFile}`);
+      return 2;
+    }
+    const db = new DatabaseSync(dbFile, { readOnly: true });
+    try {
+      db.exec('PRAGMA busy_timeout = 5000');
+      const folder = multi.folder?.[0] ? path.resolve(multi.folder[0]) : undefined;
+      const r = privateCheck(pos, privateWords(db, folder), folder);
+      out(r.text);
+      return r.hits.length ? 1 : 0;
+    } finally {
+      db.close();
+    }
   }
   out(USAGE);
   return 2;

@@ -2,7 +2,138 @@
 
 버전마다 새 기능, 바뀐 것, 고친 것, 올린 뒤 할 일을 적는다(최신이 위). 업데이트는 비서에게 "업데이트 확인해 줘"라고 하면 되고(README "업데이트"), 비서가 이 파일의 "올린 뒤 할 일"을 기준 버전 다음부터 차례로 함께 한다.
 
-버전 번호: v0.9.0부터 0.x 세 자리(`v0.가운데.끝`)를 쓴다. 끝자리는 고친 것만, 가운데는 기능이 더해지거나 바뀐 것, 앞자리는 올린 뒤 사용자가 손봐야 하는 큰 변경이다(1.0.0 전까지는 앞자리를 0으로 둔다). 그 전의 v1~v8은 0.1.0~0.8.0으로 본다(v8 다음이 v0.9.0). 업데이트는 tag를 이 번호로 줄 세우고, 폴더의 `VERSION`이 `v8`처럼 옛 형식이어도 맞게 알아본다.
+버전 번호: 0.x 세 자리(`v0.가운데.끝`)를 쓴다. 끝자리는 고친 것만, 가운데는 기능이 더해지거나 바뀐 것, 앞자리는 올린 뒤 사용자가 손봐야 하는 큰 변경이다(1.0.0 전까지는 앞자리를 0으로 둔다). 업데이트는 v0.11.0부터 올린다. v0.11.0보다 옛 버전의 내역은 지웠다.
+
+## v0.12.0
+
+v0.11.0에서 올리면 기억(`secretary.db`), 검색 모델(`models/`), 작업 공간은 그대로 이어 쓴다. DB는 업데이트 뒤 새 코드가 처음 열 때(질문·Stop 훅이나 `node src/cli.ts` 명령) 자동으로 맞춰진다(그 전에 `backups/`에 자동 백업). 이번에 DB에서 바뀌는 것: 할 일 값 표(`memory_actions`)와 일정 표가 새로 생기고, 업무 표(`tasks`)가 질문 대기(`asking`)를 받도록 업무 번호·기록을 그대로 둔 채 다시 만들어지고, 기억 태그가 태그 표(`tags`·`memory_tags`)로 옮겨지고, 단어 색인이 본문 사본 없는 색인이 되고, 실수 기록의 옛 분류 이름(`english`, `path-prose` 등)이 '영어 답'·'경로 표기'로 합쳐진다. 기억과 대화 기록의 내용 글은 그대로다.
+
+새 기능
+- **공통 스킬(`common-skills`):** 작업 공간과 비서가 함께 쓰는 쓰는 법을 공통 스킬로 싣는다(`common-skills/`: 비서 프로그램 부르기 `common-secretary-programs`, Windows 셸 주의사항 `common-windows-shell`, 웹 조사 `common-web-research`, 막힌 페이지 읽기 `common-web-unblock`, 미리보기 페이지 `common-local-preview-pages`). 설치·업데이트 마무리가 `workspaces\_skills`에 없는 것만 복사해 깔고, 업데이트가 거기서 고친 것을 비서 파일처럼 지킨다(양쪽이 다 고친 파일은 묻는다). 작업 공간에는 비서 프로그램 부르기·Windows 셸 스킬이 목록과 상관없이 붙는다. 공간 규칙(AGENTS.md)의 비서 프로그램 찾기 함수 세 벌은 `common-secretary-programs` 스킬을 가리키는 한 줄로 줄었다.
+- **할 일 요약(`todo-summary`):** 질문마다 DB에서만 모은 할 일 요약(남은 질문, 도는 업무, 사용자 차례 안건, 사용자 할 일의 기한 지남·7일 안 기한·조건, 오늘과 7일 안 일정)이 붙고, 비서는 "다음 행동 및 순서: 없음"인 답 끝에 그 요약을 붙인다. 할 일 기억에는 주인(사용자·비서)·기한·조건(날짜, 맡긴 업무 끝남, 커밋이 main에 들어감, 질문에 답함, 글로 적은 조건)이 새 표 `memory_actions`에 붙는다(`remember`·기억 정리의 `propose_memory`에 `owner`·`due`·`condition`, `node src/cli.ts action-set`·`action-list`). 비서 할 일의 조건이 채워지면 프로그램이 확인해 비서에게 알린다. 일정은 키 폴더에 캘린더 iCal 비밀 주소 키를 두고 `this-secretary.local.json`의 `todo-summary` 키에 그 파일 이름을 적으면 30분마다 받는다(`feature-toggle` 스킬 참고 파일 `todo-summary.md`).
+- **서브에이전트 보고 저장(`scripts/subagent-report/subagent-report.ts`):** 서브에이전트가 마지막에 보낸 보고(대화 기록의 `SubagentHandback` 입력)를 원문 그대로 결과 폴더의 `REPORT.md`로 저장한다(`node scripts/subagent-report/subagent-report.ts <agent id> <결과 폴더>`). 비서가 보고를 옮겨 적지 않는다. 다른 설정 폴더(`.claude-<이름>`)도 찾고, 이미 다른 내용의 파일이 있으면 쓰지 않는다(`--force`면 덮어씀).
+- **태그 경계 한꺼번에 정하기(`node src/memory/tag-boundaries.ts`):** 태그 표로 옮길 때 띄어쓰기로 나눈 태그("할", "일")가 남은 기억을 100개씩 Haiku에 보내 원래 낱말 묶음("할 일")을 받고, 낱말이 그대로인 답만 프로그램이 적용한다(기억 정리가 한 번에 20개씩 고치던 것을 한꺼번에). `--limit <수>`로 시범, `--dry-run`으로 미리보기만, 실행마다 시간·토큰·비용을 낸다. 경계만 옮긴 기억은 단어 색인과 의미 벡터를 그대로 둔다.
+- **run-job 결과를 보고 파일로 바로(`-ReportFile <파일|폴더>`):** 결과 글을 그 파일(폴더면 그 안의 `REPORT.md`)에 원문 그대로 쓴다. 이미 내용이 있으면 돌리기 전에 멈추고(`-Force`면 덮어씀), `-Detach`·`wait-job.ps1`로 떼어 돌려도 된다.
+
+바뀐 것
+- **상황판은 대화 흐름만:** 상황판에서 "사용자의 실행·확인·결정이 필요한 사항", "보류한 사항", "비서가 확인할 사항" 섹션을 뺐다. 할 일은 DB의 할 일 기억에 두고, 상황판 담당은 같은 실행에서 끝난 듯한 할 일·조건이 채워진 듯한 할 일·새 할 일만 정해진 형식으로 내고 프로그램이 DB에 적는다(끝난 듯한 할 일은 표시만 하고 비서가 확인해 닫는다). 할 일 섹션이 있던 마지막 상황판은 `node src/cli.ts situation-board-show --before-todo`로 본다.
+- **기억 줄에 할 일 값:** `recall`·`list_memories`와 질문마다 붙는 관련 기억에서, 값이 있는 할 일 기억은 줄 끝에 `[사용자 · 기한 2026-11-20 · 조건 업무 3 끝남 (기다림) · 끝난 듯 표시됨]`처럼(시각이 있으면 `기한 2026-11-21 15:00`) 주인·기한·조건(기다림/채워짐/채워진 듯)·끝난 듯 표시가 붙는다.
+- **상황판이 찾은 새 할 일도 중복 확인:** `remember`와 같은 의미 검색 중복 확인(최근 3일, 뜻 점수 0.85 이상)을 상황판 담당이 낸 새 할 일에도 한다. 비슷한 기억이 있으면 저장하지 않고 상황판 실행 기록에 "중복 같아 뺌 #번호"를 남기며, 비서에게 `<secretary-todo-due>`로 한 번 알려 잘못 거른 것을 비서가 저장할 수 있게 한다. 의미 검색 서버가 떠 있지 않거나 실패하면 전처럼 글자 비교만 하고 저장한다.
+- **업무 상태 "질문 대기"(`asking`):** 업무 세션이 `[질문]`으로 멈추면 비서가 `update_task`로 `asking`으로 바꾸고, 답이나 새 지시를 보낼 때 `running`으로 되돌린다(`delegate` 스킬). 할 일 요약의 "도는 업무", 대시보드 업무 칸반, 새 세션의 돌고 있는 업무 안내가 "질문 대기"로 보여 주고, 질문 대기 업무는 모니터링을 다시 띄울 대상에서 빠진다. 할 일 조건 "업무 N 끝남"은 질문 대기를 끝난 것으로 보지 않는다.
+- **할 일 요약의 남은 질문:** 질문을 18자로 자르던 것을 그만두고, 비서가 답 끝 "남은 질문에 답해 주세요: AA(할 일 고치는 기억 도구), AB"에 붙인 짧은 이름을 쓴다. 이름이 없는 질문은 물음표로 끝나는 질문 문장 전체를 쓴다(앞의 설명 문장은 뺀다).
+- **뒤에서 도는 일을 기다릴 때의 답 끝:** "다음 행동 및 순서: 없음 (기다리세요…)" 대신 "1. 업무N(이름) 결과 기다리기 (…)"처럼 번호 단계로 쓴다. 기억 정리 안내 줄은 "없음"인 답에만 붙고 붙은 답이 나올 때까지 안내가 다시 오며, 대화 크기 안내는 할 일이 남았으면 `/compact`만 권한다.
+- **처음 쓸 때 이름은 묻지 않음:** 핵심 프로필이 비어 있을 때 비서가 부를 호칭과 핵심 선호(말투, 답 길이 등)만 묻는다. 이름은 필요하면 사용자가 말해 준다.
+- **옛 버전 안내 지움:** v0.11.0보다 옛 버전(v1~v8, v0.9.0, v0.10.0)의 업데이트 내역과 README의 옛 버전에서 올리는 안내를 지웠다. 업데이트는 v0.11.0부터 올린다.
+- **옛 버전용 코드 지움:** 업데이트 도우미(`scripts/update.mjs`)에서 v0.10.0보다 옛 버전에서 올릴 때만 쓰던 처리(v1~v8 버전 번호 읽기, 옛 스킬 자리 옮기기, v0.10.0에서 바뀐 기능·파일 이름 옮기기 등)와 v7용 명령 `main-agenda-from-profile`, v1~v6용 `UPDATE-PROMPT.md`를 뺐다. v0.11.0보다 옛 버전 폴더는 업데이트가 버전을 판별하지 않고 멈춘다. 그 버전들에서 바뀐 옛 이름(`~/.claude/usage`의 사용량 기록과 정지 장치 끄기 파일, 환경변수 `USAGE_PAUSE_PCT`·`SECRETARY_EMBED*`·번호 없는 `SECRETARY_DIR`, 옛 기록·서버 기록 폴더, 옛 스킬 구조 `skills/<이름>/`, 공간의 옛 `secretary.json`, `common-` 없는 공통 스킬 목록, 번호 없는 예약 작업 이름)도 더는 읽거나 옮기지 않는다. 파일·폴더는 v0.10.0으로 올릴 때 이미 옮겨졌다. 옛 이름 환경변수를 직접 정해 두었으면 새 이름(`SECRETARY_USAGE_GUARD_PCT`, `SECRETARY_SEMANTIC_SEARCH*`, `SECRETARY_<번호>_DIR`)으로 바꾼다.
+- **옛 이 PC 설정 파일 옮기기 지움:** 따로 있던 이 PC 설정 파일(`scripts/*.local.json`)을 `this-secretary.local.json`으로 옮기던 명령 `this-secretary-merge`, 의미 검색 서버의 DB 옆 파일 옛 이름(`secretary.db.embedder*`)을 새 이름으로 옮기던 처리, 그 옛 파일이 남았는지 보던 설치 상태 점검 항목 `renamed-local-files`를 뺐다. 그 파일들은 v0.10.0으로 올릴 때 이미 옮겨졌다. 옛 파일이 남아 있어도 읽지 않고, `.gitignore`의 그 파일 줄(`scripts/dashboard.local.json` 등)도 뺐다.
+- **보조 폴더 옛 이름 옮기기 지움:** `node src/cli.ts workspace-aux-folders`(설치 상태 점검 `workspace-aux-folders`)가 옛 이름 보조 폴더(`run-job-home`, `old`·`_old`, `_consolidate`·`_board`·`_workers`)를 새 이름으로 옮기고 DB의 보관 공간 위치를 고치던 일을 뺐다. v0.10.0으로 올린 뒤 할 일에서 이미 옮겼다. 담당자 폴더(`_staff/<담당자>`)와 run-job 기본 폴더(`_run-job-home`)가 없으면 만드는 일은 그대로 한다.
+- **v0.10.0에서 올릴 때만 쓰던 처리 지움:** 업데이트는 v0.11.0부터 올린다(`scripts/update.mjs`의 `MIN_BASE`). v0.10.0에서 v0.11.0으로 옮겨진 파일 표(`scripts/update-moves.json`의 `v0.11.0` 칸)를 뺐다. v0.11.0이 이미 새 이름으로 옮긴 것도 더는 읽거나 고치지 않는다: 비서 표시 없는 공간 `AGENTS.md`를 표시로 감싸 옮기기(옛 틀 줄 표와 `node src/cli.ts workspace-links --add-missing`), 공간·비서 `.gitignore`의 옛 주석("입구 폴더", "# 스킬 연결(") 고치기, Stop 훅이 답을 되돌릴 때 붙이던 옛 머리("[답 검사]", "[답변 검사]") 읽기, run-job 끝 줄의 옛 이름 "(이어 부름)". 비서 표시가 없는 공간 `AGENTS.md`는 이제 `workspace-links`가 바꾸지 않고 "비서 표시가 없음"으로 알린다(v0.11.0 올린 뒤 할 일 2에서 정하지 않은 공간이 남았으면 비서가 그 공간 `AGENTS.md`에 표시를 직접 넣는다). run-job 통계(`scripts/run-job/run-job-stats.ps1`)는 옛 기록의 새로 시작한 이유("문맥 초과" 등)를 그대로 새 글자와 같이 센다. 업데이트 마무리(`scripts/update.mjs finish`)는 이제 `workspace-links`만 돌린다: v0.10.0에서 올릴 때 Claude 구독 공급자에 `"personalDataAllowed": true`를 넣던 단계를 뺐다(배포판 기본 `providers.json`의 구독 공급자에는 이미 들어 있다). 값이 없는 공급자는 설치 상태 점검 `provider-personal-data`가 알린다.
+- **모니터링이 질문 대기를 직접 표시:** 업무 세션이 턴을 끝내 모니터링(`scripts/worker/watch-worker.ps1`)이 비서를 깨울 때, 업무 세션의 마지막 답이 `[질문]`으로 시작하면 그 세션에 연결된 업무 가운데 `running`인 것을 `asking`(질문 대기)으로 바꾸고 바꿨다고 한 줄 알린다(새 명령 `node src/cli.ts worker-asking`). 마지막 답은 화면 글(`claude logs`)이 아니라 그 세션의 대화 기록(`<설정 폴더>/projects/…/<세션 id>.jsonl`)의 끝에서 읽는다. 화면 글은 선택지가 많아 화면보다 긴 질문이면 `[질문]` 줄이 위로 밀려나 남지 않기 때문이다. 대화 기록을 못 찾으면 아무것도 바꾸지 않는다. 끝난 업무 등 다른 상태는 건드리지 않는다. `notify_when_idle` 알림으로 깬 때는 전처럼 비서가 `update_task`로 바꾼다.
+- **할 일 값 글을 한 곳에서:** 상황판 담당이 읽는 할 일 목록과 `recall`·`list_memories`·관련 기억에 붙는 할 일 값(주인·기한·조건·끝난 듯 표시)을 같은 함수가 만들고, 두 곳 모두 상황판 담당이 읽던 글로 맞췄다. 기억 줄의 기한이 `11/20` 대신 연도까지 든 `2026-11-20`(시각이 있으면 `2026-11-21 15:00`)으로, 조건 상태 앞에 띄어쓰기가 들어가고, "끝난 듯"이 "끝난 듯 표시됨"으로 보인다. 할 일 요약의 날짜(`11/20`)는 그대로다.
+- **말투 규칙 한 문장 더함:** `AGENTS.md` "말투"에 "한 글자 낱말을 이어 붙인 말은 되도록 쓰지 않는다."를 더했다.
+- **업무 세션 출력 보기는 마지막 답 원문으로:** `scripts/worker/worker-logs.ps1`이 `claude logs` 화면 대신 업무 세션의 대화 기록(jsonl)에서 마지막 답의 글 전체를 보여 준다. 화면 출력은 다시 그릴 때마다 통째로 쌓이고 화면보다 긴 답은 앞이 남지 않아서다. 예전 화면 출력은 `-Screen`으로 본다. 대화 기록을 못 찾으면 그렇다고 한 줄 알리고 화면 출력을 보여 준다.
+- **모니터링의 진행 판정은 대화 기록으로:** `scripts/worker/watch-worker.ps1`이 업무 세션이 일하는지를 `claude logs` 화면 끝(시계·경과 시간을 지운 글) 대신 대화 기록 jsonl과 그 세션의 서브에이전트 기록(`<세션 id>/subagents/`)의 크기·수정 시각으로 본다. "멈춤 의심" 알림의 마지막 출력은 마지막 도구와 마지막 글 앞부분으로 바뀌었다. 기록을 못 찾으면 예전처럼 화면 끝을 비교한다.
+- **모니터링 판정을 한 명령으로, 승인 대기는 세션 목록으로:** `scripts/worker/watch-worker.ps1`이 확인마다 새 명령 `node src/cli.ts worker-status <설정 폴더> <업무 세션 id>` 한 번으로 판정을 받는다(세션 목록 `claude agents --json`, 작업 상태 파일 `jobs/<id>/state.json`, 대화 기록을 함께 읽어 목록에 없음·승인 대기·쉼·일하는 중과 진행 여부, 알림에 붙일 마지막 기록을 JSON으로 준다). 승인 대기는 목록의 `status: waiting`(`waitingFor: permission prompt`)을 먼저, 작업 상태 파일의 `tempo: blocked`·`state: working`을 보조로 보고, 화면(`claude logs`) 끝은 목록에 status가 없을 때만 빈 줄을 뺀 30줄에서 본다. 예전에는 화면 끝 30줄만 봐서 빈 줄 아래로 밀린 승인 창을 놓치고, status가 busy가 아니면 쉼으로 봐서 승인 창에 멈춘 세션을 "idle(대기)… 턴을 끝냈어요"로 알릴 수 있었다. 승인 말고 다른 입력을 기다리는 세션(status waiting, 다른 waitingFor)도 "승인 대기:"로 알리고 기다리는 것을 붙인다. 판정 명령이 세 번 이어 실패하면 "모니터링 오류:"로 알리고 끝난다. `worker-transcript`의 `activity`·`summary`는 이 명령으로 옮겨 지웠다. 이 PC 자식 명령의 CPU·결과 폴더·외부 기기 확인과 알림 글은 그대로다.
+- **대화 기록(jsonl) 읽기를 한 파일로:** 줄 하나 읽기, 파일 끝 읽기, 업무 세션 기록 찾기(작업 상태 파일의 `linkScanPath`, 없으면 `projects` 아래 세션 id), 한 답의 여러 줄을 `message.id`로 묶기, 마지막 컨텍스트 크기를 `src/core/transcript.ts` 한 곳에 모았다. 업무 세션 스크립트는 jsonl을 직접 읽지 않고 새 명령 `node src/cli.ts worker-transcript <answer|context|path> <설정 폴더> <업무 세션 id>`를 쓴다. 명령 `context-tokens`는 이 명령의 `context`로 바뀌어 지웠고, `worker-asking`은 projects 폴더 대신 설정 폴더를 받는다. 대화 저장·되감기 정리는 동작을 바꾸지 않았다.
+- **업무 세션 찾기를 한 곳에서:** 업무 세션 스크립트(`scripts/worker/`의 시작·보내기·출력 보기·끝 표시·모니터링)가 세션 목록(`claude agents --json`)을 각자 읽어 id를 저마다 맞추던 것을 새 명령 `node src/cli.ts worker-agent <업무 세션 id>` 하나로 모았다. 짧은 id, 전체 uuid, `bg:` 붙은 id, 세션 이름을 같은 순서(정확히 같은 id → 앞부분이 같은 id → 이름, 여럿이면 목록의 첫 것)로 맞춘다. 계정마다 다른 설정 폴더에서 찾는 것과 출력 글은 그대로다.
+- **업무 세션에 메시지를 보낼 때 떠 있는 세션을 다시 띄우지 않음:** `scripts/worker/send-worker.ps1`이 메시지를 못 보냈을 때 세션 목록을 다시 읽어, 세션이 떠 있거나 상태를 알 수 없으면 다시 띄우지 않고 "못 보냄"으로 끝난다(종료 코드 1). 백그라운드 서비스가 꺼져 상태만 남은 세션만 전처럼 다시 띄운다. 떠 있는 세션을 다시 띄우면 다른 id의 사본이 생겼기 때문이다.
+- **할 일 요약을 번호 없는 목록으로:** 묶음 이름을 한 줄에 쓰고 그 아래 할 일·일정을 한 줄씩 들여 쓴다(폰 화면에서 ' · '로 이어 쓴 줄보다 읽기 쉽다).
+- **할 일을 닫은 턴의 요약은 다시 뽑아서:** 비서가 할 일을 닫거나 표시를 되돌린 턴에 답 끝에 할 일 요약을 붙이면, 앞서 붙은 요약 대신 `node src/cli.ts todo-summary`로 다시 뽑은 요약을 붙인다(방금 닫은 할 일이 요약에 남지 않게).
+- **run-job으로 넘기는 기준:** `AGENTS.md`와 `run-job` 스킬에서 run-job으로 넘기는 기준을 도구 횟수 대신 "결과 글만 필요하고 읽을 양이 많아 비서 대화가 크게 불어날 일"로 바꿨다.
+- **추천 근거 검사가 자동으로 붙은 기억도 본 것으로:** 답변 검사가 이 세션(마지막 `/clear`·압축 뒤)에서 질문마다 자동으로 붙은 기억을 비서가 본 것으로 친다. 검사에 걸린 다음 턴에는 걸린 자리를 다시 확인해 실제로 틀렸을 때만 답 맨 위에서 바로잡는다.
+- **기억 정리·대화 크기 안내 줄:** 기억 정리 안내가 "필요하신 경우 '기억 정리 확인'을 보내 주세요"로 바뀌고, 이 줄과 대화 크기 안내 줄은 앞뒤를 빈 줄로 띄운 따로 된 문단으로 붙는다.
+- **기다리기 진입점 `bin/wait-job.ps1`:** `-Detach`로 띄운 run-job을 55분씩 기다리는 명령을 비서 폴더 밖(업무 공간)에서도 `<bin>\wait-job.ps1`로 부른다. 띄운 명령 출력의 "기다리기:" 줄이 그 전체 경로를 적고, 업무 세션 허용 목록에도 들어갔다.
+- **작업 멈춤 기록 형식:** 작업 도구가 멈춘 작업을 끊고 비서 기록 폴더의 `job-stalls.jsonl`에 한 줄 남기면, 업무 모니터링이 그 줄을 알리고(같은 작업이 연달아 두 번 멈추면 비서를 깨운다) 질문 훅이 아직 안 알린 줄을 붙이는 기능(`node src/cli.ts job-stall`)이 들어왔다. 이번 버전에는 멈춤을 남기는 작업 도구가 아직 없어 사용자에게 보이는 변화는 없다.
+- **개인정보를 넣으면 안 되는 공급자의 읽기 범위:** `providers.json`의 `personalDataAllowed`가 `true`가 아닌 공급자로 도는 업무 세션과 run-job은 이제 공간(작업) 폴더와 공통 스킬 폴더(`workspaces\_skills`), 그 세션 자기 임시 파일만 Read·Grep·Glob으로 읽고, 셸 명령이 키 폴더·`~/.secretary`·`notes`·`inbox`·`~/.claude` 설정 폴더·`secretary.db`를 적으면 폴더 훅(`scripts/worker/worker-folder-guard.mjs --limit-reads`)이 막는다. run-job에도 그 공급자일 때 같은 폴더 훅이 붙는다. 기본 작업 폴더(`_run-job-home`)에서 도는 그런 run-job은 새 인자 `-ReadDir <그 일의 결과 폴더>`가 꼭 있어야 하고(없으면 멈춘다), `_run-job-home` 전체가 아니라 그 결과 폴더와 `AGENTS.md`만 읽으며, 셸 명령이 옆의 다른 결과 폴더를 적어도 막힌다. 그런 업무에 필요한 파일은 비서가 공간 폴더 안에 넣어 둔다. 개인정보를 넣어도 되는 공급자(구독, API 키)는 그대로다.
+- **업무 세션과 주고받는 길을 하나로:** 업무 세션의 쉼·`[질문]`·끝남은 모니터링(`watch-worker.ps1`) 하나로만 받고, 보내는 글은 공급자·설정 폴더와 상관없이 늘 `scripts/worker/send-worker.ps1`로 보낸다(`notify_when_idle`은 쓰지 않는다. 같은 설정 폴더의 세션이면 같은 일로 비서를 두 번 깨웠다). send-worker에 `-MessageFile <UTF-8 파일>`이 생겼고, 글은 원문 그대로 메시지 파일(임시 폴더 `secretary-worker-messages\<세션 id>\`)에 쓰여 업무 세션이 직접 읽는다(Haiku에게는 그 파일을 읽으라는 한 줄만 보낸다).
+- **개인정보를 넣으면 안 되는 공급자로 보내는 지시 검사:** 그런 공급자(`personalDataAllowed`가 `true`가 아님)로 업무 세션(`start-worker.ps1`)이나 run-job을 띄우면, 지시와 거기 적힌 `TASK.md`에서 사용자 호칭(DB의 호칭 값과 핵심 프로필의 "호칭:" 줄), 기억·대화 번호(`#1234` 꼴), 다른 작업 공간 이름을 찾아 걸리면 띄우지 않고 어느 줄이 걸렸는지 알린다(새 명령 `node bin/delegate-check.mjs private`). 그런 공급자의 업무 세션에 `send-worker.ps1`로 보내는 글(`-Message`·`-MessageFile`, 깨울 때 넣는 글 포함)도 같은 검사를 거친다(공급자 기록이 없는 세션은 그런 공급자로 본다). 개인정보를 넣어도 되는 공급자는 검사하지 않는다.
+- **업무 세션 시작 지시를 파일로:** `start-worker.ps1`에 `-PromptFile <UTF-8 파일>`이 생겼다. 지시가 원문 그대로 메시지 파일에 옮겨지고 업무 세션에는 그 파일을 읽으라는 한 줄만 간다(`-Prompt`는 큰따옴표가 작은따옴표로, 줄바꿈이 공백으로 바뀌어 짧은 한 줄에만 쓴다).
+- **근거 출처 검사의 범위와 인정하는 근거:** `basis-source`가 이번 턴과 앞 두 턴 대신 마지막 압축 뒤 대화 전체(`/clear` 뒤면 그 대화 전체)에서 연 자료를 본다. "열어 보니"·"세어 보니"·"확인했다"처럼 말로 적은 확인, "○○ 20~31줄" 같은 줄 번호, 호칭으로 쓴 사용자 말, 훅이 붙인 상황판·사용량·할 일 안내도 근거로 친다. 백틱 안 함수·변수 이름은 명령이 아니라 코드 이름으로 보고, `~\…` 경로와 `*.py` 같은 꼴은 홈 폴더와 와일드카드를 뺀 부분으로 찾는다.
+- **알리기만 하는 검사는 바로잡은 것만 실수 기록에:** 알림(`warn`) 단계 검사에 걸린 것은 턴 기록에만 남고, 다음 질문의 안내를 받은 답이 맨 위에 `> 바로잡음(<분류>): …` 줄로 바로잡을 때만 실수 기록에 들어간다(다시 확인해 맞았으면 기록하지 않는다). 막는(`block`) 검사는 전처럼 그 턴에 기록한다. `/clear` 직전 답의 경고는 새 세션 첫 질문에 넘어간다.
+- **장치의 실수 분류 이름:** 답변 검사가 적는 분류가 `english` 대신 '영어 답', `path-prose`·`path-pair`·`path-link` 대신 '경로 표기' 하나가 된다.
+- **지어낸 말 목록은 묶음 말로:** 한 글자 낱말(칸·틀·꼴·손)은 "한 칸 두 칸"처럼 제 뜻으로도 쓰여 헛알림이 났다. 목록에는 지적받은 묶음 말("목적 칸", "옛 틀", "두 꼴" 등)만 두고, 한 글자 낱말과 가운뎃점으로 늘어놓은 낱말 목록은 검사가 건너뛴다. `record_mistake`의 `invented_words`도 두 글자 이상만 더한다.
+- **경로 검사가 붙일 줄을 알려 줌:** 다른 PC 경로 줄이나 폰 링크 줄이 빠지면 안내에 붙일 줄을 그대로 적는다.
+- **새 답변 검사 `report-judgment`(알림만):** 서브에이전트·업무 세션·run-job 보고를 받은 턴의 답에 "A. …?" 질문이 있는데 질문마다 "비서 판단:" 줄이 없으면 다음 질문에 알린다.
+- **기억 태그를 표로:** 기억의 태그를 한 글(`memories.tags`)이 아니라 태그 표(`tags`: 이름과 별칭, `memory_tags`: 기억마다 태그 순서, 첫 태그가 주제)에 둔다. 두 낱말 태그("할 일", "모종 가게")가 이제 한 태그로 남는다. 옛 태그는 처음 열 때 띄어쓰기로 나눠 옮기고, 기억 정리 담당이 정리 때마다 20개씩 원래 낱말 묶음으로 바로잡는다. 태그를 이어 붙인 글은 전과 같아 기억 검색과 의미 검색 결과는 그대로다.
+- **단어 색인에 본문 사본을 두지 않음:** 대화·기억 단어 색인(`raw_log_fts`·`memories_fts`)이 글 사본 없이 색인만 둔다(contentless FTS5). 색인 항목은 그대로 옮겨 검색 결과가 같다. 사용량 기록(`usage_log`)에는 종류(event) 색인을 더했다.
+- **'비서' 주제도 주제 요약:** 기억이 너무 많아 요약에서 빠지던 주제(비서)는 둘째 태그까지 묶어 "비서/상황판"처럼 주제마다 요약한다(`list_topics`·`list_memories`가 그 이름을 받는다).
+- **할 일 요약에 "기한 없는 할 일":** 기한도 조건도 없는 사용자 할 일이 어느 항목에도 들지 않아 보이지 않던 것을 "조건 기다리는 할 일" 다음 항목에 보인다.
+- **기억 정리가 옛 상태를 더 찾음:** 기억 정리 담당이 대화를 다 정리한 뒤, 같은 주제이면서 뜻이 가까운 기억 짝을 한 번에 10쌍까지 다시 판정한다(같은 내용·바뀜이면 옛 기억을 새 기억으로 대체, 판정한 짝은 다시 묻지 않음). 정리 담당에 넘기는 대화 줄에는 그 줄에서 대화 중 이미 저장한 기억 번호가 붙어, 같은 내용을 다시 후보로 내지 않는다.
+- **기억 DB 한 번 정리 명령:** `node src/memory/memory-cleanup.ts`가 내용 끝에 태그를 대괄호로 다시 적은 기억, 같은 대상을 다루는 겹친 옛 주제 요약(`--summary <번호>[:<대신하는 번호>]`로 고른 것), 대화에 잘못 이어진 주제 요약을 미리보기로 보이고, 승인 코드를 `--apply`로 줄 때만 고친다.
+- **`delegate` 스킬을 상황별 파일로:** `SKILL.md`에는 어느 상황이면 어느 파일을 읽을지와 공통 원칙만 두고, 글은 `references/`(누가 하나·지시 양식, 계획·시작, `[질문]`, 끝났을 때, 업무 묻기·결과 보여 주기, 백그라운드 세션)로 옮겼다. `[질문]`을 사용자에게 물을 때 비서가 선택지를 다시 따져 빠진 것을 더하고 질문마다 "비서 판단:" 줄을 붙인다. 서브에이전트·run-job 지시도 결과 폴더의 `BRIEF.md`로 써서 지시서 누락 검사를 거친다. 결과물을 보여 달라고 하면 Artifact 대신 결과 경로와 폰 링크로 보여 준다.
+- **send-worker가 업무 상태를 되돌림:** `send-worker.ps1`로 메시지를 보내면 그 세션의 질문 대기(`asking`) 업무를 진행 중(`running`)으로 되돌리고 그 줄을 낸다(`node src/cli.ts worker-asking <id> --answered`). 비서가 `update_task`로 직접 되돌리지 않아도 된다.
+- **업무 세션·run-job 설정을 한 곳에서:** 두 스크립트가 따로 만들던 `--settings`(허용 목록, 훅)와 비서 명령 부르기를 공용 함수(`scripts/lib/common.ps1`의 `New-ClaudeRunSettings`·`Invoke-SecretaryCli`)로 모았다. 구독 밖 공급자의 run-job에도 업무 세션처럼 작업 폴더 전체 경로의 `Edit` 허용 규칙이 붙는다.
+- **cli 오류는 한 줄로:** `node src/cli.ts` 명령이 실패하면 화면에 `오류: <메시지> (<파일:줄>)` 한 줄만 내고 종료 코드 1로 끝난다. 전체 트레이스는 비서 기록 폴더의 `cli-errors.log`에 시각·명령과 함께 남는다(256KB를 넘으면 오래된 기록부터 자른다). 명령 쓰는 법(`node src/cli.ts`만 치면 나오는 목록)은 명령 표 한 곳에서 만들어, 빠져 있던 명령도 모두 보인다.
+- **기억 줄의 태그를 쉼표로:** `recall`·질문마다 붙는 관련 기억 줄의 태그가 `[텃밭 업무 3 모종]` 대신 `[텃밭, 업무 3, 모종]`으로 보여 두 낱말 태그의 경계가 보인다(검색 색인·의미 벡터는 그대로).
+- **가까운 기억 짝 찾기가 빨라짐:** 기억 정리의 짝 다시 판정이 지난번 찾은 짝을 이어 쓰고, 그 뒤 새로 생기거나 주제·뜻이 바뀐 기억만 다시 비교한다(기억 1,900개에서 약 2~3초 → 0.1~0.2초, 찾는 짝은 같음).
+- **실수 기록 분류 합치기(DB 옮기기 22):** 답변 검사가 검사 이름으로 적던 옛 실수 기록(`english`, `path-prose`·`path-pair`·`path-link`)을 '영어 답', '경로 표기'로 합치고 재발 표시를 다시 센다.
+- **근거 출처 검사가 대화 기록을 끝까지 읽음:** 대화 기록 파일 끝 8MB만 읽던 것을 마지막 압축 줄부터(압축이 없으면 처음부터) 다 읽어, 긴 세션 앞쪽에서 연 자료를 안 연 것으로 알리지 않는다.
+- **코드 파일 자리 옮김:** 여러 기능이 같이 쓰던 파일을 아래 층 폴더로 옮겼다(`src/hooks/prompt-sender.ts` → `src/core/`, `src/memory/search-terms.ts`·`injection-screen.ts` → `src/store/`, `src/session-continuity/open-questions.ts` → `src/store/`(질문 알파벳 세기 `src/mistake-guards/question-labels.ts`를 합침), `src/workspace/aux-folders.ts` → `src/setup/`, `src/setup/skill-links.ts` → `src/workspace/`). 사용자가 고친 파일은 업데이트가 새 자리로 옮겨 합친다(`scripts/update-moves.json`).
+- **보고에서 온 질문의 "비서 판단:" 줄을 규칙에:** `AGENTS.md` "질문"에 업무 세션·run-job·서브에이전트 보고에서 나온 질문은 질문 줄 바로 아래(선택지 위)에 인용 줄 `> 비서 판단: …` 한 줄을 둔다는 줄을 더했다(`delegate` 스킬의 `[질문]` 처리도 같은 자리로). 공백으로 들여 쓴 줄은 마크다운에서 앞 줄에 이어 붙어 폰 화면에서 따로 보이지 않아 인용 줄로 쓴다. 답변 검사는 이 줄을 그 질문에 딸린 줄로 읽어, 그 아래 선택지도 계속 그 질문의 것으로 본다(추천 근거 검사, 다음 세션에 넘기는 남은 질문).
+- **남은 질문을 자르지 않음:** 다음 세션으로 넘기는 남은 질문의 글을 400자에서 자르던 것을 그만두었다. 질문 블록은 빈 줄에서 끝나므로 길이가 그 문단으로 묶이고, 선택지가 많은 질문도 끝 선택지까지 넘어간다.
+- **스킬 안내 더함:** `run-job` 스킬에 결과 글을 보고서 파일로 바로 쓰는 `-ReportFile` 안내를, `consolidate` 스킬에 태그 경계를 한꺼번에 고치는 `node src/memory/tag-boundaries.ts` 안내를 더했다.
+- **업무 공간 규칙 말 고침:** 업무 공간과 run-job 작업 폴더의 `AGENTS.md` 비서 블록에서 "공간·업무 틀"을 "공간·업무 구성"으로 고쳤다(`workspace-links`가 공간 규칙을 새 글로 맞춘다).
+- **상황판이 찾은 새 할 일 거르기:** 상황판 담당(Haiku)이 사용자 할 일을 낼 때 근거가 된 사용자 말 구절(`인용: "…"`)을 함께 내고, 프로그램이 그 구절이 읽은 대화의 사용자 말에 글자 그대로 있는지 확인한다(결정 기억의 원문 발췌 확인과 같은 코드). 인용이 없거나 비서 말에만 있으면 저장하지 않는다. 새 할 일 글(사용자·비서 모두)에 지어낸 말 목록의 말이 있어도 저장하지 않는다. 뺀 까닭은 상황판 실행 기록(`todos`)에 남고, 같은 할 일은 다음 실행이나 비서가 다시 잡는다. 지시 글에는 "사용자가 직접 하겠다고 말한 일만 사용자 할 일로 쓴다", "대상 이름을 넣고 한 글자 낱말·줄임말을 쓰지 않는다"를 더했다.
+- **서브에이전트 지시의 보고서 파일 쓰기를 막음:** Claude Code는 서브에이전트가 `REPORT.md`를 쓰는 것을 막고 보고를 마지막 답으로만 받는다. 비서의 도구 훅(PreToolUse, `src/mistake-guards/pre-tool-hook.ts`)이 서브에이전트(`Agent`) 호출의 지시 글과 지시가 가리키는 `.md` 파일에서 보고서 파일을 쓰라는 문장을 찾으면, 고칠 말을 붙여 그 호출을 막는다. `.claude/settings.json`의 PreToolUse matcher에 `Agent|Task`를 더했다.
+- **끝 알림이 일상 진행 턴은 보내지 않음:** 백그라운드 일의 끝 알림으로 시작한 턴이 "업무 X 아직 진행 중, 모니터링 다시 띄움"처럼 아직 도는 일을 다시 기다린다는 짧은 답만 쓰면 폰에 보내지 않는다(`src/phone-push/ntfy.ts`). 사용자가 보낸 메시지로 시작했거나 답에 질문·끝남·오류·멈춤이 들면 전처럼 보낸다.
+- **작업자 지시 양식의 임시 파일과 run-job 보고:** `delegate` 스킬의 지시 양식이 임시 파일(커밋 메시지 등)을 세션 scratchpad 아래 맡은 일 이름 폴더에 두게 한다(같은 세션의 작업자들이 임시 파일을 섞어 쓰던 것). run-job 보고는 `-ReportFile`을 주면 run-job이 `REPORT.md`로 쓴다는 `run-job` 스킬 안내에 맞췄다.
+- **기능 안내의 "칸"을 고침:** `feature-toggle` 스킬 참고 파일(`dashboard.md`·`phone-push.md`·`usage-poll.md`·`todo-summary.md`)에서 JSON 키를 가리키던 "칸"을 "키"로, 대시보드·요약의 화면 부분은 "항목"으로 바꿨다.
+- **개발:** 원본의 임시 테스트를 줄였다. 실패를 잡은 적이 없는 임시 테스트는 기능마다 핵심 하나만 남기고 지웠고, 여러 작업에서 다시 깨진 곳의 테스트 5개와 대화 지우기·개인정보·대화 저장·훅이 잘못 막는지에 닿는 테스트 16개는 줄이지 않고 늘 두는 테스트(주석 `[늘 남김]`)로 표시했다. 배포판 `npm test`가 그만큼 빨라지고, 비서의 동작은 같다.
+
+고친 것
+- **send-worker가 '못 보냄'을 보낸 것으로 읽던 것:** Haiku의 답에 '보냄'이 들어 있기만 하면 성공으로 봐서 '못 보냄'·'보냄 실패'도 보낸 것으로 끝났다. 이제 '보냄' 한 마디만 보낸 것으로 본다. 큰따옴표·줄바꿈이 든 글이 작은따옴표·한 줄로 바뀌어 닿던 것도 위의 메시지 파일로 고쳤다.
+- **사용량 줄이 없는 계정을 지어 넣던 것:** 다중 구독(`multi-subscription`)에서 `providers.json`에 계정 a 밖의 구독이 없으면 `subscription-b`를 지어 넣어 매 질문 "계정 b 기록 없음"이 붙었다. 이제 목록에 있는 구독만 보고, 계정 a뿐이면 계정 a의 숫자만 쓴다.
+- **답변 검사의 폰 링크 이름:** 폰 주소로 가는 링크는 결과물 경로가 아니어도(비서 폴더 안 백업 파일 등) 링크 이름이 주소 그대로가 아니면 `path-link`로 막는다. 다른 PC 경로 짝과 링크가 빠진 것은 전처럼 결과물 경로만 본다. 다른 PC 경로가 빠졌을 때의 안내가 경로 앞에 "다른 PC:"를 붙이라는 뜻으로 읽히던 것을, 다른 PC 경로만 든 코드 블록 하나를 붙이라고 고쳐 썼다.
+- **README의 의미 검색 설명을 지금 동작에 맞춤:** "준비되지 않았거나 느리면 언제나 단어 검색만" 대신, 떠 있으면 30초·꺼졌거나 불러오는 중이면 90초까지 기다리고, 그래도 안 되면 비서가 의미 검색 서버를 다시 켤지 먼저 묻는다고 적었다.
+- **README를 지금 파일에 맞춤:** 일 맡기기 전에 쓰는 스킬 이름(`plan-grill`), `src/` 표의 상황판 폴더 이름(`session-continuity/`)과 빠져 있던 폴더(`staff/`, `mistake-guards/`, `phone-push/`, `dashboard/`), `bin/` 표의 빠진 진입점(`dashboard.mjs`, `delegate-check.mjs`, `run-job-worktree.ps1`), `scripts/` 표의 빠진 파일과 끝 알림 예약 작업(`-Task ntfy`).
+- **대화 기록에 객체가 아닌 JSON 줄이 끼어도 멈추지 않음:** 대화 저장(`src/log/ingest-transcript.ts`), 되감기 정리(`src/log/rewind.ts`), 대화 지우기의 기억 번호 찾기(`src/log/purge.ts`)가 jsonl 줄을 공용 `src/core/transcript.ts`의 `parseLine`으로 읽는다. 예전에는 `null`처럼 객체가 아닌 JSON 줄에서 오류로 멈췄고, 이제 그 줄만 건너뛴다. 저장·되감기·지우기 기준은 그대로다.
+- **배포판에 없는 것을 가리키던 글과 쓰이지 않는 코드를 뺌:** `delegate` 스킬의 작업자 지시 양식이 배포판에 없는 비서 코드 고치기 스킬(`secretary-dev`)을 읽으라고 하던 것, 작업 멈춤 안내(`.agents/hook-notices/job-stall.md`)와 `AGENTS.md` 훅 안내 목록(`<secretary-job-stall>`)이 배포판에 없는 외부 기기 작업 도구를 전제하던 것을 고쳤다. 업무 세션 훅의 외부 기기 진입점 막기, 근거 출처 검사의 외부 기기 작업 명령 이름, 쓰이지 않던 `src/core/device-ids.ts`도 뺐다(이 파일은 업데이트가 지운다).
+- **훅 실패를 기록하고 알림:** 훅(세션 시작·질문·Stop·도구 훅)이 실패하면 시각·훅·실패한 안내 이름·오류 첫 줄을 비서 기록 폴더(`~/.secretary/<번호>/logs/hook-errors.jsonl`)에 한 줄씩 남긴다. 예전에는 실패가 화면에 보이지 않는 stderr에만 남았다. 질문 훅은 안내 하나가 실패해도 나머지(기억 주입 포함)를 붙이고, 실패한 안내 이름을 `<secretary-hook-error>` 한 줄로 알린다(예전에는 안내 하나만 실패해도 그 질문의 안내가 모두 빠졌다). 질문 훅이나 세션 시작 훅 전체가 실패하면 그 한 줄만 붙는다. 할 일 글은 `.agents/hook-notices/hook-error.md`.
+- **관련 기억이 없을 때도 기억 블록:** 질문에 새로 붙일 관련 기억이 없으면 빈 `<secretary-memory>` 블록("새로 붙일 관련 기억 없음")이 붙는다. `AGENTS.md`의 "주입이 없으면 관련 기억이 없었다는 뜻"을 "블록에 기억이 없으면 관련 기억이 없다는 뜻이고, 블록 자체가 없으면(훅이 연결되지 않은 도구, 훅 실패) 답하기 전에 `recall`을 먼저 부른다"로 고쳤다. 예전 규칙은 훅이 돌지 않은 도구에서 비서가 기억 없이 답하게 했다.
+- **기억 정리 끝 표시가 넘겨준 범위를 넘지 않음:** `mark_consolidated`가 그 서버의 `get_unconsolidated_log`가 마지막으로 넘겨준 `through_log_id`보다 큰 번호, 그리고 아직 대화를 넘겨주지 않았을 때의 호출을 거절한다. 예전에는 번호를 잘못 적으면 읽지 않은 대화가 정리된 것으로 처리되어 거기서 나올 기억이 빠질 수 있었다.
+- **폴더 신뢰 적기가 Claude 설정을 덮어쓰던 것:** `scripts/worker/trust-folder.mjs`가 `.claude.json`을 통째로 읽었다가 다시 써서, 그사이 돌고 있는 Claude Code가 쓴 내용을 지울 수 있었다. 이제 같은 폴더의 임시 파일에 쓴 뒤 원본이 그대로일 때만 이름 바꾸기로 갈아 끼우고, 바뀌었으면 새 내용에 다시 얹는다.
+- **send-worker가 Haiku의 '보냄'만 믿던 것:** '보냄'을 받으면 몇 초 안에 업무 세션 대화 기록에 메시지 파일 경로가 든 줄이 생겼는지 보고, 없으면 '보냄 확인 안 됨'으로 실패한다(종료 1). 대화 기록을 못 찾으면 '보냄' 뒤에 '확인 못 함' 한 줄을 붙인다(새 명령 `node src/cli.ts worker-transcript received … --text <글>`).
+- **뒤에서 띄운 일의 기록이 쌓이던 것:** `-Detach`로 띄운 일의 기록 폴더(`~/.secretary/<번호>/state/bg-jobs/<id>/`)를 끝난 지 30일 지나면 쉬는 시간 정리(`idle-jobs`)가 지운다. 끝 기록(`exit.txt`)이 없고 프로세스가 살아 있거나 프로세스 번호를 못 읽는 일은 지우지 않는다.
+- **업무 세션 메시지 파일이 쌓이던 것:** 임시 폴더 `secretary-worker-messages\`의 폴더 가운데 30일 넘게 새 파일이 없는 것을 메시지를 쓸 때 지운다.
+- **Stop 훅 실패를 다음 질문에 알림:** Stop 훅이 실패하면(그 턴 대화가 저장되지 않았을 수 있음) 그 세션의 다음 질문에 `<secretary-hook-error>` 한 줄이 한 번 붙는다(`.agents/hook-notices/hook-error.md`의 `stop`). 세션 시작 때는 지난번 알린 뒤 `hook-errors.jsonl`에 쌓인 실패 수(훅·부분별, 마지막 시각)를 비서에게 한 줄로 붙이고, 같은 실패가 7일 안에 3번 넘게 되풀이되면 비서가 원인을 찾아 고칠지 묻는다.
+- **DB 백업 결과 기록:** 매일 백업(`scripts/scheduled/backup-db.ps1`)이 실행마다 결과(성공·실패와 이유)를 비서 기록 폴더의 `db-backup.jsonl`에 남긴다(새 명령 `node src/cli.ts backup-record`). 마지막 성공한 백업이 3일보다 오래되면 세션 시작 때 비서에게 한 줄로 알린다.
+- **기억을 저장한 대화 세션의 질문에만 연결:** Stop 훅이 그 턴에 저장된 기억을 질문에 연결할 때, 시각만 보지 않고 그 세션의 대화 기록에 남은 `remember` 결과("기억 #번호 저장")의 번호만 연결한다. 기억 정리 담당의 주제 요약이나 다른 세션이 그 사이 저장한 기억이 엉뚱한 질문에 연결돼, `search_log(memory_id)`가 다른 대화를 열거나 되감기 때 무효 처리될 수 있었다.
+- **비서 번호를 동시에 둘 만들지 않음:** `.secretary-id`가 없을 때 두 프로세스(세션 시작 점검과 예약 작업 설치)가 동시에 만들면 서로 다른 번호를 쓸 수 있었다. 이제 파일이 없을 때만 새로 만들고(TS·PowerShell 모두), 이미 생겼으면 그 번호를 읽는다.
+- **폴더 위치 검사의 헛걸림:** 명령에 든 heredoc(`<<EOF`)·here-string(`@'…'@`) 본문을 명령으로 읽어 경로를 뽑던 것과, 같은 명령 안의 앞선 `cd`를 무시하고 상대 경로(`..\폴더`)를 훅의 폴더 기준으로 풀어 있는 폴더를 "새 폴더"로 막던 것을 고쳤다.
+- **업데이트가 설정 JSON의 사용자 항목을 버리라고 추천하던 것:** 사용자와 새 버전이 같은 설정 JSON(공통 스킬 목록, `providers.json`, `.claude/settings.json`, 허용 권한 목록 등)의 같은 자리를 고쳐 줄이 부딪히면, 업데이트 도우미(`scripts/update.mjs`)가 새 버전 쪽(`merge-new`)을 추천해 "나머지는 추천대로"로 받으면 사용자가 켠 공통 스킬·더한 공급자·허용 권한이 조용히 빠졌다. 이제 키 단위로 합친 안(양쪽이 더한 항목을 모두 살리고, 둘 다 바꾼 값은 사용자 값, `package.json`만 새 버전 값)을 만들어 추천하고, 둘 다 바꾼 값의 자리를 알린다. JSON으로 읽히지 않으면 사용자 쪽(`merge-mine`)을 추천한다(`package-lock.json`은 전처럼 새 버전 쪽).
+- **업데이트를 중간에 그만두면 다음 업데이트가 답을 못 받은 파일을 사용자 수정으로 보던 것:** `scripts/update.mjs apply`가 `VERSION`과 `release-files.json`을 다른 파일보다 먼저 새 버전으로 써서, 묻는 중에 그만두면 다음 업데이트가 새 버전을 기준으로 삼아 남은 옛 파일을 사용자가 고친 것으로 지켰다. 이제 이 두 파일은 남은 부딪힘을 모두 정한 뒤(물을 것이 없으면 apply 끝, 있으면 마지막 resolve)에 쓴다.
+- **비서 서버가 멈춰도 폰에 알리지 않던 것:** 끝 알림(`phone-push`)을 켰으면, 비서 서버가 로그인이 풀리거나(5분 간격 확인이 두 번 연달아 실패) 연결되지 못한 채 15분 넘게 다시 켜지기를 되풀이할 때 같은 ntfy로 한 번 알린다(`scripts/phone-push/server-alert.ts`). 같은 상태가 이어지는 동안은 다시 보내지 않고, 로그인이 돌아오거나 서버가 연결되면 다음에 다시 알린다. 예전에는 서버 기록에만 남아 폰에서는 비서가 오프라인인 것만 보였다.
+- **시험 실패 기록이 번호 없는 폴더에 가던 것:** `npm test`가 실패한 시험을 적을 자리와 브랜치·커밋을 시험이 끝난 뒤에 정해서, 오래 도는 시험 중에 작업 사본이 지워지면 `~/.secretary/logs/test-failures.jsonl`(번호 없는 옛 자리)에 빈 브랜치·커밋으로 적혔다. 이제 시험을 띄우기 전에 정한다. `.gitignore`에 node가 남기는 `*.cpuprofile`도 넣었다.
+- **보고 검수(`report-relay`)의 헛걸림과 빈틈:** 웹 주소의 `s://…`를 드라이브 경로로 읽고, 폴더와 "확인 안 됨"을 붙인 경로까지 걸던 것을 고쳤다. 업무 세션 출력 보기(`worker-logs.ps1`)와 모니터링(`watch-worker.ps1`) 출력도 보고로 친다.
+- **질문 훅이 시간 제한을 넘던 것:** 상황판이 갱신을 300초까지 기다린 뒤 기억 검색 30초가 더해져 질문 훅 제한(330초)을 넘으면 그 질문의 안내가 모두 빠졌다. 이제 상황판은 예산(300초)에서 쓴 시간과 검색 한 번을 뺀 만큼만 기다리고, 그래도 제한 10초 전까지 끝나지 않으면 `hook-errors.jsonl`에 한 줄 남긴다.
+- **비서 기억 도구마다 뜨던 훅:** 되풀이 알림 훅(PostToolUse)의 matcher가 세지도 않는 비서 MCP 도구(`mcp__secretary__…`)에서도 떠 도구마다 약 0.35초가 들었다. `.claude/settings.json`의 matcher에서 뺐다.
+- **태그가 두 번 보이던 것:** 기억 내용 끝에 태그를 대괄호로 다시 적으면 줄 끝 태그와 함께 두 번 보이고 색인에서 두 번 세졌다. 이제 저장할 때 떼고, 태그에 없는 낱말은 태그로 남긴다(태그가 아닌 대괄호 글은 그대로).
+- **상황판이 할 일을 되풀이한 비서 말을 "조건 채워짐"으로 읽던 것:** 근거가 그 할 일 번호나 할 일 글·조건 글을 그대로 담은 비서 답이면 표시하지 않고, 상황판 담당에게 넘기는 비서 답에서 할 일 요약 블록을 뺀다. 상황판이 만든 새 할 일에 붙던 넓은 태그 '할 일'도 뺐다.
+- **"질문 답함" 조건이 답 없이 빠진 질문에도 채워지던 것:** 7일이 지나 빠지거나 답 끝 목록에서 빠지기만 한 질문도 답한 것으로 봤다. 이제 사용자가 그 질문 알파벳으로 답했을 때만 채워지고, 조건 값은 물은 대화 번호와 그때 알파벳(`1234:B` 꼴)으로 바뀌어 새 세션에서 알파벳이 다시 붙어도 같은 질문을 가리킨다.
+- **동시에 돌 때 상태를 덮어쓰던 것:** 두 Stop 훅이 같은 때 남은 질문 목록을 고치면 한쪽의 새 질문이 사라질 수 있었고, 새 세션 첫 질문과 쉬는 시간 작업이 같은 때 상황판 다시 쓰기를 둘 띄울 수 있었다. 이제 목록은 한 트랜잭션에서 읽고 쓰고, 상황판 다시 쓰기는 시작을 잡은 하나만 돈다.
+- **훅마다 달력 패키지를 불러오던 것:** 질문·Stop 훅이 돌 때마다 달력 패키지(node-ical)까지 불러왔다. 이제 일정을 받을 때만 부른다.
+- **동시에 돈 run-job·업무 세션이 서로의 기록을 지우던 것:** 재사용 상태(`run-job-sessions.json`, `worker-sessions.json`)를 시작 때 읽은 그대로 끝날 때 통째로 덮어써서, 함께 돈 다른 프로세스의 항목이 사라졌다. 이제 파일 옆 잠금(`<파일>.lock`)을 잡고 다시 읽어 바꿀 항목만 고친 뒤 임시 파일을 바꿔 끼운다. 호출 기록(`run-job-calls.jsonl`, `worker-reuse.jsonl`)도 잠근 채 덧붙인다.
+- **업무 모니터링이 꺼진 것을 놓치던 것:** 모니터링이 살아 있는지를 PID만으로 봐서, 끝난 모니터링의 PID를 다른 프로세스가 다시 쓰면 살아 있다고 보았다. 이제 모니터링이 PID와 함께 자기 시작 시각을 남기고, 질문 훅이 둘을 함께 대조한다.
+- **PowerShell 쪽 설정 폴더 목록이 지금 `CLAUDE_CONFIG_DIR`을 빠뜨리던 것:** `Get-AccountConfigDirs`(`scripts/lib/providers.ps1`)가 TS 짝과 같게 지금 설정 폴더, `~/.claude`, 구독 공급자의 설정 폴더를 겹침 없이 낸다.
+- **쉬는 업무 세션을 두 쪽이 같이 건드리던 것:** `start-worker.ps1`이 재사용할 쉬는 세션을 고르고 업무를 보내는 사이, 쉬는 세션 끄기(`worker-done.ps1 -StopAfter`)가 같은 세션을 끄거나 동시에 뜬 다른 `start-worker.ps1`이 같은 세션에 업무를 보낼 수 있었다. 이제 상태 파일을 잠근 채 그 세션을 맡았다고 표시하고, 표시된 세션은 다른 쪽이 고르거나 끄지 않는다(맡은 쪽이 도중에 멈추면 30분 뒤 표시를 없는 것으로 본다).
+- **업무 세션·run-job의 되풀이 알림 훅이 비서 기억 도구에서도 뜨던 것:** 업무 세션과 run-job에 넣는 PostToolUse 훅의 matcher에서도 비서 MCP 도구를 뺐다(비서 자신의 설정과 같게).
+- **경계만 고친 태그가 기억을 의미 검색에서 빼던 것:** 태그 경계를 고치면(`set_memory_tags`) 그 기억의 의미 벡터를 지워, 다시 만들 때까지 의미 검색에서 빠졌다. 띄어쓰기로 이은 태그 글이 그대로면 벡터와 단어 색인을 그대로 둔다.
+- **보고에서 온 질문 검사(`report-judgment`)가 백그라운드 명령 끝에 걸리던 것:** 백그라운드 명령의 설명은 규칙대로 "업무N(이름) …"처럼 쓰는데, 끝 알림에 든 "업무"를 보고로 읽어 보고가 아닌 명령(시험, 비서가 직접 돌린 스크립트)에서 나온 질문에도 "비서 판단 없음"을 알렸다. 이제 끝 알림의 명령 호출을 찾아, run-job·wait-job·업무 세션을 다루는 명령일 때만 보고로 본다(호출이 압축 앞이라 없으면 설명으로 본다). 알림 글에는 비서 판단 줄을 둘 자리와 형식(질문 줄 바로 아래 인용 줄)을 적었다.
+- **README의 옮긴 파일 경로:** 주입 문구 거르기(`src/store/injection-screen.ts`)와 스킬 링크(`src/workspace/skill-links.ts`)의 옛 경로와 `src/` 폴더 표(남은 질문·질문 알파벳, 한국어 검색어, 보낸 쪽 구분, 보조 폴더의 자리)를 지금 자리로 고쳤다.
+- **훅 없는 도구용 안내 사본 대조:** `.agents/hook-notices/other-situations.md`(훅이 코드에서 바로 만드는 안내의 사본)의 모니터링 꺼짐 안내에 빠졌던 "worker-logs로 확인"을 넣고, 사본의 문구·숫자(정리 기준 대화 수·쉼, `/consolidate` 권하기 시작, 승인 코드 시간)와 예시(삭제 문구, 정지 장치 해제 문구)가 코드와 어긋나면 `npm test`가 실패하게 했다.
+- **실수 막기 설명을 지금 동작에 맞춤:** `feature-toggle` 참고 파일 `mistake-guards.md`가 폰 링크 줄 검사(`path-link`)를 막는 검사로, 근거 출처 검사 범위를 "그 턴과 앞 두 턴"으로, 알림까지 모두 실수 기록에 남는다고 적던 것을 고쳤다. 알림 검사 목록에 옛 형식 근거(`basis-old-form`)와 보고 질문의 비서 판단(`report-judgment`)도 적었다.
+- **보고에서 온 질문 검사(`report-judgment`)가 보고서 파일 읽기에 걸리던 것:** run-job 결과 폴더(`_run-job-home`)의 보고서 파일을 grep·sed로 읽기만 한 턴도 보고를 받은 턴으로 봤다. 이제 셸 명령은 run-job·wait-job·업무 세션 스크립트를 실제로 돌린 것만 보고로 센다.
+- **폴더 위치 검사가 따옴표 안 글을 명령으로 읽던 것:** 커밋 메시지·echo 글처럼 따옴표 안 글(경로로 시작하지 않고 한글이 들었거나 `-m`·`echo` 같은 메시지 인자 뒤)에 든 경로와 쓰기 낱말을 명령으로 읽어 막던 것을 고쳤다. 따옴표로 감싼 경로 인자는 그대로 본다.
+
+올린 뒤 할 일
+
+아래를 차례로 하고, 6(새 세션 열기)은 언제나 마지막에 한다. "(원하면)"이 붙은 1·2·5는 사용자가 원할 때만 한다.
+1. **옛 할 일 옮기기(원하면):** 이미 있던 할 일 기억에는 값이 없어 요약에 나오지 않는다. `node src/cli.ts action-list`로 목록을 보여 주고, 사용자가 고른 것만 `node src/cli.ts action-set <기억 번호> --owner user|secretary [--due …] [--cond …]`로 값을 넣는다. 옛 상황판의 할 일 칸은 `node src/cli.ts situation-board-show --before-todo`로 본다. 고를 것이 없으면 "해당 없음".
+2. **일정(원하면):** 할 일 요약에 일정도 넣으려면 `feature-toggle` 스킬의 참고 파일 `todo-summary.md`의 "일정"대로 사용자가 키 파일을 만들고 비서가 설정 키를 적는다.
+3. **공통 스킬 깔기:** 업데이트 마무리(`finish`의 `workspace-links`)가 배포판 공통 스킬을 `workspaces\_skills`에 깐다. 이어서 비서 폴더에서 `node src/cli.ts skill-links`를 한 번 돌린다(비서 폴더가 쓰는 공통 스킬 링크).
+4. **기억 태그 정리:** 태그 표와 단어 색인은 업데이트 뒤 새 코드가 DB를 처음 열 때 자동으로 옮겨졌다(위 첫 문단). 기억 내용 끝에 태그를 대괄호로 적은 기억이 있으면, 비서가 `node src/memory/memory-cleanup.ts`로 미리보기를 보여 주고 사용자가 승인하면 그 승인 코드로 고친다. 기억 정리 담당은 새 도구(짝 다시 판정, 태그 경계)로 다음 정리부터 그 단계를 한다.
+5. **태그 경계 한꺼번에 정하기(원하면):** 태그 경계를 확인할 기억이 많으면, 비서가 `node src/memory/tag-boundaries.ts --limit 100`으로 100개 시범을 돌려 시간·토큰을 알리고, 사용자가 승인하면 `--limit` 없이 나머지를 돌린다(DB 백업 뒤).
+6. **새 세션 열기:** 1~5를 마친 뒤 마지막으로 사용자에게 새 세션을 열어 달라고 한다. 비서 기억 도구(MCP 서버 `secretary`)는 세션이 시작될 때 뜨므로, `remember`의 할 일 값(`owner`·`due`·`condition`)과 `update_task`·`list_tasks`의 질문 대기(`asking`)는 새 세션부터 쓰인다.
 
 ## v0.11.0
 
@@ -53,156 +184,3 @@ v0.10.0에서 올리면 기억(`secretary.db`), 검색 모델(`models/`), 작업
 1. **구독이 아닌 공급자의 개인정보 값 정하기(해당 있을 때만):** 마무리 출력의 "물어볼 공급자"에 남은 공급자(외부 게이트웨이, API 키, Bedrock, 다른 CLI 등 `scripts/lib/providers.json`에서 `personalDataAllowed`가 없는 것)를 사용자에게 목록으로 보여 주고, 공급자마다 개인정보를 보내도 되는지 묻는다(사용자 자신의 유료 API 키·유료 계정은 `true`를 추천, 외부 게이트웨이·무료 플랜·무료 키는 `false`). 고른 대로 그 공급자에 `"personalDataAllowed": true`나 `false`를 넣는다. 값이 없는 동안은 개인정보를 보내면 안 되는 공급자로 본다: 그 공급자로 도는 run-job·업무 세션에는 비서 기억 읽기 도구가 붙지 않고, run-job을 비서 폴더에서 돌리지 못한다. 남은 공급자가 "없음"이면 "해당 없음".
 2. **프로그램이 못 고친 작업 공간 정하기(해당 있을 때만):** 마무리 출력의 "물어볼 공간"(`workspace-links`의 "못 고침")에 남은 공간이 있으면 출력의 이유를 보여 주고 어떻게 할지 묻는다. 지금 템플릿에 있는 절이 없어서면 더하기로 한 공간만 `node src/cli.ts workspace-links --add-missing <공간 폴더 이름>`, 템플릿 줄과 비슷하지만 다른 줄이 있어서면 비서가 그 줄을 표시 안팎 어디에 둘지 사용자와 정해 그 공간 `AGENTS.md`에 표시를 직접 넣은 뒤 `node src/cli.ts workspace-links`를 다시 돌린다. 남은 공간이 "없음"이면 "해당 없음".
 3. **새 세션 열기:** 1·2를 마친 뒤 마지막으로 사용자에게 새 세션을 열어 달라고 한다. 비서 기억 도구(MCP 서버 `secretary`)는 세션이 시작될 때 뜨므로, 도구 이름이 바뀐 이번 버전은 새 세션부터 새 도구로 돈다. 사용자 설정(`.claude/settings*.json`)에 옛 도구 이름(`mcp__secretary__set_big_work` 등)을 적어 두었으면 새 세션을 열기 전에 새 이름으로 고친다.
-
-## v0.10.0
-
-v0.9.0에서 올리면 기억(`secretary.db`), 검색 모델(`models/`), 작업 공간은 그대로 이어 쓴다. DB는 업데이트 뒤 처음 열 때 자동으로 맞춰지고 테이블 모양은 그대로다.
-
-새 기능
-- **반복 일 담당자:** 비서가 사람 없이 되풀이하는 일(기억 정리, 상황판 고쳐 쓰기)을 담당자마다 설정 파일 하나(`src/staff/<담당자>.json`: 공급자·모델·추론 수준(effort)·새 세션·기억 도구·허용/금지 도구·제한 시간·지시 파일)로 정하고, 비서 대화 밖 빈 폴더 `workspaces\_staff\<담당자>`(담당자용 짧은 역할 `AGENTS.md`와 실행 기록 `runs-<비서 번호>.jsonl`만 둔다)에서 `scripts/run-job/run-job.ps1 -Staff <담당자>`로 돌린다. 비서의 훅·규칙이 끼지 않고, 값을 따로 주면(`-Model` 등) 오류로 멈춘다. 옛 `run-job.ps1 -MemoryWrite`는 없어졌다.
-  - **기억 정리 담당 `memory-consolidation`:** `/consolidate`와 쉬는 시간 정리가 같은 담당을 부른다(절차는 `consolidate` 스킬의 `references/procedure.md`). `/consolidate`는 정리를 뒤에서 띄우고 바로 끝나며, 결과는 화면이 아니라 다음 답의 안내 뒤 "기억 정리 확인"으로 본다. 이미 도는 정리가 있으면 새로 띄우지 않고, 정리하던 프로그램이 죽었으면 그 기록이 다음 정리를 막지 않는다. 쉬는 시간 작업을 꺼 두어도 `/consolidate`는 돈다.
-  - **상황판 담당 `situation-board`:** 상황판 고쳐 쓰기(Haiku, 도구 없음, 기억 도구 없음, 묶음마다 3분). 전에는 run-job 기본 폴더에서 기억 읽기 도구를 단 채 돌았다.
-- **호칭 설정:** 사용자를 부르는 이름을 DB에 값 하나로 둔다(`node src/cli.ts user-title <호칭>`, 인자 없으면 보기, `--clear`는 빼기). 규칙과 코드 글은 '사용자'로 쓰고, 그 이름으로 쓴 기억 글("<호칭>님은 …")을 기억 목록 라벨과 지시문 검사가 사용자로 읽는다. 넣지 않으면 '사용자'만 읽는다(지금과 같다).
-- **결과물 경로 값 알림:** 다른 PC 경로(`this-secretary.local.json`의 `paths` 키의 `otherPcRoot`)나 대시보드 폰 주소가 있으면 세션 시작 때 `<secretary-paths>`로 이 PC 경로·다른 PC 경로·폰 주소가 붙는다(답변 검사와 같은 값). 둘 다 없으면 붙지 않는다.
-
-바뀐 것
-- **이 비서 설정 한 파일로:** 따로 있던 이 비서 설정 파일(`scripts/dashboard.local.json`, `scripts/usage.local.json`, `scripts/phone-push.local.json`, `scripts/mistake-guards.local.json`)을 비서 폴더 맨 위 `this-secretary.local.json` 하나에 기능별 키(`dashboard`, `usage-poll`, `phone-push`, `mistake-guards`, 다른 PC 경로는 `paths`)으로 모았다(예시 `this-secretary.local.example.json`). 기능을 끄면 그 키는 읽지 않는다. 업데이트가 옛 파일을 자동으로 옮기고(이미 있는 값은 덮어쓰지 않음), 옮긴 옛 파일은 지우지 않고 `backups/this-secretary-merge/`에 둔다(지울지는 올린 뒤 할 일 5에서 묻는다). 같은 PC에 비서가 둘이어도 같은 값을 써야 하는 설정은 비서 폴더가 아니라 PC 공용 `~/.secretary/all-secretaries.local.json`(키 폴더 옆, 예시 `all-secretaries.local.example.json`)에 둔다(지금 배포판 기능에는 그런 키가 없다).
-- **작업 공간의 비서 위치 파일 이름:** 공간 맨 위 `secretary.json` → `secretary-link.local.json`(git 밖 파일임이 이름에 드러나게). `node src/cli.ts workspace-links`가 공간마다 새 파일과 `.gitignore` 줄을 쓰고, 공간 AGENTS.md의 찾는 코드를 새 이름으로 고친다. 옛 `secretary.json`은 지우지 않고 새 파일과 같게 맞춰 두어, 옛 찾는 코드를 복사해 둔 공간 도구도 그대로 돈다(다음 버전에서 옛 이름은 뺀다).
-- **스킬 사양(agentskills.io)과 공통 스킬 이름:** 스킬은 agentskills.io 사양을 따른다. 머리말(`---`)의 `name`은 폴더 이름과 같고, `SKILL.md`(500줄 미만)에는 원칙과 "언제 어느 파일을 읽을지"만 두고, 세부는 `references/`, 스킬이 쓰는 코드는 `scripts/`, 템플릿·설정·데이터는 `assets/`에 둔다. 설치 상태 점검(`setup-check`)과 `npm test`가 사양을 검사한다. 남이 만든 설치본·가상환경은 스킬에 넣지 않고 `%USERPROFILE%\tools`에 둔다. 공통 스킬은 폴더·목록·링크·`name`이 모두 `common-<이름>`이다(`workspaces\_skills\common-<이름>\`, `common-skills.json`에도 `common-`까지 적는다). 옛 형식(목록에 접두어 없음, 폴더 `_skills\<이름>\`)은 `skill-links`·`workspace-links`가 새 이름으로 옮긴다(올린 뒤 할 일 2).
-- **작업 공간 옆 보조 폴더 이름:** `workspaces` 안에서 작업 공간이 아닌 보조 폴더는 밑줄로 시작한다(`_skills`, `_sandbox`, `_run-job-home`, `_archived`, `_staff`). run-job 기본 폴더 `run-job-home`은 `_run-job-home`, 보관한 공간을 두는 `old`는 `_archived`로 바뀐다(올린 뒤 할 일 1). run-job 기본 폴더가 없으면 설치 상태 점검(`workspace-aux-folders`)이 규칙(`AGENTS.md`)과 함께 만들고, 그래도 없으면 run-job은 임시 폴더로 가지 않고 오류로 멈춘다.
-- **꺼 둔 기능의 스킬 위치:** 꺼 둔 기능의 스킬(`calendar`)은 머리말(`---`)의 `disable-model-invocation` 줄 대신 위치로 막는다. 꺼져 있는 동안은 어느 CLI도 읽지 않는 `.agents/skills-off/<이름>/`에 두고, 켜면 `node src/cli.ts skill-links`가 `.agents/skills/<이름>/`으로 폴더째 옮긴다(끄면 되돌린다, 고친 내용은 함께 간다). 업데이트는 사용자의 `features.json`대로 그 스킬을 제자리에 두고 옛 머리말 줄을 뺀다(내용이 그 줄만 다른 파일도 사용자 폴더에서 그 줄을 지운다).
-- **이름 정리:** 한 단어가 두 뜻으로 쓰이거나 뜻이 드러나지 않던 이름을 바꿨다. 업데이트가 옮겨진 파일을 따라가고(`scripts/update-moves.json`), 아래 이 PC 파일과 기능 이름도 자동으로 옮긴다.
-  - 스킬: `grill` → `plan-grill`(계획 빈틈 파고들기), `features` → `feature-toggle`(기능 켜고 끄기), `handoff` → `session-handoff`(세션 이관, `/session-handoff`), `update` → `secretary-update`(비서 업데이트).
-  - 기능 이름(`features.json`): `memory` → `memory-core`, `board` → `session-continuity`, `consolidate` → `memory-consolidation`, `backup` → `db-backup`, `providers` → `external-providers`, `notify` → `phone-push`, `account-handoff` → `multi-subscription`(다중 구독), `guards` → `mistake-guards`(실수 막기 장치), `update` → `secretary-update`(업데이트, 스킬 이름과 같게). 켜 두거나 꺼 둔 것은 그대로 이어진다(업데이트가 새 이름에 옮겨 적는다). 기능마다의 예약 작업 키 `tasks`는 `scheduledTasks`(맡긴 업무 task와 구별).
-  - 명령: `node src/cli.ts stats` → `memory-stats`, `backup` → `db-backup`, `ingest` → `ingest-transcript`, `catch-up` → `catch-up-transcripts`, `board` → `situation-board-show`, `board-update` → `situation-board-update`, `workspace-folders` → `workspace-aux-folders`, `handoff-wake` → `session-handoff-wake`, `handoff-account` → `subscription-pick`, `embed-server` → `semantic-search-server`, `secretary-idle-jobs` → `idle-jobs`, 기억 정리를 바로 돌리는 `secretary-idle-jobs --consolidate-now [--detach]` → 따로 된 명령 `memory-consolidation [--detach]`(`/consolidate`가 부른다).
-  - 예약 작업: 끝 알림 ntfy 서버 `Secretary ntfy (번호)` → `Secretary ntfy Server (번호)`(켠 사용자만, 올린 뒤 할 일 3).
-  - 이 PC 파일: 끝 알림 설정 `scripts/notify.local.json` → `scripts/phone-push.local.json`, 설치 상태 점검 기록 `secretary.db.setup.json` → `secretary.db.setup-check.json`, 답변 검사 설정 `scripts/guards.local.json` → `scripts/mistake-guards.local.json`, 의미 검색 서버의 DB 옆 파일 `secretary.db.embedder*` → `secretary.db.semantic-search-server*`(업데이트 적용 때 옮긴다, 새 이름 파일이 이미 있으면 옛 파일을 그대로 두고 알린다. 답변 검사 설정과 의미 검색 서버 파일은 그 뒤에도 옛 이름 파일이 남아 있으면 설치 상태 점검 `renamed-local-files`가 알린다. 남은 옛 이름 파일을 지울지는 올린 뒤 할 일 5에서 묻는다).
-  - 설치 상태 점검 항목: `packages` → `npm-packages`, `model` → `semantic-search-model`, `secretary-dir` → `secretary-dir-env`, `notify` → `phone-push`, `workspace-folders` → `workspace-aux-folders`(옛 이름으로 빼 둔 항목도 그대로 빠져 있다). 질문 알림 `<secretary-context>` → `<secretary-context-size>`, `<secretary-labels>` → `<secretary-question-label>`, `<secretary-embedder>` → `<secretary-semantic-search-server>`, `<secretary-guard>` → `<secretary-answer-check>`.
-  - 환경변수: 의미 검색을 끄는 `SECRETARY_EMBED=off` → `SECRETARY_SEMANTIC_SEARCH=off`, `SECRETARY_EMBED_IDLE_MIN`·`_MODEL_DIR`·`_MODEL_REPO` → `SECRETARY_SEMANTIC_SEARCH_IDLE_MIN`·`_MODEL_DIR`·`_MODEL_REPO`, 사용량 정지 기준 `USAGE_PAUSE_PCT` → `SECRETARY_USAGE_GUARD_PCT`(모두 옛 이름도 한동안 읽는다).
-  - 폴더: `scripts/server` → `scripts/remote-server`(Windows 알림 `notify.ps1` → `windows-toast.ps1`), `src/board` → `src/session-continuity`, `src/notify`·`scripts/notify` → `phone-push`, `src/semantic`·`scripts/semantic` → `semantic-search`(의미 검색 서버 `semantic-search-server.ts`, 모니터링 `watch-semantic-search-server.mjs`), `src/guards` → `src/mistake-guards`, `scripts/tasks` → `scripts/scheduled`(예약 작업 등록 `install-tasks.ps1` → `install-scheduled-tasks.ps1`), 업무 세션 훅 `worker-guard.mjs` → `worker-folder-guard.mjs`, 그 밖의 파일 이름 몇 개. 예약 작업은 `bin\`의 같은 이름 진입점을 부르므로 다시 등록하지 않아도 된다. 옛 위치에서 뜬 비서 서버 창도 다시 켤 때 같은 창으로 찾는다.
-  - 비서 고유 번호: 새로 만드는 번호는 모음(A·E·U·Y)을 쓰지 않는다. 이미 있는 번호는 그대로 쓴다.
-  - 사용자 폴더의 기록 위치(`%USERPROFILE%\.secretary`): 이 PC의 비서들이 함께 쓰는 것은 바로 아래 단어 이름(`keys`, `usage`, `ntfy`), 비서마다의 것은 고유 번호 폴더 아래(`<번호>\logs`, `<번호>\state`). 사용량 기록 `~/.claude/usage` → `~/.secretary/usage`(Claude Code 자체 폴더 안이라 비서 것임이 드러나지 않았다. 옛 폴더에 쓰는 옛 사본이 있는 동안 정지 훅·대시보드는 두 곳 가운데 새 기록을 읽는다), "90% 넘어도 진행" 풀기 `guard-override-<계정>.json` → `usage-guard-override-<계정>.json`(옛 풀기도 초기화 시각까지 읽고 지난 것은 지운다), 정지 장치 끄기 파일 `~/.claude/usage-guard-off` → `~/.secretary/usage-guard-off`(옛 위치도 한동안 읽는다), 기록 `logs\<번호>` → `<번호>\logs`(옛 기록은 그 자리에 둔다), `state\<번호>` → `<번호>\state`(업무 세션·run-job 기록은 첫 세션에 새 위치로 옮겨 온다, 옛 파일은 그대로 둔다).
-- **규칙(`AGENTS.md`):** 사용자를 부를 때는 핵심 프로필의 호칭을 쓰고 규칙·스킬 글의 "사용자"는 그 사람을 가리킨다는 줄, 누가 하는 일인지는 "비서가 직접"·"사용자가 직접"·"프로그램이 자동으로"처럼 주어로 쓴다는 줄, 대화 크기 알림(`<secretary-context-size>`)이 없으면 대화 크기를 숫자로 말하지 않는다는 줄이 들어갔다. 그 밖에는 위 이름 정리에 맞춘 단어만 바뀌었다. `AGENTS.md`를 고쳐 쓴 사용자는 업데이트가 유지·덮어쓰기·섞기를 묻는다.
-
-고친 것
-- 비서 서버가 꺼져 있을 때 run-job 안의 기억 도구가 의미 검색 서버를 띄우면, 의미 검색 서버가 run-job을 부른 쪽의 출력 통로를 물려받아 run-job이 끝나도 부른 쪽(쉬는 시간 정리 등)이 의미 검색 서버가 꺼질 때(기본 60분)까지 기다리던 것. 의미 검색 서버는 이제 아무 통로도 물려받지 않게 띄운다.
-- 업데이트가 옮기거나 지운 파일의 옛 폴더가 빈 채 남던 것. 이제 비게 된 폴더를 함께 지운다(사용자 파일이 남아 있는 폴더는 그대로 둔다). 이름이 바뀐 스킬의 옛 폴더(`.agents/skills/grill` 등)가 `SKILL.md` 없이 남아 설치 상태 점검 `skills`와 스킬 사양 테스트에 걸리는 일을 막는다.
-- 사용자가 기능을 켜거나 끈 폴더에서 `npm test`의 시험 3개(배포판이 낸 켜짐·꺼짐 상태를 기대하던 것)가 실패하던 것. 이제 `features.json`이 배포판 그대로일 때만 그 상태를 본다.
-- 공간 규칙에 든 파이썬 비서 찾기 코드(`secretary_bin`)가 비서 위치 파일도 환경변수도 없을 때 `TypeError`로 죽던 것. 이제 "비서 진입점을 못 찾음"이라는 글로 멈추고, 이미 있는 공간 규칙의 옛 형식은 `node src/cli.ts workspace-links`가 고친다(설치 상태 점검 `workspace-links`가 고칠 공간을 알린다).
-
-올린 뒤 할 일 (v0.9.0에서)
-1. **보조 폴더 옮기기:** 비서 폴더에서 `node src/cli.ts workspace-aux-folders --dry-run`으로 옮길 것을 보고, 사용자에게 보여 준 뒤 `node src/cli.ts workspace-aux-folders`를 돌린다. `workspaces\run-job-home`·`workspaces\old`가 있으면 `_run-job-home`·`_archived`로 옮기고(옛 이름 링크는 남기지 않는다), DB에 `old\` 아래로 적힌 보관 공간의 폴더를 `_archived\`로 고치고, 담당자 폴더 `_staff\memory-consolidation`·`_staff\situation-board`를 만들고, `_run-job-home`이 없으면 규칙과 함께 만든다. 옛 폴더가 없으면 담당자 폴더와 `_run-job-home`만 생긴다. 옮기다 실패하면(그 폴더를 쓰는 중) 그 일을 끝낸 뒤 다시 돌린다.
-2. **공통 스킬 이름 맞추기:** 비서 폴더에서 `node src/cli.ts skill-links --dry-run`과 `node src/cli.ts workspace-links --dry-run`으로 고칠 것을 보고, 사용자에게 보여 준 뒤 `--dry-run` 없이 돌린다. 접두어 없이 적힌 `common-skills.json` 목록은 `common-`을 붙여 다시 쓰고, `workspaces\_skills\<이름>\`에 있던 공통 스킬은 `_skills\common-<이름>\`으로 옮겨 `SKILL.md`의 `name`을 맞춘다. 공통 스킬을 쓰지 않으면 "해당 없음".
-3. **ntfy 서버 예약 작업 이름 옮기기(끝 알림을 켠 사용자만):** 비서 폴더에서 `scripts/scheduled/install-scheduled-tasks.ps1 -Task ntfy -DryRun`으로 `옮김(예정): 'Secretary ntfy (번호)' → 'Secretary ntfy Server (번호)'` 줄을 보고, 사용자에게 보여 준 뒤 `-DryRun` 없이 돌린다. 새 이름으로 등록하고 옛 작업을 지운다(옛 작업의 `ntfy.exe`·`server.yml` 위치와 사용 안 함 상태를 이어받는다, 옮기는 이름은 `scripts/update-moves.json`의 `scheduledTasks`). 끝 알림을 꺼 두었으면 "해당 없음".
-4. **이 비서 설정 옮기기 확인:** 업데이트 출력에 "이 비서 설정 한 파일로 … 그대로 둠"이 있으면 `this-secretary.local.json`의 그 키에 이미 다른 값이 있거나 옛 파일이 JSON이 아닌 것이다. 두 값을 비교해 사용자에게 보여 주고, 정한 값을 그 키에 쓴 뒤 `node src/cli.ts this-secretary-merge`를 다시 돌린다(설치 상태 점검 `renamed-local-files`도 남은 파일을 알린다).
-5. **남은 옛 이름 파일을 지울지 묻기:** 1~4를 마친 뒤 비서 폴더에서 `node src/cli.ts setup-check`를 돌려 `renamed-local-files`(이름이 바뀐 이 PC 파일) 항목이 알리는 옛 이름 파일과 업데이트 적용 출력의 "새 이름 파일이 이미 있어 옛 파일을 그대로 둠" 줄에 나온 파일을 보고, `backups\this-secretary-merge\`에 옮겨 둔 옛 설정 파일도 함께 목록으로 사용자에게 보여 준다. 옛 이름 파일은 파일마다 새 이름 파일(또는 `this-secretary.local.json`의 그 키)와 비교해 옛 파일에만 있는 값이 있으면 먼저 보여 주고 새 위치에 옮길지 묻는다. 그런 뒤 목록의 파일을 지울지 묻고, 지우기로 한 파일만 지운다(새 이름 파일과 `this-secretary.local.json`은 건드리지 않는다). 작업 공간의 옛 `secretary.json`은 이 버전에서 아직 읽히므로 지우지 않는다. 남은 파일이 없으면 "해당 없음".
-
-## v0.9.0
-
-v8에서 올리면 기억(`secretary.db`), 검색 모델(`models/`), 작업 공간은 그대로 이어 쓰고 DB 형식도 바뀌지 않는다.
-
-새 기능
-- **다중 구독(꺼짐, 옛 이름 '두 번째 구독'):** 일을 보낼 구독을 둘 이상(계정 b, c, …) 둘 수 있다. 매 질문의 사용량 줄에 모든 구독의 사용률과 일을 보낼 계정이 붙고, 보낼 계정은 계정 a 밖의 구독 중 5시간 사용률이 가장 낮은 것이다(5시간·주간 90%를 넘은 계정은 빼고, 조회 기록이 없는 계정은 다른 계정에 기록이 없을 때만). `scripts/lib/providers.json`의 `"default"`를 `"auto"`로 두면 업무 세션·run-job을 띄울 때마다 그 규칙으로 계정을 고르고(`node src/cli.ts handoff-account`가 지금 고를 계정을 알려 준다), "계정 c 90퍼 넘어도 진행"처럼 계정을 적어 풀 수 있다. 구독이 둘(a·b)뿐이면 줄과 고르기가 전과 같다. 켜는 순서는 `features` 스킬의 `account-handoff`.
-
-바뀐 것
-- **지시서 대조(`bin/delegate-check.mjs`):** 일을 맡기기 전 대조가 그 공간 스킬(`SKILL.md`)에서 지시서와 단어가 겹치는 규칙 줄을 점수 순 위 10줄 보여 준다(`--rules`). 지시서에 빠진 듯한 결정 기억도 지시서와 단어가 겹치는 점수 순 위 10개만 보여 주고(`--memories`), 겹치는 단어가 없는 결정은 빠진 것으로 세지 않는다.
-- **질문 알파벳 세기:** 다음 질문 알파벳은 질문 줄("A. …?", "A(뜻). …?", 새 세션 첫 답에서 다시 보여 주는 "A(옛 G, #4508). …?")만 보고 센다. "남은 질문:" 줄은 알파벳을 올리지 않고, 그 줄은 괄호 속 뜻을 빼고 항목마다 맨 앞의 알파벳만 읽어 질문을 닫거나 다음 세션으로 넘긴다.
-- **새 작업 공간의 `.gitignore`:** 큰 영상·소리 파일(`*.mp4` `*.mov` `*.mkv` `*.webm` `*.wav` `*.mp3` `*.m4a` `*.flac` `*.aac`)을 공간 기록(git)에 넣지 않는 줄이 들어간다. 원본은 백업으로 지키고 기록에는 코드·대본·설정·보고서와 작은 그림만 남긴다. 이미 있는 공간은 그대로다(올린 뒤 할 일 1).
-- **작업 공간 zip 묶기 뺌:** 작업 공간의 규칙·스킬만 골라 zip으로 묶던 기능(`scripts/export/`의 스크립트 두 개와 그 시험)을 뺐다. v8에서 올리면(v7에서도) 업데이트가 사용자가 안 고친 그 파일들을 지우고, 고친 것만 지울지 묻는다.
-- **안내 글:** 네트워크 공유·끝 알림에 붙어 있던 "실행 확인 안 됨" 표시를 뺐다. README의 "다음 단계 후보"를 지웠다. `SECRETARY_EMBED_IDLE_MIN` 설명을 고쳤다: 비서 서버가 꺼져 있을 때 켜진 의미 검색 도우미가 기다리다 꺼지는 시간이고, 서버가 떠 있으면 도우미는 서버와 함께 떠 있다가 서버가 꺼지면 따라 꺼진다.
-- **버전 번호와 업데이트:** 위 "버전 번호"대로 0.x 세 자리로 바꿨다. 업데이트 도우미(`scripts/update.mjs`)가 tag를 번호로 줄 세워(옛 git 이름 정렬은 v0.9.0을 v1보다 앞에 두었다) v7·v8 폴더도 v0.9.0을 최신으로 찾고, 출력에 "기준 v8(0.8.0) → 최신 v0.9.0"처럼 옛 tag의 0.x 번호를 함께 적는다.
-
-고친 것
-- "남은 질문:" 줄의 뜻 속 대문자(예: "F(새PC 단계)"의 PC)를 질문 알파벳으로 읽어, 다음 질문 알파벳이 F에서 PD로 건너뛰고 없는 질문이 열린 채 다음 세션으로 넘어가던 것.
-
-올린 뒤 할 일 (v8에서)
-1. **(영상·소리를 다루는 작업 공간이 있으면) 그 공간의 `.gitignore`:** 비서가 `../workspaces/*/.gitignore`에서 위 줄이 없는 공간을 찾아 보여 주고, 영상·소리 파일을 만드는 공간에만 넣을지 사용자에게 묻는다. 승인받으면 주석 한 줄(`# 큰 영상·소리 파일: 원본은 백업으로 지키고 기록에는 코드·대본·설정·보고서와 작은 그림만 남긴다`)과 확장자 줄을 끝에 붙인다. 이미 기록에 들어간 파일은 그대로 둔다(기록에서 빼려면 공간마다 따로 정한다). 그런 공간이 없으면 "해당 없음".
-
-## v8
-
-기억(`secretary.db`), 검색 모델(`models/`), 작업 공간은 그대로 이어 쓴다. DB는 처음 켤 때 자동으로 새 형식으로 바뀐다(큰 변경 전에는 DB 사본을 `backups/`에 먼저 만든다). 검색 모델 위치가 v7과 같아서 다시 받거나 다시 색인하지 않는다.
-
-새 기능
-- **기능 목록과 켜고 끄기:** 비서 폴더 맨 위 `features.json`에 기능마다 파일·설치 상태 점검·알림·예약 작업·규칙 위치를 적는다. 처음엔 꺼 둔 기능을 비서에게 "○○ 켜 줘"라고 하면 무엇이 생기는지 알리고 승인받아 켠다(`features` 스킬). 꺼 둔 기능: 일정(Google Calendar), 메모 볼트(`../notes`), 받은 파일 폴더(`../inbox`), 다른 PC에서 보는 네트워크 공유, 두 번째 구독으로 일 보내기(사용률에 따라 계정 a에서 b로 자동으로), 구독 밖 공급자(API 키, Bedrock, 게이트웨이, 다른 회사 CLI), 대시보드, 끝 알림.
-- **쉬는 시간 작업(켜짐):** 예약 작업 'Secretary Idle Jobs (번호)'가 5분마다 돌아, 대화가 10분 멈추면 상황판을 미리 고쳐 쓰고, 정리 안 된 대화가 60건 넘고 30분 멈추면 기억 정리를 돌린다(같은 구독의 Haiku). 정리가 끝나면 답 끝에 안내가 붙고, "기억 정리 확인"만 보내면 비서가 결과를 함께 본다.
-- **실수 막기 장치(켜짐):** 답이 영어로 새거나 끝맺음 줄(다음 행동 및 순서, 남은 질문, 추천 근거(`> 근거:` 줄))이 빠지면 Stop 훅이 한 번 되돌려 그 자리에서 고쳐 쓰게 한다. 질문 알파벳은 훅이 다음 글자를 알려 주고, 비서 상위 폴더 바로 아래·`temp`에 쓰는 것을 막고, 같은 조작을 한 턴에 여러 번 되풀이하면 도구로 한꺼번에 할지 따져 보라고 알린다. 일을 맡길 때 지시서·보고를 기억·실제 파일과 대조하고(`bin/delegate-check.mjs`), 걸린 실수는 실수 기록(`record_mistake` 등)에 남는다. 수준은 `scripts/guards.local.json`으로 바꾼다.
-- **사용량 뒤에서 조회(켜짐):** 비서 서버가 켜져 있는 동안 구독 사용량을 5분마다 토큰 없이 새로 읽는다(`node src/cli.ts usage-poll`, 이 PC에 하나만). 대화를 쉬는 동안에도 정지 장치·상태줄이 새 값을 본다. 끄려면 `features` 스킬.
-- **대시보드(꺼짐):** 한도·돌고 있는 일·업무 칸반·예약 작업을 보는 웹 화면, 한도에 보일 공급자 고르기(`/settings`), 결과물 폴더를 폰 브라우저로 읽기 전용으로 보기(`/share`). 다른 기기에서는 Tailscale 같은 사설망으로 연다.
-- **끝 알림(꺼짐):** 답이 끝날 때마다 첫 줄을 이 PC의 ntfy 서버로 보내 폰 앱에 띄운다. 설치 스크립트 `scripts/notify/install-ntfy.ps1`이 로그인 때 띄우는 예약 작업을 등록하고, `-WebPush -WebPushEmail <메일>`이면 PC 브라우저 웹 푸시 키도 만든다(개인 키는 `server.yml`에만).
-- **큰 일 판:** 몇 달 가는 큰 일의 상태(진행 중 / 사용자 차례 / 보류 / 운영 중)를 프로필에서 따로 떼어 DB의 판으로 둔다. 세션을 열 때 판이 붙고, 상태가 바뀌면 비서가 그 줄만 고친다(이력이 남는다).
-- **대화 지우기:** `비서 대화 삭제 2턴`, `비서 대화 삭제 #번호`, `비서 대화 삭제 #번호-#번호`라고 보내면 지울 대화를 단어 첫 글자로만 미리 보여 주고 승인 코드를 준다. 30분 안에 코드만 보내면 AI를 거치지 않고 지운다. 지운 대화는 `backups/error/`의 격리 DB로 옮겨지고 비서는 읽지 않는다.
-- **되감기 정리:** Claude Code에서 되감기(rewind)로 버린 갈래의 대화가 기억·상황판에 남지 않게 정리한다.
-- **바깥에서 부르는 고정 진입점 `bin/`과 환경변수 `SECRETARY_<번호>_DIR`:** 비서 폴더 밖(예약 작업, 사용자 설정의 훅·상태줄, 작업 공간 도구)은 `bin/`의 이름으로만 비서 스크립트를 부른다. 스크립트 위치가 바뀌어도 바깥을 다시 등록하지 않아도 된다. 작업 공간 도구는 비서 진입점 폴더를 공간 맨 위 `secretary.json`(비서가 써 두는 진입점 폴더 `bin`과 번호, 비서 폴더 자체는 적지 않는다, 공간 git에는 넣지 않는다)으로 찾고, 없으면 그 비서 번호가 든 환경변수(예: `SECRETARY_A3F9_DIR`) 아래 `bin`으로 찾는다. 찾는 함수(Python·PowerShell·Node)는 공간 규칙에 들어 있다. 업무 세션의 셸 명령은 비서 폴더를 `bin\<이름>` 부르기로만 쓸 수 있다(비서의 다른 파일을 열거나 실행하거나 쓰는 명령은 업무 세션 훅이 막는다).
-- **비서 고유 번호:** 설치마다 짧은 무작위 번호(예: `A3F9`, 대문자)를 처음 한 번 만들어 비서 폴더 `.secretary-id`에 두고 계속 쓴다(업데이트·배포판에 들어가지 않고 덮이지 않는다). 예약 작업 이름(`Secretary Idle Jobs (A3F9)`)과 비서 폴더 환경변수(`SECRETARY_A3F9_DIR`)에 붙어 한 PC에 비서가 여럿이어도 겹치지 않는다. 다른 폴더의 비서가 같은 번호면 이 비서를 옮기거나 복사하고 남은 사본으로, 다르면 다른 비서로 본다.
-- **업데이트:** 사용자가 고쳤고 새 버전도 바꾼 파일은 깨끗이 합쳐져도 파일마다 유지·덮어쓰기·섞기를 묻는다(많으면 "나머지는 추천대로"). 버전 사이에 옮겨진 파일을 따라가 옛 위치의 사용자 수정을 새 위치로 합친다(`scripts/update-moves.json`). 최신판 받기는 따로 된 명령으로 하고, Claude Code 자동 모드에 막히면 다시 시도하지 않고 직접 칠 명령을 알려 준다. 적용 전에 바꿀 파일 개수를 한 줄로 보여 주고, "올린 뒤 할 일"은 빠짐없이 번호 순서대로 하며 건너뛰는 것은 이유를 말한다.
-- **배포판 파일 목록 `release-files.json`:** 이 버전이 넣은 파일마다 내용 해시를 적은 목록이 폴더 맨 위에 들어간다(배포판을 만들 때 생긴다). 다음 버전으로 올릴 때 업데이트가 사용자가 고친 파일을 이 목록으로도 가리고(받았던 판이 저장소 tag와 조금 달라도 안 고친 파일을 묻지 않는다), 테스트의 PowerShell 검사가 비서 파일과 사용자가 만든 스크립트를 이 목록으로 가르고(비서 폴더 안에 만든 스크립트도 경고만), 설치 상태 점검이 빠진 비서 파일을 알린다. v7에서 올라올 때는 v7에 목록이 없어 예전처럼 tag와 비교한다.
-
-바뀐 것
-- **스킬 위치 `.agents/skills/`:** 비서의 스킬은 맨 위 `.agents/skills/<이름>/SKILL.md`에 실제 폴더로 한 벌만 둔다(Codex·Antigravity가 이 위치에서 읽는다). Claude Code가 읽는 `.claude/skills`는 그리로 가는 링크(Windows 디렉터리 정션, 관리자 권한 필요 없음) 하나이고, `node src/cli.ts skill-links`가 만들고 고친다(`--dry-run`은 보기만). 링크는 zip·git에 들어가지 않아 설치할 때(README 설치 6번)와 폴더를 옮긴 뒤 한 번 돌린다. 설치 상태 점검의 '스킬' 항목이 빠지거나 어긋난 링크를 알리고, 링크 위치에 실제 폴더가 있으면 지우지 않고 알리기만 한다. 사용자가 만드는 스킬도 `.agents/skills/<이름>/`에 둔다. 작업 공간도 같은 구조이고, 여러 공간이 함께 쓰는 스킬(`workspaces\_skills\<이름>\`)은 공간 맨 위 `common-skills.json`에 적으면 `common-<이름>`으로 링크된다.
-- **폴더 정리:** `src/`와 `scripts/`를 영역별 폴더로 나눴다(`src/store`, `src/memory`, `src/hooks`, `scripts/server`, `scripts/tasks`, `scripts/worker` 등, README "구조"). 큰 파일 여럿을 나눴다.
-- **예약 작업 등록 하나로:** 비서 서버 자동 시작·매일 백업·쉬는 시간 작업을 `scripts/tasks/install-tasks.ps1 -Task server|backup|idle-jobs`로 등록한다(옛 `install-autostart.ps1`, `backup-db.ps1 -Install` 대신). 매일 백업 기본 시각은 22:30(`-At`으로 바꿈).
-- **UAC 안내:** 설치 맨 앞에 "밖에서 쓰는 동안 UAC 확인 창이 뜨면 일이 멈추니 비서 서버 자동 시작(설치 8번)을 꼭 하라"는 안내를 넣고, "UAC를 가장 낮게(알리지 않음)" 단계는 뺐다. 자동 시작으로 띄운 서버는 가장 높은 권한으로 돌아, Windows 기본보다 한 단계 낮춘 UAC(화면 어둡게 하지 않음)에서도 확인 창 없이 관리자 일(파일 쓰기, 예약 작업 등록·삭제)을 하는 것을 확인했다. 이미 "알리지 않음"으로 낮춘 사람은 원하면 기본값으로 되돌려도 된다.
-- **답 끝 "다음 행동 및 순서":** 할 일이 여럿이면 끝까지 번호 붙여 순서대로 적는다. 할 일이 없는데 뒤에서 일이 돌고 있으면 기다리면 된다는 말과 다른 시킬 일을 말해 달라는 말을 함께 적는다.
-- **답 규칙:** 말하거나 추천하기 전에 확인할 수 있는 것은 그 자리에서 확인한다(확인은 아끼지 않는다). 추천 선택지 바로 아래에 인용 줄 `> 근거:`로 확인한 근거를 붙이고, 질문은 그 질문을 부른 설명 바로 뒤에 두며, "남은 질문:" 줄에는 알파벳마다 짧은 뜻을 붙인다. 결과물 경로는 경로 하나마다 코드 블록 하나에 쓴다.
-- **검수 대기:** 사용자가 결과물을 직접 봐야 끝나는 업무는 "검수 대기"로 두고, 3일이 넘으면 새 세션·기억 정리 때 다시 묻는다(그동안 그 공간의 다음 업무는 맡길 수 있다).
-- **상황판의 "답 없음·안 함·미정":** 그렇게 말하기 전에 기억과 대조한다(상황판은 기억을 보지 못한다).
-- **기억 정리 확인 문구:** "기억 정리 확인"만 보냈을 때만 정리 결과가 온다(띄어쓰기는 상관없다).
-- **서브에이전트:** 기억·판단이 많이 드는 조사·검토는 비서가 직접 하거나 비서 세션의 서브에이전트에 맡기고, 서브에이전트는 기억 읽기 도구만 쓰고 저장은 보고의 "기억할 것"으로 넘긴다. 업무 세션·run-job에도 기억 읽기 도구(`recall`·`search_log`)가 붙는다.
-- **사용량 기록은 계정별, 비서 기록은 비서 번호별:** 구독 사용량 파일 이름에 그 공급자로 로그인한 계정(메일 @ 앞부분)이 붙는다(`~/.claude/usage/subscription-<계정>.json`). 로그인을 다른 계정으로 바꿔도 옛 계정의 사용량을 새 계정 것으로 보지 않는다. 계정 없는 옛 이름 파일은 새 이름으로 처음 쓴 뒤 자동으로 지워진다. 서버·쉬는 시간 작업·끝 알림 기록은 `~/.secretary/logs/<비서 번호>/` 아래에, 업무 세션·run-job·뒤에서 띄운 일·업무 모니터링 기록은 `~/.secretary/state/<비서 번호>/` 아래에 쓴다(한 PC의 비서 여럿이 같은 파일에 섞어 쓰지 않는다). `~/.secretary/logs/` 바로 아래의 옛 기록은 지우지 않고 그대로 둔다. `~/.claude/usage`의 옛 업무 세션·run-job 기록은 올린 뒤 처음 세션을 열 때 이 비서 몫(번호 없는 옛 기록 포함)을 새 위치로 한 번 복사해 오고, 옛 파일은 그대로 둔다.
-- **장기적 관점의 제안:** 나중까지 남는 것을 만들거나 바꾸는 계획에는 지금 안 옆에 장기적 관점의 안을 나란히 적는다.
-- **가르쳐 준 업무 지식:** 업무 처리 기준은 공통 스킬 폴더 `../workspaces/_skills/<업무>/`에 쓰고 업무 세션도 같은 원본을 읽는다.
-- **기억 중복 확인:** 새 기억이 기존 기억과 거의 같으면(의미 유사도 0.85 이상) 저장 전에 알려 준다.
-- **run-job 오래 걸리는 일:** `-Detach`로 띄우고 `scripts/run-job/wait-job.ps1`로 55분마다 깨어 확인한다. 업무 모니터링도 55분마다 깨운다(대화 캐시 1시간 안).
-- **세션 재사용 기준 8만 → 20만 토큰:** 업무 세션 재사용과 run-job 자동 재사용(resume)이 마지막 컨텍스트 20만 토큰 미만까지 같은 세션을 다시 쓴다(55분 기준은 그대로). 재사용한 세션이 일을 더 잘하는지 보려고 넓혔다. 판단은 `~/.secretary/state/<비서 번호>/`의 `worker-reuse.jsonl`·`run-job-calls.jsonl`에 쌓이고 `scripts/run-job/run-job-stats.ps1`로 본다.
-- **90% 해제에 계정 지정:** 두 번째 구독(선택 기능)을 켰으면 "계정 b 90퍼 넘어도 진행", "계정 a랑 b 모두 90퍼 넘어도 진행"처럼 계정을 적어 그 계정을 푼다. 계정을 적지 않으면 이 대화의 계정만 푼다. 목록에 없는 계정을 말하면 아무것도 풀지 않고 어느 계정인지 묻는다.
-
-고친 것
-- 비서 서버를 다시 켜기 직전의 대화가 저장되지 않던 것.
-- "90퍼 넘어도 계속"으로 사용량 정지 장치를 풀면 말한 계정뿐 아니라 이 PC의 모든 계정·모든 비서의 정지 장치가 함께 풀리던 것. 이제 그 계정에만 걸린다(계정이 적히지 않은 옛 해제 파일은 읽지 않는다).
-- 테스트(`npm test`): 이 PC의 설정 파일(`scripts/*.local.json`)과 기억 DB를 건드리지 않고 임시 폴더에서 돌며, 테스트 뒤 임시 파일이 남거나 모델을 부르면 실패한다.
-- 업무 세션·run-job에 붙는 기억 읽기 도구가 기억 DB를 읽기 전용으로 연다(DB가 없으면 만들지 않는다).
-- 구독이 아니라 API 키로 로그인한 Claude Code처럼 사용량 조회(`/usage`)가 사용량을 주지 않으면, 사용량 조회기와 정지 훅이 5분마다 조회를 되풀이하던 것. 이제 실패가 이어지면 다음 조회를 최대 6시간까지 미루고, 기록이 없으면 정지 장치는 막지 않는다.
-- 다른 세션의 보고나 작업 알림에 "90퍼 넘어도 계속"·"기억 정리 확인" 같은 말이 들어 있으면 사용자가 한 말로 잘못 알아듣던 것.
-- 구독이 아닌 계정(API 키, Bedrock, 게이트웨이, 다른 회사 CLI)에 "90퍼 넘어도 계속"이라고 하면 처음부터 막지 않았는데도 "풀었어요"라고 알리던 것. 이제 풀지 않고 "사용량 정지 장치 대상이 아니에요"라고 알린다.
-- 설치 상태 점검: 관리자 권한으로 뜬 창의 명령줄을 못 읽거나 예약 작업 조회가 권한으로 막히면 "빠짐"이 아니라 "확인 못 함"으로 둔다(v7과 같음).
-- 테스트(`npm test`): 사용자가 직접 만든 PowerShell 스크립트(배포판 파일 목록 `release-files.json`에 없는 파일, 목록이 없으면 기능 목록에 없는 파일)에 BOM이 없거나 구문이 틀려도 실패로 치지 않고 경고만 낸다. 비서가 넣은 스크립트는 그대로 실패로 잡는다.
-- 설치 상태 점검: 예약 작업이 등록돼 있어도 가리키는 파일이 없으면(옛 위치의 스크립트를 부르는 v7 작업 등) "등록됐지만 가리키는 파일 없음"과 그 경로를 알린다.
-- 한 PC에 비서가 여럿일 때: 예약 작업과 비서 폴더 환경변수는 비서 고유 번호가 붙어 겹치지 않는다. 설치 상태 점검, `scripts/usage/install-usage-guard.mjs`, `scripts/tasks/install-tasks.ps1`은 다른 비서 폴더(번호가 다르거나 번호가 없는 비서 폴더)를 가리키는 사용자 설정의 훅·상태줄과 번호 없는 옛 이름의 예약 작업을 이 비서의 옛 경로로 보지 않고 그대로 둔다. 이 비서 폴더 안의 옛 위치, 같은 번호의 다른 폴더(남겨 둔 옛 사본), 비서가 없어진 폴더(옮기기 전 위치)를 가리킬 때만 고치자고 한다. 다른 비서의 훅·상태줄은 사용량 기록을 PC에서 함께 쓰므로 점검이 통과로 본다.
-
-올린 뒤 할 일 (v7에서)
-1. **예약 작업을 번호 붙은 새 이름으로 옮기기:** v8부터 예약 작업 이름 끝에 이 비서의 고유 번호가 붙는다(`Secretary DB Backup` → `Secretary DB Backup (A3F9)`, 번호는 업데이트 끝에 생긴 `.secretary-id`). v7 작업은 옛 이름이고 옮겨진 스크립트를 불러 돌지도 않는다. `node src/cli.ts setup-check`가 이 비서 것(이 비서 폴더나 비서가 없어진 옛 폴더를 부르는 작업)을 "옛 이름 '…'으로 등록됨"으로 알린다. 그 작업만 다시 등록하면 등록 스크립트가 새 이름으로 등록하고 옛 이름 작업을 지운다(옛 작업의 매일 시각·반복 간격·사용 안 함 상태를 이어받는다). 매일 백업: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tasks/install-tasks.ps1 -Task backup`. 비서 서버 자동 시작: **관리자 PowerShell**에서 비서 폴더로 가서 같은 명령에 `-Task server`(옛 서버 작업도 관리자 권한이라야 지워진다. 떠 있는 서버는 그대로 돌고 다음 로그인부터 새 이름 작업이 띄운다). 옛 이름 작업이 이 PC의 다른 비서 것이면 점검이 알리지 않고 스크립트도 건드리지 않는다. 쉬는 시간 작업(새로): `-Task idle-jobs`(관리자 필요 없음, 사용자에게 먼저 묻는다).
-2. **사용량 정지 장치:** 등록해 두었으면 `node scripts/usage/install-usage-guard.mjs`를 다시 돌린다(사용자 설정의 훅·상태줄을 `bin/` 진입점으로 고친다. 그대로 두면 훅·상태줄이 없어진 옛 위치의 파일을 불러 정지 장치가 돌지 않는다. 설치 상태 점검이 "옛 경로"로 알린다). 이 PC의 다른 비서 폴더를 가리키는 훅·상태줄은 그 비서 것이라 스크립트가 그대로 두고, 점검도 함께 쓰는 것으로 본다.
-3. **비서 폴더 환경변수:** 비서 폴더의 PowerShell에서 `[Environment]::SetEnvironmentVariable("SECRETARY_$((Get-Content .secretary-id).ToUpper())_DIR", (Get-Location).Path, 'User')` 한 번(이 비서 번호가 든 이름, 예: `SECRETARY_A3F9_DIR`. 관리자 필요 없음. 작업 공간 도구는 7번의 `secretary.json`을 먼저 보고, 이 변수 아래 `bin`은 그 파일이 없을 때와 공간 밖 도구가 쓴다). 번호 없는 `SECRETARY_DIR`을 등록해 둔 PC면(v7에는 없던 변수라 보통 없다) 그 이름을 읽는 바깥 도구(작업 공간의 도구·규칙 등)를 사용자와 함께 찾아 새 이름으로 고친 뒤 `[Environment]::SetEnvironmentVariable('SECRETARY_DIR', $null, 'User')`로 지운다(그동안은 둘 다 둔다. 설치 상태 점검이 옛 이름이 남았다고 짧게 적는다).
-4. **큰 일 판 옮기기:** v7까지는 큰 일 상태가 프로필의 한 항목이었다. `node src/cli.ts big-work-from-profile <백업 폴더>\big-work-plan.json`으로 옮길 계획을 만들어 보고, 줄마다 상태가 맞는지 확인한 뒤 `--apply`로 판에 넣는다(프로필에서는 그 항목이 빠진 새 버전이 저장된다). 프로필에 큰 일 항목이 없으면 건너뛴다.
-5. **v7 때 만든 작업 공간의 규칙:** v7이 만든 공간 `AGENTS.md`에는 근거 저장 도구가 `<비서 폴더>/scripts/ego-grab.mjs`로 적혀 있는데, 그 파일은 `scripts/browser/`로 옮겨졌다(바깥은 `bin/ego-grab.mjs`로 부른다). 비서가 `../workspaces/*/AGENTS.md`에서 그 경로를 찾아 목록을 보여 주고, 승인받아 `<비서 폴더>/bin/ego-grab.mjs`로 고친다(업데이트는 작업 공간을 건드리지 않는다). 공간 안의 grab 스크립트·도구에 같은 경로가 있으면 함께 고친다.
-6. 옛 `run-job-home`(비서 폴더 옆)이 아직 있으면 v7 때처럼 `workspaces` 안으로 옮기거나 지운다.
-7. **작업 공간의 비서 위치 파일:** 비서 폴더에서 `node src/cli.ts workspace-links --dry-run`으로 고칠 공간을 보여 주고, 승인받아 `node src/cli.ts workspace-links`로 공간마다 맨 위 `secretary.json`(이 비서의 진입점 폴더 `bin`과 번호)을 쓴다(공간의 `.gitignore`에도 한 줄 넣는다). 공간 도구가 비서 진입점을 찾는 파일이다. 공간 안의 도구가 비서 폴더를 직접 적어 두었거나 환경변수로 찾으면, 이 파일을 읽게 고치는 일은 공간마다 업무로 맡긴다(찾는 함수는 새로 만드는 공간 규칙에 들어 있다). 비서 폴더의 `bin` 밖 파일(예: `src/cli.ts`)을 부르는 공간 도구는 업무 세션에서 막히므로 함께 고친다.
-8. **스킬 위치 확인:** v7의 `.claude/skills/<이름>`(실제 폴더)은 v8에서 `.agents/skills/<이름>`으로 옮겨지고 `.claude/skills`는 그리로 가는 링크 하나가 된다. 업데이트(apply)가 옮기기와 링크 만들기를 한 번에 한다: 사용자가 고친 스킬은 고친 내용 그대로, 사용자가 `.claude/skills/`에 만든 스킬도 `.agents/skills/`로 옮긴다. `node src/cli.ts setup-check`의 '스킬'(skills) 항목이 통과인지 본다. 빠졌으면 `node src/cli.ts skill-links --dry-run`으로 보여 주고 `node src/cli.ts skill-links`로 만든다. 링크 위치에 실제 폴더가 남아 있으면(명령이 지우지 않는다) `.agents/skills/<이름>`과 비교해 사용자에게 보여 주고, 고친 내용을 옮긴 뒤 그 폴더를 지울지 묻는다. apply 출력에 "같은 자리에 내용이 다른 파일이 있어 옮기지 않고 따로 둠"이 있었으면 그 파일(`<백업 폴더>\skills-kept\…`)도 함께 보여 주고 어떻게 할지 묻는다.
-9. 비서 서버를 쓰고 있으면 다시 켠다(`scripts/server/server-control.ps1 -Action restart`).
-
-## v7
-
-- 업데이트 기능("업데이트 확인해 줘", `VERSION` 파일). v8의 업데이트는 v7부터 올린다.
-- 설치 상태 점검: 세션을 열 때 빠진 설치 항목이 있으면 비서가 매 답 맨 위에 알린다. 다 됐으면 토큰이 들지 않는다.
-- 직전 답까지 보고 기억 찾기("1번으로"처럼 짧은 답도), 의미 검색 기준값 0.18 → 0.20.
-- 답 방식: 언제나 한국어, 끝난 일 보고 때 휴대폰 알림, 지금 상태는 그 자리에서 확인, 경로는 코드 블록, 모르는 별칭은 한 번 묻기.
-- 컨텍스트 크기 알림(15만 토큰부터 5만마다 `/clear` 권유), 상황판의 "(끝난 듯, #번호)", 남은 질문 닫기, 업무 모니터링이 busy인 채 멈춘 세션도 알림, 사용량 정지 장치의 주간 사용량.
-- run-job 기본 폴더 `run-job-home` → `workspaces\run-job-home`.
-
-## v6
-
-- 의미 검색 도우미가 모델 파일이 없거나 깨지면 한 번 다시 받아 띄우고, 메모리가 부족하면 멈추고 묻는다.
-- "90퍼 넘어도 계속"처럼 비슷한 말도 정지 장치를 푼다. 질문은 보고 글 속에 섞지 않는다. `/consolidate` 뒤 핵심 프로필 전체를 번호 붙여 보여 준다.
-
-## v5
-
-- 새 작업 공간이 비서 폴더 옆 `workspaces` 폴더 안에 생긴다(옛 공간은 그 안으로 옮기면 그대로 찾는다).
-- `/consolidate`가 긴 메시지를 다 읽고 정리 대기가 0이 될 때까지 잇는다. 상황판 Haiku 추론 수준(effort) medium. 의미 검색 도우미 장애 복구와 기록.
-
-## v4 이하
-
-- v4: 비서 서버가 창 없이, 가장 높은 권한으로 자동 시작(관리자 PowerShell에서 등록), UAC 안내.
-- v3: 상황판(새 세션이 이어받기).
-- v2: 한국어 미세조정 검색 모델 BGE-m3-ko(v1의 bge-m3에서 바뀌어 처음 켤 때 기억 전체를 한 번 다시 색인).
-- v1: 첫 배포판.
-- 버전마다의 자세한 내용은 공개 저장소에서 그 tag의 README "갈아타기" 절에 있다.

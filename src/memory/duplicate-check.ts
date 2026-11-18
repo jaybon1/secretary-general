@@ -13,7 +13,7 @@
  * insert transaction refuses if a newer memory exists, and the caller checks again.
  */
 import type { SemanticSearch } from '../semantic-search/client.ts';
-import { normalizeTags, type Memory, type Store } from '../store/store.ts';
+import { MemoryRaceError, normalizeTags, type Memory, type NewMemory, type Store } from '../store/store.ts';
 
 export const DUP_MIN_SIM = 0.85;
 /** Background consolidation reads conversation up to a day or two old; three days covers its lag. */
@@ -48,6 +48,27 @@ export async function checkDuplicates(
     .map((memory) => ({ memory, sim: sims.get(memory.id)! }))
     .sort((a, b) => b.sim - a.sim);
   return { maxId, similar, skipped: false };
+}
+
+/** What rememberChecked did: stopped at similar memories, or saved (`skipped` when the search server did not answer). */
+export type CheckedRemember = { similar: DuplicateCheck['similar'] } | { saved: { id: number; superseded: number[] }; skipped: boolean };
+
+/**
+ * remember with the duplicate check, shared by the remember tool and the board's new to-dos (session-continuity/board-todos.ts).
+ * `search` null saves without the check. A newer memory saved between the check and the insert (the race above) makes it
+ * check again; after two races in a row it saves anyway rather than loop.
+ */
+export async function rememberChecked(store: Store, search: SemanticSearch | null, input: NewMemory): Promise<CheckedRemember> {
+  for (let attempt = 1; ; attempt++) {
+    const dup = search ? await checkDuplicates(store, search, { content: input.content, tags: input.tags, supersedes: input.supersedes }) : null;
+    if (dup?.similar.length) return { similar: dup.similar };
+    try {
+      const saved = store.remember({ ...input, expectMaxId: dup && !dup.skipped && attempt < 3 ? dup.maxId : undefined });
+      return { saved, skipped: !!dup?.skipped };
+    } catch (err) {
+      if (!(err instanceof MemoryRaceError)) throw err;
+    }
+  }
 }
 
 export function duplicateMessage(similar: DuplicateCheck['similar'], formatDate: (iso: string) => string): string {

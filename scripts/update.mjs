@@ -1,17 +1,19 @@
 // @ts-check
-// 비서 업데이트 도우미(.agents/skills/secretary-update/SKILL.md, v0.9.0까지는 .agents/skills/update/SKILL.md, 공개하지 않은 v8 시험판은 skills/update/SKILL.md, v7은 .claude/skills/update/SKILL.md가 부른다). AI를 부르지 않고 git과 Node 기본 기능만 쓴다.
-// 사용자 폴더(zip을 풀어 쓰며 고쳤을 수 있는 비서 폴더)를 받은 저장소(git clone, tag v7, v8, v0.9.0, …)의 최신 tag로 올린다(v7부터, 받았던 버전은 VERSION 파일로 안다).
-// 버전 번호: v8까지는 tag가 숫자 하나(vN)였고 0.N.0으로 읽는다(v8 = 0.8.0). 그 뒤는 0.x 세 자리(v0.9.0, semver: 끝자리 고침, 가운데 기능 추가,
-// 앞자리 사용자가 손봐야 하는 변경)이고, tag 순서는 git의 이름 정렬이 아니라 이 번호로 센다(parseVersion, sortTags).
-// 사용자가 고친 파일은 기준 tag(사용자가 받았던 버전)와 비교해 찾고, v8부터는 사용자 폴더의 배포판 파일 목록(release-files.json,
+// 비서 업데이트 도우미(.agents/skills/secretary-update/SKILL.md가 부른다). AI를 부르지 않고 git과 Node 기본 기능만 쓴다.
+// 사용자 폴더(zip을 풀어 쓰며 고쳤을 수 있는 비서 폴더)를 받은 저장소(git clone, tag v0.11.0, v0.12.0, …)의 최신 tag로 올린다(v0.11.0부터(MIN_BASE), 받았던 버전은 VERSION 파일로 안다).
+// 버전 번호: 0.x 세 자리(v0.11.0, semver: 끝자리 고침, 가운데 기능 추가, 앞자리 사용자가 손봐야 하는 변경)이고,
+// tag 순서는 git의 이름 정렬이 아니라 이 번호로 센다(parseVersion, sortTags).
+// 사용자가 고친 파일은 기준 tag(사용자가 받았던 버전)와 비교해 찾고, 사용자 폴더의 배포판 파일 목록(release-files.json,
 // 받았던 판의 파일마다 내용 해시)으로도 본다: 해시가 그대로인 파일은 tag와 달라도 사용자가 안 고친 것이다. 새 버전도 고친 파일은 git merge-file로 합친 안을
 // 만들어 두기만 하고, 파일마다 유지(keep)·덮어쓰기(new)·섞기(merge)를 사용자에게 묻는다(깨끗이 합쳐져도 묻는다).
+// 설정 JSON(.json, package-lock.json 빼고)은 줄이 부딪히면 키 단위로 합친 안(양쪽이 더한 항목을 모두 살림, mergeJson)을 만들어 추천한다.
+// VERSION과 release-files.json은 물을 것을 모두 정한 뒤에 쓴다(writeVersionMarks): 중간에 그만두면 다음 업데이트도 옛 버전에서 올린다.
 // 버전 사이에 옮겨진 파일은 scripts/update-moves.json(받은 저장소 최신 tag의 것)을 따라 옛 자리의 사용자 수정을 새 자리로 옮긴다.
 // 기억 DB·모델·node_modules·*.local.*·키·백업·.git은 읽지도 고치지도 않고, 비서 고유 번호(.secretary-id)는 덮어쓰지 않는다(없으면 apply 끝에 만든다).
-// 이 파일의 자리(scripts/update.mjs)는 바꾸지 않는다: 옛 버전의 update 스킬이 받은 저장소의 이 경로를 부른다.
-// 스킬(v8부터 .agents/skills/<이름>에 실제 폴더, Claude Code가 읽는 .claude/skills는 그리로 가는 연결 하나. 공개하지 않은 v8 시험판은
-// skills/<이름>과 스킬마다의 연결, v7은 .claude/skills/의 실제 폴더): apply 끝에 옛 자리에 남은 것(사용자가 만든 스킬, 사용자가 더한 파일, 아직 정하지 않은 파일)을
-// .agents/skills/로 옮기고, 같은 명령 안에서 옛 연결을 지우고 새 연결을 만든다.
+// 이 파일의 자리(scripts/update.mjs)는 바꾸지 않는다: 사용자 폴더에 있는 옛 버전의 업데이트 스킬이 받은 저장소의 이 경로를 부른다.
+// 스킬은 .agents/skills/<이름>에 실제 폴더로 있고, Claude Code가 읽는 .claude/skills는 그리로 가는 연결 하나다: apply 끝에 연결을 맞춘다(src/workspace/skill-links.ts).
+// 배포판이 싣는 공통 스킬(common-skills/<이름>)은 설치가 사용자 workspaces/_skills/<이름>에 복사해 두고 사용자는 그쪽을 고친다: 그 복사본도
+// 비서 파일처럼 기준 tag의 파일(사용자 폴더의 release-files.json 해시와 함께)과 견줘 합치고 묻는다(skillsPlace). 비서 폴더 안의 common-skills/는 설치 원본이라 늘 새 버전으로 둔다.
 //
 //   node <받은 저장소>/scripts/update.mjs backup  --user <비서 폴더>
 //   node <받은 저장소>/scripts/update.mjs detect  --user <비서 폴더> --repo <받은 저장소>
@@ -19,7 +21,7 @@
 //   node <받은 저장소>/scripts/update.mjs apply   --user <비서 폴더> --repo <받은 저장소> --base <tag> --work <백업 폴더>
 //   node <받은 저장소>/scripts/update.mjs resolve --user <비서 폴더> --work <백업 폴더> --file <경로> --take keep|new|merge|merge-mine|merge-new|edited
 //   node <받은 저장소>/scripts/update.mjs resolve --user <비서 폴더> --work <백업 폴더> --rest      (남은 것을 모두 추천대로)
-//   node <받은 저장소>/scripts/update.mjs finish  --user <비서 폴더>      (npm install 뒤: 구독 공급자 personalDataAllowed, workspace-links)
+//   node <받은 저장소>/scripts/update.mjs finish  --user <비서 폴더>      (npm install 뒤: workspace-links)
 // 타입은 JSDoc으로 단다(원본의 npm run test:release-build가 배포판에서 이 파일을 checkJs strict로 검사한다).
 import { execFileSync } from 'node:child_process';
 import { createHash, randomInt } from 'node:crypto';
@@ -27,12 +29,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { fixSkillLinks, formatSkillLinkFix, isEmptyTree, OLD_SKILLS_DIR, SKILLS_DIR } from '../src/setup/skill-links.ts';
-import { featureSkillPath, featureSkills, fixFeatureSkills, formatFeatureSkills, skillPlace } from '../src/setup/feature-skills.ts';
-import { readFeatures } from '../src/core/features.ts';
-import { mergeThisSecretaryFiles } from '../src/core/this-secretary.ts';
-import { scriptPath } from '../src/core/paths.ts';
-import { fillSubscriptionPersonalData } from '../src/setup/provider-personal-data.ts';
+import { fixSkillLinks, formatSkillLinkFix, SKILLS_DIR } from '../src/workspace/skill-links.ts';
+import { featureSkillPath, featureSkills, fixFeatureSkills, formatFeatureSkills } from '../src/setup/feature-skills.ts';
+import { commonSkillsDirOf, SHIPPED_COMMON_SKILLS_DIR } from '../src/workspace/common-skills.ts';
 
 /** @typedef {Buffer | undefined} Raw A file's bytes; undefined when the file is not there. */
 /** @typedef {'same' | 'add' | 'ask-add' | 'delete' | 'ask-delete' | 'ask-missing' | 'replace' | 'keep' | 'merge' | 'move' | 'move-keep' | 'ask-binary'} Action */
@@ -42,24 +41,25 @@ import { fillSubscriptionPersonalData } from '../src/setup/provider-personal-dat
  * @property {string} path
  * @property {string} [from]
  * @property {Action} action
- * @property {'done' | 'ask' | 'conflict' | 'none' | 'resolved'} status ('conflict': written by an older update.mjs)
+ * @property {'done' | 'ask' | 'none' | 'resolved' | 'later'} status ('later': VERSION or the file list, written once nothing is left to ask)
  * @property {string} [diff]
  * @property {string[]} [choices]
  * @property {number} [conflicts]
+ * @property {boolean} [byKeys] a JSON file whose clashing lines were merged by key (merged/)
+ * @property {string[]} [keyClashes] where both sides changed the same JSON value (the user's value kept, package.json the new one)
  * @property {string} [side]
  * @property {string} [recommend]
  * @property {string} [take]
  */
 /** @typedef {'user' | 'repo' | 'base' | 'work' | 'file' | 'take'} Key */
 /** @typedef {{ [k in Key]?: string } & { rest: boolean }} Options The command line. */
-/** @typedef {{ moved: string[], kept: string[], made: string[] }} SkillMove */
 /** @typedef {ReturnType<typeof fixSkillLinks>} LinkFix */
 
 /** Never read or written by an update: personal data, downloads, local settings, keys, backups, the install's own id. */
 export const PROTECTED = /(^|\/)(node_modules|backups|models|\.git|keys)(\/|$)|\.db(-wal|-shm|-journal)?$|\.db\.|\.local\.(?!example\.)|\.env$|(^|\/)\.secretary-id$/;
 /**
  * The secretary's own id (src/core/secretary-id.ts): made once, kept for good, in upper case. An update never replaces it;
- * one coming from v7 (before ids) gets it at the end of apply, and one written in lower case is written again in upper
+ * a folder without one gets it at the end of apply, and one written in lower case is written again in upper
  * case. Same letters and length as secretary-id.ts (a test compares): no vowels, so a new id never spells a word. An id
  * made before (with vowels) still reads (ID_PATTERN is wider).
  */
@@ -91,8 +91,10 @@ const NOT_COPIED = /(^|\/)(node_modules|backups|models|\.git)(\/|$)|\.db(-wal|-s
 const BOM = '﻿';
 /** The file in a release that lists the files each version moved. */
 export const MOVES_FILE = 'scripts/update-moves.json';
+/** The oldest version an update starts from: detect does not take an older one, plan and apply stop on it. */
+export const MIN_BASE = 'v0.11.0';
 /**
- * The release's file list (v8 on): every file the version shipped with a hash of its content (src/setup/release-files.ts).
+ * The release's file list: every file the version shipped with a hash of its content (src/setup/release-files.ts).
  * The user's copy tells which files the user changed even where the git tag of that version differs (a rebuilt release);
  * it always comes from the new version.
  */
@@ -118,7 +120,7 @@ export function fileHash(bytes) {
 }
 
 /**
- * The user's file list (path → hash) and its version; null without one (v7) or when it does not read.
+ * The user's file list (path → hash) and its version; null without one or when it does not read.
  * @param {string} userDir
  * @returns {{ version?: string, files: Record<string, string> } | null}
  */
@@ -180,45 +182,180 @@ export function classifyMoved(base, user, theirs) {
 
 /** The code files a version needs as they are: a new or missing one should come from the new version. */
 const CODE = /\.(ts|mjs|js|ps1|json)$/;
+/** npm's own list (npm install writes it again): not a file the user adds to, its clashes take the new version's side. */
+const NPM_LOCK = /(^|\/)package-lock\.json$/;
+/** A value both sides changed takes the new version's here: the code it ships needs the parts it names. */
+const NEW_VALUE_WINS = /(^|\/)package\.json$/;
+/**
+ * The JSON files merged by key when their lines clash: settings the user adds to (the common skill list, providers,
+ * permissions, features.json …). A line merge of JSON clashes where both sides add to the end of the same list, and
+ * either side of the clash drops the other's entries.
+ * @param {string} filePath
+ */
+export const keyMerged = (filePath) => filePath.endsWith('.json') && !NPM_LOCK.test(filePath);
 
 /**
  * What the script recommends for a file it has to ask about (the secretary may recommend otherwise).
  * A clash in a code file takes the new version's side: there the user's side is often old code that no longer fits
  * (a file split into several clashes almost whole), and the user's change is kept in user-diffs for the secretary to carry over itself.
- * features.json too: whatever is chosen, the features the user turned on or off get the user's value back (carryFeatureStates),
- * so the new version's side only brings its descriptions, files and checks.
+ * A JSON file merged by key (byKeys: both sides' entries kept, mergeJson) takes that merge; one that does not read as JSON
+ * takes the user's side of the clash, so what the user added (a common skill, a provider, a permission) is not dropped
+ * by "the rest as recommended". features.json too: whatever is chosen, the features the user turned on or off get the user's
+ * value back (carryFeatureStates).
  * @param {Action} action
  * @param {string} filePath
  */
-export function recommend(action, filePath, conflicts = 0) {
-  if (action === 'merge') return conflicts ? (CODE.test(filePath) ? 'merge-new' : 'merge-mine') : 'merge';
+export function recommend(action, filePath, conflicts = 0, byKeys = false) {
+  if (action === 'merge') {
+    if (!conflicts || byKeys) return 'merge';
+    if (keyMerged(filePath) && !NEW_VALUE_WINS.test(filePath)) return 'merge-mine';
+    return CODE.test(filePath) ? 'merge-new' : 'merge-mine';
+  }
   if (action === 'ask-delete') return 'new';
   if (action === 'ask-missing') return 'new';
   if (action === 'ask-add') return CODE.test(filePath) ? 'new' : 'keep';
   return 'keep';
 }
 
+// ---- JSON by key ---------------------------------------------------------------------------
+
+/** @param {unknown} v */
+const isPlainObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * A value as text with object keys sorted, for telling equal values (key order does not count).
+ * @param {unknown} v
+ * @returns {string | undefined}
+ */
+function canon(v) {
+  if (v === undefined) return undefined;
+  if (Array.isArray(v)) return `[${v.map((x) => canon(x) ?? 'null').join(',')}]`;
+  if (isPlainObject(v)) {
+    const o = /** @type {Record<string, unknown>} */ (v);
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canon(o[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/**
+ * The key an array item is matched by across the three sides: its "id" or "name" when every item of the three has a string
+ * one (features, providers' lists), else the item itself. null when a side holds two items of the same key (then the list is
+ * not merged item by item).
+ * @param {unknown[][]} arrays
+ * @returns {((x: unknown) => string) | null}
+ */
+function itemKey(arrays) {
+  const items = arrays.flat();
+  const field = ['id', 'name'].find((f) => items.length > 0 && items.every((x) => isPlainObject(x) && typeof (/** @type {Record<string, unknown>} */ (x))[f] === 'string'));
+  /** @param {unknown} x */
+  const key = (x) => (field ? `${field}:${(/** @type {Record<string, unknown>} */ (x))[field]}` : `=${canon(x)}`);
+  for (const a of arrays) if (new Set(a.map(key)).size !== a.length) return null;
+  return key;
+}
+
+/**
+ * Three-way merge of parsed JSON: objects key by key, lists item by item (what either side added stays, what either side
+ * removed and the other left goes), other values whole. Where both sides changed the same place differently, `prefer`'s
+ * value is taken and the place listed in clashes ("providers.default", "skills[]").
+ * @param {unknown} base
+ * @param {unknown} user
+ * @param {unknown} theirs
+ * @param {'user' | 'theirs'} [prefer]
+ * @returns {{ value: unknown, clashes: string[] }}
+ */
+export function mergeJson(base, user, theirs, prefer = 'user') {
+  /** @type {string[]} */
+  const clashes = [];
+  /**
+   * @param {unknown} b
+   * @param {unknown} u
+   * @param {unknown} t
+   * @param {string} at
+   * @returns {unknown}
+   */
+  const walk = (b, u, t, at) => {
+    if (canon(u) === canon(t)) return u;
+    if (canon(b) === canon(u)) return t;
+    if (canon(b) === canon(t)) return u;
+    if (isPlainObject(u) && isPlainObject(t) && (b === undefined || isPlainObject(b))) {
+      const [bo, uo, to] = /** @type {Record<string, unknown>[]} */ ([b ?? {}, u, t]);
+      /** @type {Record<string, unknown>} */
+      const out = {};
+      for (const k of [...new Set([...Object.keys(to), ...Object.keys(uo)])]) {
+        const v = walk(bo[k], uo[k], to[k], at ? `${at}.${k}` : k);
+        if (v !== undefined) out[k] = v;
+      }
+      return out;
+    }
+    if (Array.isArray(u) && Array.isArray(t) && (b === undefined || Array.isArray(b))) {
+      const ba = /** @type {unknown[]} */ (b ?? []);
+      const key = itemKey([ba, u, t]);
+      if (key) {
+        const [bm, um, tm] = [ba, u, t].map((a) => new Map(a.map((x) => [key(x), x])));
+        /** @type {unknown[]} */
+        const out = [];
+        for (const k of [...new Set([...tm.keys(), ...um.keys()])]) {
+          const v = walk(bm.get(k), um.get(k), tm.get(k), `${at}[]`);
+          if (v !== undefined) out.push(v);
+        }
+        return out;
+      }
+    }
+    clashes.push(at || '(전체)');
+    return prefer === 'user' ? u : t;
+  };
+  return { value: walk(base, user, theirs, ''), clashes };
+}
+
+/**
+ * The key-by-key merge of a JSON file's three texts, written as the new version writes it (its indent, its last newline):
+ * { text, clashes }, or null when a side does not read as JSON. package.json takes the new version's value where both changed one.
+ * @param {string} filePath
+ * @param {string} base
+ * @param {string} user
+ * @param {string} theirs
+ */
+export function mergeJsonText(filePath, base, user, theirs) {
+  /** @type {unknown[]} */
+  let parsed;
+  try {
+    parsed = [base, user, theirs].map((s) => JSON.parse(normalize(s)));
+  } catch {
+    return null;
+  }
+  const m = mergeJson(parsed[0], parsed[1], parsed[2], NEW_VALUE_WINS.test(filePath) ? 'theirs' : 'user');
+  const indent = /\n([ \t]+)\S/.exec(normalize(theirs))?.[1] ?? '  ';
+  return { text: JSON.stringify(m.value, null, indent) + (normalize(theirs).endsWith('\n') ? '\n' : ''), clashes: m.clashes };
+}
+
+/** @param {string} s */
+const readsAsJson = (s) => {
+  try {
+    JSON.parse(s);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 // ---- versions --------------------------------------------------------------------------
 
 /** @typedef {[number, number, number]} Version major, minor, patch */
 
 /**
- * A version name (a tag, the VERSION file, a moves file key) as [major, minor, patch]: the first releases had one number
- * (v1 … v8), read as 0.N.0, so v8 is 0.8.0 and v0.9.0 comes after it; later ones are vX.Y.Z. The leading v may be left
+ * A version name (a tag, the VERSION file, a moves file key) as [major, minor, patch]: vX.Y.Z, the leading v may be left
  * out. null for anything else.
  * @param {string | undefined} name
  * @returns {Version | null}
  */
 export function parseVersion(name) {
   const s = (name ?? '').trim().replace(/^v/i, '');
-  const one = /^(\d+)$/.exec(s);
-  if (one) return [0, Number(one[1]), 0];
   const three = /^(\d+)\.(\d+)\.(\d+)$/.exec(s);
   return three ? [Number(three[1]), Number(three[2]), Number(three[3])] : null;
 }
 
 /**
- * Older first: negative when a comes before b, 0 for the same version (v8 and 0.8.0), positive after. A name that is not
+ * Older first: negative when a comes before b, 0 for the same version (v0.11.0 and 0.11.0), positive after. A name that is not
  * a version comes before every version.
  * @param {string} a
  * @param {string} b
@@ -230,7 +367,7 @@ export function compareVersions(a, b) {
 }
 
 /**
- * Version tags oldest first, by their numbers (git's v:refname puts v0.9.0 before v1); other names are left out.
+ * Version tags oldest first, by their numbers (a plain name sort puts v0.100.0 before v0.11.0); other names are left out.
  * @param {string[]} names
  */
 export function sortTags(names) {
@@ -238,7 +375,7 @@ export function sortTags(names) {
 }
 
 /**
- * The tag of the same version as `version` (a VERSION file's 'v8', '0.8.0' or 'v0.9.0'), or undefined.
+ * The tag of the same version as `version` (a VERSION file's 'v0.11.0' or '0.11.0'), or undefined.
  * @param {string[]} tags
  * @param {string | undefined} version
  */
@@ -248,20 +385,11 @@ export function findTag(tags, version) {
 }
 
 /**
- * How a version is shown to the user: an old one-number tag with its 0.x number, 'v8(0.8.0)'; a new one as it is.
- * @param {string} tag
- */
-export function versionLabel(tag) {
-  const v = parseVersion(tag);
-  return v && /^v?\d+$/i.test(tag.trim()) ? `${tag}(${v.join('.')})` : tag;
-}
-
-/**
  * Old path → path in the newest version, following every version after `base` up to `latest` in order.
  * moves: { "<version>": { "<old path>": "<new path>" } } (the moves file of the newest version; a key names its version
- * the way the tag does, and a key of the same version in the other spelling, "0.9.0" for tag v0.9.0, is taken too).
- * The versions are the tags and the keys together: only the versions the author chose are published (e.g. v0.9.0, then
- * v0.11.0), so a key may name a version that never had a tag (v0.10.0), and its moves are followed all the same.
+ * the way the tag does, and a key of the same version in the other spelling, "0.11.0" for tag v0.11.0, is taken too).
+ * The versions are the tags and the keys together: only the versions the author chose are published (e.g. v0.11.0, then
+ * v0.13.0), so a key may name a version that never had a tag (v0.12.0), and its moves are followed all the same.
  * @param {Record<string, Record<string, string>> | undefined} moves
  * @param {string[]} tags
  * @param {string} base
@@ -294,7 +422,7 @@ function git(repo, args, input) {
 }
 
 /**
- * The repository's version tags, oldest first (sortTags: v1 … v8, then v0.9.0, …).
+ * The repository's version tags, oldest first (sortTags: v0.11.0, v0.12.0, …).
  * @param {string} repo
  */
 export function listTags(repo) {
@@ -355,12 +483,47 @@ function versionFiles(repo, tags) {
 // ---- user folder -----------------------------------------------------------------------
 
 /**
+ * A plan path's file: relative to the user folder (forward slashes, `../` for the workspaces' _skills beside it), or an
+ * absolute one (_skills on another drive).
+ * @param {string} userDir
+ * @param {string} p
+ */
+function at(userDir, p) {
+  return /^([A-Za-z]:)?\//.test(p) ? path.resolve(p) : path.join(userDir, ...p.split('/'));
+}
+
+/**
+ * Where a plan path keeps its copies in the work folder (keep/, new/, merged/ …): inside it, also for a _skills path.
+ * @param {string} p
+ */
+export const workRel = (p) => p.replace(/^(\.\.\/)+/, '').replace(/^([A-Za-z]):\//, '$1/').replace(/^\//, '');
+
+/**
+ * The user's place of a shipped common skill's file (`common-skills/<name>/<rest>` in the release): the copy in the
+ * user's workspaces/_skills (src/workspace/common-skills.ts), as a plan path; null for any other path.
+ * @param {string} userDir
+ * @param {string} p
+ */
+export function skillsPlace(userDir, p) {
+  if (!p.startsWith(`${SHIPPED_COMMON_SKILLS_DIR}/`)) return null;
+  const file = path.join(commonSkillsDirOf(path.resolve(userDir)), ...p.slice(SHIPPED_COMMON_SKILLS_DIR.length + 1).split('/'));
+  const rel = path.relative(path.resolve(userDir), file);
+  return (path.isAbsolute(rel) ? file : rel).split(path.sep).join('/');
+}
+
+/** The _skills folder of a shipped common skill path is there (an install copied it; one not there yet is copied by finish).
+ * @param {string} userDir
+ * @param {string} p
+ */
+const skillFolderThere = (userDir, p) => fs.existsSync(path.join(commonSkillsDirOf(path.resolve(userDir)), p.split('/')[1]));
+
+/**
  * @param {string} userDir
  * @param {string} p
  * @returns {Raw}
  */
 function userRaw(userDir, p) {
-  const f = path.join(userDir, ...p.split('/'));
+  const f = at(userDir, p);
   return fs.existsSync(f) && fs.statSync(f).isFile() ? fs.readFileSync(f) : undefined;
 }
 
@@ -387,7 +550,7 @@ export function restyle(textLf, userRawText, theirsRawText) {
  * @param {string | Buffer} data
  */
 function writeFile(userDir, p, data) {
-  const f = path.join(userDir, ...p.split('/'));
+  const f = at(userDir, p);
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, data);
 }
@@ -401,7 +564,7 @@ function writeFile(userDir, p, data) {
  */
 export function removeFile(userDir, p) {
   const root = path.resolve(userDir);
-  const file = path.join(root, ...p.split('/'));
+  const file = at(root, p);
   fs.rmSync(file, { force: true });
   for (let d = path.dirname(file); d.length > root.length && d.startsWith(root + path.sep); d = path.dirname(d)) {
     try {
@@ -415,114 +578,17 @@ export function removeFile(userDir, p) {
 }
 
 /**
- * Removes a moved file's old place, unless it is the new file itself: in the v8 trial build, .agents/skills/<name> is a link to
- * skills/<name>, so the new path of a skill file reaches the old one until the end of apply moves the folder.
+ * Removes a moved file's old place, unless it is the new file itself (the same file reached through a link).
  * @param {string} userDir
  * @param {string} from
  * @param {string} to
  */
 function removeOld(userDir, from, to) {
-  const [f, t] = [from, to].map((p) => path.join(userDir, ...p.split('/')));
+  const [f, t] = [from, to].map((p) => at(userDir, p));
   try {
     if (fs.existsSync(t) && fs.realpathSync.native(f).toLowerCase() === fs.realpathSync.native(t).toLowerCase()) return;
   } catch {}
   removeFile(userDir, from);
-}
-
-/** Where v7 kept skills as real folders (the unreleased v8 trial build: skills/<name>; v8 on: .agents/skills/<name>, src/setup/skill-links.ts). */
-export const OLD_SKILLS = '.claude/skills';
-/** Ego Lite's own skill, put there by Ego Lite or the user: not the secretary's, stays where it is. */
-const NOT_MOVED = new Set(['ego-browser']);
-
-/**
- * Files under dir, relative (forward slashes); links are not entered.
- * @param {string} dir
- * @returns {string[]}
- */
-function filesUnder(dir, rel = '') {
-  /** @type {string[]} */
-  const out = [];
-  for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
-    const r = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isDirectory()) out.push(...filesUnder(dir, r));
-    else if (e.isFile()) out.push(r);
-  }
-  return out;
-}
-
-/**
- * Empty folders under dir, deepest first, then dir itself when it is left empty.
- * @param {string} dir
- */
-function removeEmptyDirs(dir) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) if (e.isDirectory()) removeEmptyDirs(path.join(dir, e.name));
-  if (isEmptyTree(dir)) fs.rmSync(dir, { recursive: true });
-}
-
-/**
- * v7 kept the skills as real folders in .claude/skills/<name>, the v8 trial build in skills/<name>; v8 keeps them in .agents/skills/<name>.
- * The plan moved the files the old version shipped (scripts/update-moves.json); what is left in a real folder of the old
- * place (oldDir) moves file by file to the same place under .agents/skills/: a skill the user made (a folder the old
- * version did not have), a file the user added to a secretary skill, a file still waiting for the user's choice (resolve
- * then settles it at its new place). A file .agents/skills/ already has with other content goes to <work>/skills-kept/
- * (the folder copy in <work>/files has it too) so the old folder empties. Links and Ego Lite's skill stay, and so does a
- * folder whose new place is a link (it may lead back here). known: the skill names the update knows (the new version's
- * and the moved ones). Returns { moved, kept, made } (paths; made: the other names, skills the user made).
- * @param {string} userDir
- * @param {string} workDir
- * @param {Set<string>} [known]
- * @returns {SkillMove}
- */
-export function moveSkillFolders(userDir, workDir, known = new Set(), oldDir = OLD_SKILLS) {
-  const from = path.join(userDir, ...oldDir.split('/'));
-  /** @type {SkillMove} */
-  const res = { moved: [], kept: [], made: [] };
-  /** @type {fs.Dirent[]} */
-  let entries;
-  try {
-    // The old place made a link (v8's .claude/skills leads to .agents/skills): nothing of its own to move.
-    if (fs.lstatSync(from).isSymbolicLink()) return res;
-    entries = fs.readdirSync(from, { withFileTypes: true });
-  } catch {
-    return res;
-  }
-  /** @type {(a: string, b: string) => boolean} */
-  const same = (a, b) => {
-    try {
-      return fs.realpathSync.native(a).toLowerCase() === fs.realpathSync.native(b).toLowerCase();
-    } catch {
-      return false;
-    }
-  };
-  for (const e of entries) {
-    // A junction or symbolic link is not a directory entry here: links stay.
-    if (!e.isDirectory() || NOT_MOVED.has(e.name)) continue;
-    const src = path.join(from, e.name);
-    const dst = path.join(userDir, ...SKILLS_DIR.split('/'), e.name);
-    // A link at the new place may lead back here (the v8 trial build's per-skill link): moving file by file through it would delete them.
-    try {
-      if (fs.lstatSync(dst).isSymbolicLink() || same(src, dst)) continue;
-    } catch {}
-    if (!known.has(e.name) && !fs.existsSync(dst) && !isEmptyTree(src)) res.made.push(e.name);
-    for (const rel of filesUnder(src)) {
-      const a = path.join(src, ...rel.split('/'));
-      const b = path.join(dst, ...rel.split('/'));
-      const label = `${oldDir}/${e.name}/${rel}`;
-      if (!fs.existsSync(b)) {
-        fs.mkdirSync(path.dirname(b), { recursive: true });
-        fs.renameSync(a, b);
-        res.moved.push(label);
-      } else if (fileHash(fs.readFileSync(a)) === fileHash(fs.readFileSync(b))) fs.rmSync(a);
-      else {
-        const k = path.join(workDir, 'skills-kept', ...label.split('/'));
-        fs.mkdirSync(path.dirname(k), { recursive: true });
-        fs.renameSync(a, k);
-        res.kept.push(k);
-      }
-    }
-    removeEmptyDirs(src);
-  }
-  return res;
 }
 
 /**
@@ -641,12 +707,18 @@ function cmdBackup(opts) {
   const work = path.join(o.user, 'backups', `update-${stamp()}`);
   const n = copyTree(o.user, path.join(work, 'files'));
   console.log(`백업 사본: ${work}\\files (파일 ${n}개, DB·모델·node_modules·backups 제외)`);
+  // The shipped common skills' copies in _skills, which an update may write too.
+  const skills = commonSkillsDirOf(path.resolve(o.user));
+  let k = 0;
+  for (const name of fs.existsSync(path.join(o.user, SHIPPED_COMMON_SKILLS_DIR)) ? fs.readdirSync(path.join(o.user, SHIPPED_COMMON_SKILLS_DIR)) : []) {
+    if (fs.existsSync(path.join(skills, name))) k += copyTree(path.join(skills, name), path.join(work, 'skills-files', name));
+  }
+  if (k) console.log(`공통 스킬 백업: ${work}\\skills-files (${skills}의 배포판 공통 스킬, 파일 ${k}개)`);
   console.log(`WORK=${work}`);
-  // An older update skill runs this; the steps of this release (asking about every file both sides changed,
-  // following moved files) are in the received repository's skill.
-  const skill = [path.join(HERE, SKILLS_DIR, 'secretary-update', 'SKILL.md'), path.join(HERE, SKILLS_DIR, 'update', 'SKILL.md'), path.join(HERE, OLD_SKILLS_DIR, 'update', 'SKILL.md'), path.join(HERE, '.claude', 'skills', 'update', 'SKILL.md')].find((f) => fs.existsSync(f));
-  if (path.resolve(o.user) !== HERE && skill) {
-    console.log(`안내: 이번 업데이트의 순서는 받은 저장소의 스킬에 있어요: ${skill}${path.basename(path.dirname(skill)) === 'update' ? '' : ' (v0.10.0부터 스킬 이름이 update에서 secretary-update로 바뀌었어요)'}`);
+  // The user folder's older update skill runs this; the steps of this release are in the received repository's skill.
+  const skill = path.join(HERE, SKILLS_DIR, 'secretary-update', 'SKILL.md');
+  if (path.resolve(o.user) !== HERE && fs.existsSync(skill)) {
+    console.log(`안내: 이번 업데이트의 순서는 받은 저장소의 스킬에 있어요: ${skill}`);
     console.log('      지금 따르는 순서와 다르면 그 파일을 읽고, 그 파일의 3단계(버전 판별)부터 그 순서를 따르세요.');
   }
 }
@@ -659,8 +731,8 @@ function load(o) {
 }
 
 /**
- * The version the user installed: the VERSION file (v7 on), else the file list's version (v8 on). A folder with
- * neither (a version before v7, or VERSION deleted) is not guessed: the user is asked (CLEAR=no, no BASE).
+ * The version the user installed: the VERSION file. A folder without it (VERSION deleted), with a version no tag has, or
+ * with one older than MIN_BASE is not guessed: the user is asked (CLEAR=no, no BASE).
  * @param {Options} opts
  */
 function cmdDetect(opts) {
@@ -668,7 +740,7 @@ function cmdDetect(opts) {
   const { tags, latest } = load(o);
   const version = text(userRaw(o.user, 'VERSION'))?.trim();
   const list = readList(o.user);
-  console.log(`최신: ${versionLabel(latest)}`);
+  console.log(`최신: ${latest}`);
   console.log(`VERSION 파일: ${version ?? '(없음)'}`);
   if (list) {
     // What the user changed or removed among the files the installed version shipped (by hash, no git needed).
@@ -680,23 +752,29 @@ function cmdDetect(opts) {
       const raw = userRaw(o.user, p);
       if (raw === undefined) gone.push(p);
       else if (fileHash(raw) !== hash) changed.push(p);
+      // A shipped common skill: the user changes the copy in _skills.
+      const place = skillsPlace(o.user, p);
+      if (place && skillFolderThere(o.user, p)) {
+        const mine = userRaw(o.user, place);
+        if (mine === undefined) gone.push(place);
+        else if (fileHash(mine) !== hash) changed.push(place);
+      }
     }
     /** @param {string[]} xs */
     const some = (xs) => (xs.length ? ` (${xs.slice(0, 20).join(', ')}${xs.length > 20 ? ' 외' : ''})` : '');
     console.log(`파일 목록(${LIST_FILE}): ${list.version || '(버전 없음)'}, 목록 ${Object.keys(list.files).length}개 중 사용자가 고친 것 ${changed.length}개${some(changed)}, 지운 것 ${gone.length}개${some(gone)}`);
-  } else console.log(`파일 목록(${LIST_FILE}): 없음 (v7은 tag 비교로만 찾는다)`);
-  // VERSION first, then the file list's version; matched by number, so 'v8' finds tag v8 and '0.9.0' finds v0.9.0.
-  const byVersion = findTag(tags, version);
-  const byList = findTag(tags, list?.version);
-  const known = byVersion ? { tag: byVersion, by: 'VERSION 파일' } : byList ? { tag: byList, by: `파일 목록 ${LIST_FILE}` } : null;
-  if (known) {
-    console.log(`판별: ${versionLabel(known.tag)} (${known.by})`);
-    console.log(`BASE=${known.tag}`);
+  } else console.log(`파일 목록(${LIST_FILE}): 없음 (tag 비교로만 찾는다)`);
+  // Matched by number, so '0.11.0' finds tag v0.11.0.
+  const tag = findTag(tags, version);
+  if (tag && compareVersions(tag, MIN_BASE) >= 0) {
+    console.log(`판별: ${tag} (VERSION 파일)`);
+    console.log(`BASE=${tag}`);
     console.log('CLEAR=yes');
     return;
   }
-  // Updates start from v7 (the first version with VERSION); an older folder or a lost VERSION is the user's call.
-  console.log(`판별: 못 함 (VERSION 파일${version ? `의 ${version}이 tag에 없고` : '도'} 파일 목록도 없음). 이 업데이트는 v7부터 올린다: 사용자에게 받았던 버전을 묻고, v7 이상이면 그 tag를 --base로 준다(있는 tag: ${tags.join(', ')})`);
+  // Updates start from MIN_BASE; an older folder or a lost VERSION is the user's call.
+  const why = !version ? 'VERSION 파일 없음' : parseVersion(version) && compareVersions(version, MIN_BASE) < 0 ? `VERSION 파일의 ${version}은 ${MIN_BASE}보다 옛 버전` : `VERSION 파일의 ${version}이 tag에 없음`;
+  console.log(`판별: 못 함 (${why}). 이 업데이트는 ${MIN_BASE}부터 올린다: 사용자에게 받았던 버전을 묻고, ${MIN_BASE} 이상이면 그 tag를 --base로 준다(있는 tag: ${tags.join(', ')})`);
   console.log('BASE=');
   console.log('CLEAR=no');
 }
@@ -713,94 +791,6 @@ function readMoves(repo, latest) {
   } catch {
     return {};
   }
-}
-
-/**
- * A SKILL.md without v0.9.0's off marker (the front matter line `disable-model-invocation: true`); the rest as it is.
- * @param {string} t
- */
-export const withoutOffMarker = (t) => t.replace(/^(---\r?\n(?:(?!---\r?\n)[^\n]*\n)*?)disable-model-invocation: true\r?\n/, '$1');
-
-/**
- * Takes v0.9.0's off marker out of each optional feature's SKILL.md in the user's folder, at whichever place it is: the
- * comparison reads past it, so a file that differs only by that line is 'same' or 'keep' and would keep it. The user's
- * other changes stay. Returns the files changed.
- * @param {string} userDir
- */
-export function removeOffMarkers(userDir) {
-  /** @type {string[]} */
-  const done = [];
-  for (const s of featureSkills(userDir)) {
-    for (const on of [true, false]) {
-      const rel = `${skillPlace(s.name, on)}/SKILL.md`;
-      const f = path.join(userDir, ...rel.split('/'));
-      if (!fs.existsSync(f)) continue;
-      const t = fs.readFileSync(f, 'utf8');
-      const u = withoutOffMarker(t);
-      if (u === t) continue;
-      fs.writeFileSync(f, u);
-      done.push(rel);
-    }
-  }
-  return done;
-}
-
-/**
- * Feature ids renamed in v0.10.0 (old → new; update took the name of its skill, secretary-update). What the user turned on or off in features.json stays with the feature:
- * after the files are written (apply), and again when the user settles features.json (resolve), a renamed feature whose
- * entry in the user's old features.json (the backup copy) had "enabled" gets that value under its new id.
- */
-export const FEATURE_ID_MOVES = Object.freeze({
-  memory: 'memory-core',
-  board: 'session-continuity',
-  consolidate: 'memory-consolidation',
-  backup: 'db-backup',
-  providers: 'external-providers',
-  notify: 'phone-push',
-  'account-handoff': 'multi-subscription',
-  guards: 'mistake-guards',
-  update: 'secretary-update',
-});
-
-/** Columns of every feature in features.json renamed in v0.10.0 (old → new): the scheduled tasks, apart from delegated tasks. */
-export const FEATURE_KEY_MOVES = Object.freeze({ tasks: 'scheduledTasks' });
-
-/**
- * This PC's own files that a version renamed (never in a release, so update-moves.json does not carry them and the
- * update never reads them otherwise): old → new, relative to the user folder. Plus the install check's record next to
- * any database at the top: <name>.db.setup.json → <name>.db.setup-check.json, and the semantic-search server's
- * <name>.db.embedder*.json|log → <name>.db.semantic-search-server*.json|log (v0.10.0).
- */
-export const LOCAL_FILE_MOVES = Object.freeze({
-  'scripts/notify.local.json': 'scripts/phone-push.local.json',
-  'scripts/guards.local.json': 'scripts/mistake-guards.local.json',
-});
-
-/**
- * Renames those files in the user folder when the old one is there and the new one is not (a new one already there
- * wins; the old one is left and reported). Returns lines for the output.
- * @param {string} userDir
- */
-export function moveLocalFiles(userDir) {
-  /** @type {[string, string][]} */
-  const pairs = Object.entries(LOCAL_FILE_MOVES);
-  for (const e of fs.readdirSync(userDir)) {
-    if (/\.db\.setup\.json$/.test(e)) pairs.push([e, e.replace(/\.setup\.json$/, '.setup-check.json')]);
-    else if (/\.db\.embedder(-down|-failures|-memory)?\.(json|log)$/.test(e)) pairs.push([e, e.replace('.db.embedder', '.db.semantic-search-server')]);
-  }
-  /** @type {string[]} */
-  const lines = [];
-  for (const [from, to] of pairs) {
-    const [a, b] = [from, to].map((p) => path.join(userDir, ...p.split('/')));
-    if (!fs.existsSync(a)) continue;
-    if (fs.existsSync(b)) {
-      lines.push(`새 이름 파일이 이미 있어 옛 파일을 그대로 둠: ${from} (새 이름 ${to})`);
-      continue;
-    }
-    fs.renameSync(a, b);
-    lines.push(`${from} → ${to}`);
-  }
-  return lines;
 }
 
 /**
@@ -845,10 +835,9 @@ export function featureSpans(text) {
  * the other columns (description, files, checks …) follow the new version as settled. Reads the user's features.json from
  * before the update (<work>/files/features.json, the backup copy) and the installed version's (<work>/base/features.json,
  * written by apply): a feature whose "enabled" the user changed from the installed version gets the user's value back in the
- * user's features.json now; one the user left as shipped follows the new version. A feature renamed in v0.10.0
- * (FEATURE_ID_MOVES) takes the user's value under its new id, and a features.json the user kept with the old ids or column
- * names gets the new ones. Only those "enabled" lines (and ids, column names) change; the result is read back as JSON and
- * left unwritten (with a line saying so) when it does not parse or a carried value is not there. Returns lines for the output.
+ * user's features.json now; one the user left as shipped follows the new version. Only those "enabled" lines change; the
+ * result is read back as JSON and left unwritten (with a line saying so) when it does not parse or a carried value is not
+ * there. Returns lines for the output.
  * @param {string} userDir
  * @param {string} workDir
  */
@@ -875,21 +864,6 @@ export function carryFeatureStates(userDir, workDir) {
   let text = raw;
   /** @type {string[]} */
   const lines = [];
-  // A features.json the user kept as it was still has the old ids: those take the new names (nothing else changes).
-  for (const [from, to] of Object.entries(FEATURE_ID_MOVES)) {
-    if (new RegExp(`"id"\\s*:\\s*"${to}"`).test(text)) continue;
-    const at = new RegExp(`("id"\\s*:\\s*)"${from}"`);
-    if (!at.test(text)) continue;
-    text = text.replace(at, `$1"${to}"`);
-    lines.push(`기능 이름 ${from} → ${to}`);
-  }
-  // ...and the old names of its columns (every feature's, keys only: the same word in a description stays).
-  for (const [from, to] of Object.entries(FEATURE_KEY_MOVES)) {
-    const at = new RegExp(`"${from}"(\\s*:)`, 'g');
-    if (!at.test(text)) continue;
-    text = text.replace(at, `"${to}"$1`);
-    lines.push(`기능 목록 칸 이름 ${from} → ${to}`);
-  }
   // The installed version's values (apply keeps a copy): a value the user never changed is the new version's to set.
   /** @type {Map<string, unknown> | null} */
   let shipped = null;
@@ -903,10 +877,9 @@ export function carryFeatureStates(userDir, workDir) {
   const want = [];
   for (const f of old) {
     if (!f || typeof f.id !== 'string' || typeof f.enabled !== 'boolean') continue;
-    const renamed = /** @type {Record<string, string>} */ (FEATURE_ID_MOVES)[f.id];
-    // Not renamed and as the installed version had it: not the user's choice (without the copy every value counts as the user's).
-    if (!renamed && shipped && shipped.get(f.id) === f.enabled) continue;
-    const to = renamed ?? f.id;
+    // As the installed version had it: not the user's choice (without the copy every value counts as the user's).
+    if (shipped && shipped.get(f.id) === f.enabled) continue;
+    const to = f.id;
     // Its "enabled" line, if it has one (a core feature has none, a dropped feature is gone).
     const span = featureSpans(text).find((s) => s.id === to);
     if (!span) continue;
@@ -915,7 +888,7 @@ export function carryFeatureStates(userDir, workDir) {
     if (!m || m[1] === String(f.enabled)) continue;
     text = text.slice(0, span.start) + entry.replace(m[0], m[0].replace(m[1], String(f.enabled))) + text.slice(span.end);
     want.push({ id: to, enabled: f.enabled });
-    lines.push(`${renamed ? `${f.id} → ${to}` : to}: "enabled": ${f.enabled} (사용자가 정해 둔 대로)`);
+    lines.push(`${to}: "enabled": ${f.enabled} (사용자가 정해 둔 대로)`);
   }
   if (text === raw) return lines;
   // Read back: every carried value is there, and the file is still JSON.
@@ -935,38 +908,28 @@ export function carryFeatureStates(userDir, workDir) {
  */
 function makePlan(o) {
   const { tags, latest } = load(o);
-  // --base by number too: 'v8', '0.8.0' and 'v0.8.0' are tag v8.
+  // --base by number too: '0.11.0' and 'v0.11.0' are tag v0.11.0.
   const base = findTag(tags, o.base);
   if (!base) throw new Error(`없는 tag예요: ${o.base} (있는 것: ${tags.join(', ')})`);
+  if (compareVersions(base, MIN_BASE) < 0) throw new Error(`${base}는 ${MIN_BASE}보다 옛 버전이라 이 업데이트로 올리지 않아요(${MIN_BASE}부터 올린다)`);
   // An optional feature's skill (src/setup/feature-skills.ts) is in .agents/skills while the user has the feature on and
-  // in .agents/skills-off while off; a version may ship it in either (v0.9.0: .agents/skills/calendar with
-  // disable-model-invocation, later: .agents/skills-off/calendar). Its files are lined up under one name (the path under
+  // in .agents/skills-off while off, whichever place the version ships it in. Its files are lined up under one name (the path under
   // .agents/skills) and read and written at the place the user's features.json gives (apply moves the folder there first).
   const skills = featureSkills(o.user);
   /** @param {string} p */
   const logical = (p) => featureSkillPath(p, skills)?.logical ?? p;
   /** @param {Map<string, Raw>} m */
   const lineUp = (m) => new Map([...m].map(([p, v]) => [logical(p), v]));
-  // v0.9.0's off marker (disable-model-invocation in such a skill's front matter, taken off by the user who turned the
-  // feature on) is no change of anyone's now that the place does its work: read without it on both sides.
-  /**
-   * @param {string} p
-   * @param {Raw} raw
-   * @returns {Raw}
-   */
-  const unmark = (p, raw) => (raw && featureSkillPath(p, skills) && p.endsWith('/SKILL.md') && !isBinary(raw) ? Buffer.from(withoutOffMarker(raw.toString('utf8')), 'utf8') : raw);
-  const [baseFiles, newFiles] = versionFiles(o.repo, [base, latest])
-    .map(lineUp)
-    .map((m) => new Map([...m].map(([p, v]) => [p, unmark(p, v)])));
+  const [baseFiles, newFiles] = versionFiles(o.repo, [base, latest]).map(lineUp);
   const moves = movesBetween(readMoves(o.repo, latest), tags, base, latest);
-  // The user's file list (v8 on): a file still matching its hash was not changed by the user, whatever the tag says.
+  // The user's file list: a file still matching its hash was not changed by the user, whatever the tag says.
   const listed = Object.fromEntries(Object.entries(readList(o.user)?.files ?? {}).map(([p, h]) => [logical(p), h]));
   /** The user's place for a lined-up path, and the user's file there (before apply moves it: at the other place). */
   /** @param {string} p */
   const userAt = (p) => {
     const at = featureSkillPath(p, skills);
     if (!at) return { path: p, raw: userRaw(o.user, p) };
-    return { path: at.target, raw: unmark(p, userRaw(o.user, at.target) ?? userRaw(o.user, at.other)) };
+    return { path: at.target, raw: userRaw(o.user, at.target) ?? userRaw(o.user, at.other) };
   };
   /** @type {Item[]} */
   const items = [];
@@ -987,9 +950,19 @@ function makePlan(o) {
   for (const p of paths) {
     const { path: place, raw: u } = userAt(p);
     const t = newFiles.get(p);
-    if (p === LIST_FILE) {
-      // The list describes the version in the folder: always the new version's, never a question.
+    const shippedAt = skillsPlace(o.user, p);
+    if (p === LIST_FILE || shippedAt) {
+      // The list describes the version in the folder, and a shipped common skill in the secretary folder is only what an
+      // install copies from: always the new version's, never a question.
       items.push({ path: p, action: t === undefined ? (u === undefined ? 'same' : 'delete') : u !== undefined && text(u) === text(t) ? 'same' : u === undefined ? 'add' : 'replace', base: baseFiles.get(p), user: u, theirs: t });
+      // The user's copy in _skills, held to the installed version like a secretary file (a skill not copied there yet: finish copies it).
+      if (shippedAt && skillFolderThere(o.user, p)) {
+        const mine = userRaw(o.user, shippedAt);
+        const { base: b, byList } = baseFor(baseFiles.get(p), mine, listed[p]);
+        let action = classify(text(b), text(mine), text(t));
+        if (action === 'merge' && [b, mine, t].some(isBinary)) action = 'ask-binary';
+        items.push({ path: shippedAt, action, base: b, user: mine, theirs: t, ...(byList ? { byList } : {}) });
+      }
       continue;
     }
     const { base: b, byList } = baseFor(baseFiles.get(p), u, listed[p]);
@@ -1028,7 +1001,7 @@ function printPlan(latest, base, items) {
   /** @type {Record<string, number>} */
   const counts = {};
   for (const i of items) counts[i.action] = (counts[i.action] ?? 0) + 1;
-  console.log(`기준 ${versionLabel(base)} → 최신 ${versionLabel(latest)}`);
+  console.log(`기준 ${base} → 최신 ${latest}`);
   if (items.every((i) => i.action === 'same' || i.action === 'keep')) {
     console.log('이미 최신이에요(바꿀 파일 없음).');
     return;
@@ -1056,15 +1029,42 @@ function cmdPlan(opts) {
 const CHOICES = {
   merge: ['keep', 'new', 'merge', 'edited'],
   conflict: ['keep', 'new', 'merge-mine', 'merge-new', 'edited'],
+  /** A JSON file whose clashing lines were merged by key: that merge, or a side of the line clash. */
+  keyed: ['keep', 'new', 'merge', 'merge-mine', 'merge-new', 'edited'],
   ask: ['keep', 'new'],
 };
+
+/** The files that say which version the folder is: written last, once every question is settled (writeVersionMarks). */
+export const VERSION_MARKS = ['VERSION', LIST_FILE];
+/** Where apply keeps the new version's VERSION and file list until then. */
+const LATER_DIR = 'version-files';
+
+/**
+ * Writes the waiting version marks (status 'later') once nothing is left to ask: the new version's copy kept in the work
+ * folder, or none (the new version dropped it). Returns the paths written, [] while a question is open.
+ * @param {{ user: string, work: string }} o
+ * @param {{ results: Result[] }} state
+ */
+export function writeVersionMarks(o, state) {
+  if (state.results.some(isOpen)) return [];
+  /** @type {string[]} */
+  const done = [];
+  for (const r of state.results.filter((x) => x.status === 'later')) {
+    const kept = path.join(o.work, LATER_DIR, ...workRel(r.path).split('/'));
+    if (fs.existsSync(kept)) writeFile(o.user, r.path, fs.readFileSync(kept));
+    else removeFile(o.user, r.path);
+    r.status = 'done';
+    done.push(r.path);
+  }
+  return done;
+}
 
 /** @param {Options} opts */
 function cmdApply(opts) {
   const o = need(opts, 'user', 'repo', 'base', 'work');
   if (!fs.existsSync(path.join(o.work, 'files'))) throw new Error(`백업 사본이 없어요. backup을 먼저 돌리세요: ${o.work}`);
-  // An optional feature's skill to the place the user's features.json gives it before anything is written (v0.9.0 kept
-  // an off one in .agents/skills with disable-model-invocation): the folder moves whole, with what the user changed.
+  // An optional feature's skill to the place the user's features.json gives it before anything is written: the folder
+  // moves whole, with what the user changed.
   const placedBefore = fixFeatureSkills(o.user);
   const { base, latest, items } = makePlan(o);
   printPlan(latest, base, items);
@@ -1073,7 +1073,7 @@ function cmdApply(opts) {
   const results = [];
   /** @type {(dir: string, p: string, data: string | Buffer) => string} */
   const keepCopy = (dir, p, data) => {
-    const f = path.join(o.work, dir, ...p.split('/'));
+    const f = path.join(o.work, dir, ...workRel(p).split('/'));
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, data);
     return f;
@@ -1086,7 +1086,12 @@ function cmdApply(opts) {
     /** @param {string} t */
     const style = (t) => restyle(t, i.user?.toString('utf8'), i.theirs?.toString('utf8'));
     // replace, add and move have the new version's file, move-keep the user's, and a move its old path (makePlan).
-    if (i.action === 'replace' || i.action === 'add') writeFile(o.user, i.path, /** @type {Buffer} */ (i.theirs));
+    if (VERSION_MARKS.includes(i.path) && ['replace', 'add', 'delete'].includes(i.action)) {
+      // The version marks wait for the rest: written now, an update stopped before every question is settled would leave
+      // the folder saying it is the new version, and the next update would take the unsettled old files for the user's own changes.
+      r.status = 'later';
+      if (i.theirs !== undefined) keepCopy(LATER_DIR, i.path, i.theirs);
+    } else if (i.action === 'replace' || i.action === 'add') writeFile(o.user, i.path, /** @type {Buffer} */ (i.theirs));
     else if (i.action === 'delete') removeFile(o.user, i.path);
     else if (i.action === 'move') {
       writeFile(o.user, i.path, /** @type {Buffer} */ (i.theirs));
@@ -1111,10 +1116,21 @@ function cmdApply(opts) {
         const [b, u, t] = [text(i.base), text(i.user), text(i.theirs)].map((s) => s ?? '');
         const m = merge3(b, u, t);
         r.conflicts = m.conflicts;
-        if (m.conflicts === 0) {
+        // A settings JSON whose lines clash (or whose clean line merge is no JSON): merged by key instead, both sides' entries kept.
+        const byKeys = keyMerged(i.path) && (m.conflicts > 0 || !readsAsJson(m.text)) ? mergeJsonText(i.path, b, u, t) : null;
+        if (m.conflicts === 0 && !byKeys) {
           // Also the starting point for a hand-made mix (edited).
           r.side = keepCopy('merged', i.path, style(m.text));
           r.choices = CHOICES.merge;
+        } else if (byKeys) {
+          r.side = keepCopy('merged', i.path, style(byKeys.text));
+          r.byKeys = true;
+          r.keyClashes = byKeys.clashes;
+          if (m.conflicts) {
+            keepCopy('merged-mine', i.path, style(merge3(b, u, t, 'ours').text));
+            keepCopy('merged-new', i.path, style(merge3(b, u, t, 'theirs').text));
+          }
+          r.choices = m.conflicts ? CHOICES.keyed : CHOICES.merge;
         } else {
           r.side = keepCopy('conflicts', i.path, style(m.text));
           keepCopy('merged-mine', i.path, style(merge3(b, u, t, 'ours').text));
@@ -1122,81 +1138,58 @@ function cmdApply(opts) {
           r.choices = CHOICES.conflict;
         }
       }
-      r.recommend = recommend(i.action, i.path, r.conflicts ?? 0);
+      r.recommend = recommend(i.action, i.path, r.conflicts ?? 0, r.byKeys ?? false);
     } else r.status = 'none';
     results.push(r);
   }
   const pkgAfter = ['package.json', 'package-lock.json'].map((p) => text(userRaw(o.user, p)));
   const secretaryId = ensureId(o.user);
-  // Skills: what is left in the old places moves to .agents/skills/, and the links are put right in this same command,
-  // so the CLI never finds a skill folder empty between two commands (the session running this update follows the
-  // received repository's update skill by its path, which does not move).
-  // The skill names this update knows (a skill folder of the new version or of the installed one): any other is the user's.
-  /** @type {(p: string | undefined) => string | null} */
-  const skillName = (p) => {
-    for (const d of [SKILLS_DIR, OLD_SKILLS_DIR, OLD_SKILLS]) if (p?.startsWith(`${d}/`)) return p.slice(d.length + 1).split('/')[0];
-    return null;
-  };
-  const known = new Set(/** @type {string[]} */ (items.flatMap((i) => [skillName(i.path), skillName(i.from)]).filter(Boolean)));
-  // v7: real folders in .claude/skills, file by file. The v8 trial build: the per-skill links go and skills/<name> moves whole (the
-  // layout fix), then what met a folder of the same name goes file by file, and the layout fix runs again to finish.
-  const fromV7 = moveSkillFolders(o.user, o.work, known);
-  const first = fixSkillLinks(o.user);
-  const fromV8 = moveSkillFolders(o.user, o.work, known, OLD_SKILLS_DIR);
-  const last = fixSkillLinks(o.user);
-  const whole = first.moved.map((m) => m.split(' → ')[0]).filter((f) => f.startsWith(`${OLD_SKILLS_DIR}/`) || f.startsWith(`${OLD_SKILLS}/`));
-  const skillMove = {
-    moved: [...fromV7.moved, ...fromV8.moved],
-    kept: [...fromV7.kept, ...fromV8.kept],
-    made: [...new Set([...fromV7.made, ...fromV8.made, .../** @type {string[]} */ (whole.map(skillName).filter((n) => n && !known.has(n) && n !== 'ego-browser'))])],
-    folders: whole,
-  };
-  const links = { ...last, made: [...first.made, ...last.made], remade: [...first.remade, ...last.remade], removed: [...first.removed, ...last.removed], moved: [...first.moved, ...last.moved] };
+  // Skill links (.claude/skills → .agents/skills, the .gitignore lines) put right in this same command, so the CLI never
+  // finds a skill folder missing between two commands (the session running this update follows the received
+  // repository's update skill by its path, which does not move).
+  const links = fixSkillLinks(o.user);
   // Again after the files: the new features.json may ship a feature off that had a skill in .agents/skills.
   const placedAfter = fixFeatureSkills(o.user);
-  // The old marker line in a file the comparison took as unchanged (it reads past the line) goes too.
-  const unmarked = removeOffMarkers(o.user).map((f) => `옛 머리말 줄(disable-model-invocation)을 뺌: ${f}`);
-  const featureSkillLines = [...formatFeatureSkills(placedBefore.plan, true), ...formatFeatureSkills(placedAfter.plan, true), ...placedBefore.failed, ...placedAfter.failed, ...unmarked];
-  // What the user turned on or off in features.json stays (written now; resolve does it again for one settled later),
-  // and this PC's own files under renamed names follow.
+  const featureSkillLines = [...formatFeatureSkills(placedBefore.plan, true), ...formatFeatureSkills(placedAfter.plan, true), ...placedBefore.failed, ...placedAfter.failed];
+  // What the user turned on or off in features.json stays (written now; resolve does it again for one settled later).
   const featureIds = carryFeatureStates(o.user, o.work);
-  const localFiles = moveLocalFiles(o.user);
-  // v0.10.0: this PC's separate settings files (scripts/*.local.json) into this-secretary.local.json, one section per feature, by
-  // the new version's features.json (thisSecretary). Nothing there is overwritten; an old file goes whole to backups/this-secretary-merge/.
-  const thisSecretaryMerge = mergeThisSecretaryFiles(o.user, { features: readFeatures(HERE) });
-  const state = { base, latest, packageChanged: pkgBefore.some((x, k) => x !== pkgAfter[k]), secretaryId, skills: { ...skillMove, links, featureSkills: featureSkillLines }, featureIds, localFiles, thisSecretaryMerge, results };
+  const state = { base, latest, packageChanged: pkgBefore.some((x, k) => x !== pkgAfter[k]), secretaryId, skills: { links, featureSkills: featureSkillLines }, featureIds, results };
+  const marks = writeVersionMarks(o, state);
   fs.writeFileSync(path.join(o.work, 'update.json'), JSON.stringify(state, null, 1));
   console.log('');
   console.log(`적용함: ${results.filter((r) => r.status === 'done').length}개`);
+  printMarks(marks, state);
   console.log(`package.json 바뀜: ${state.packageChanged ? '예 (npm install 필요)' : '아니요'}`);
   console.log(
     secretaryId.created
-      ? `비서 고유 번호: ${secretaryId.id} (새로 만듦, ${ID_FILE}). 예약 작업 이름 끝에 붙는다: 옛 이름 작업은 "올린 뒤 할 일"대로 새 이름으로 옮긴다`
+      ? `비서 고유 번호: ${secretaryId.id} (새로 만듦, ${ID_FILE})`
       : `비서 고유 번호: ${secretaryId.id} (그대로, ${ID_FILE})`,
   );
-  printSkills(skillMove, links);
+  printSkills(links);
   for (const line of featureSkillLines) console.log(`선택 기능 스킬 자리: ${line}`);
   for (const line of featureIds) console.log(`기능 목록(features.json): ${line}`);
-  for (const line of localFiles) console.log(`이름이 바뀐 이 PC 파일: ${line}`);
-  if (thisSecretaryMerge.left.length || thisSecretaryMerge.lines.some((l) => l.includes(' → '))) for (const line of thisSecretaryMerge.lines) console.log(`이 비서 설정 한 파일로(this-secretary.local.json): ${line}`);
   printOpen(state);
 }
 
-/**
- * @param {SkillMove & { folders?: string[] }} move
- * @param {LinkFix} links
- */
-function printSkills(move, links) {
-  const made = move.made.length ? ` (사용자가 만든 스킬: ${move.made.join(', ')})` : '';
-  if (move.moved.length || move.kept.length || move.folders?.length || move.made.length)
-    console.log(`스킬 자리: 옛 자리(${OLD_SKILLS}/, ${OLD_SKILLS_DIR}/)에서 ${SKILLS_DIR}/로 옮긴 폴더 ${move.folders?.length ?? 0}개, 파일 ${move.moved.length}개${made}`);
-  for (const k of move.kept) console.log(`  - 같은 자리에 내용이 다른 파일이 있어 옮기지 않고 따로 둠: ${k}`);
+/** @param {LinkFix} links */
+function printSkills(links) {
   for (const line of formatSkillLinkFix(links, false)) console.log(line);
   if (links.failed.length || links.kept.length) console.log('  → 업데이트를 마친 뒤 사용자 폴더에서 `node src/cli.ts skill-links`로 다시 만든다(설치 상태 점검 항목 skills가 알린다)');
 }
 
 /** @param {Result} r */
-const isOpen = (r) => r.status === 'ask' || r.status === 'conflict';
+const isOpen = (r) => r.status === 'ask';
+
+/**
+ * The version marks' line: written now, or still waiting for the open questions.
+ * @param {string[]} written
+ * @param {{ results: Result[] }} state
+ */
+function printMarks(written, state) {
+  const waiting = state.results.filter((r) => r.status === 'later').map((r) => r.path);
+  if (written.length) console.log(`버전 표시 파일(남은 부딪힘 없음, 새 버전으로 씀): ${written.join(', ')}`);
+  if (waiting.length) console.log(`버전 표시 파일(남은 부딪힘을 모두 정한 뒤 resolve가 새 버전으로 씀, 그 전에 그만두면 다음 업데이트도 옛 버전에서 올린다): ${waiting.join(', ')}`);
+}
 
 /** @param {{ results: Result[] }} state */
 function printOpen(state) {
@@ -1207,7 +1200,12 @@ function printOpen(state) {
   }
   console.log(`남은 부딪힘: ${open.length}개 (파일마다 사용자에게 물어볼 것, 그동안 사용자 파일은 그대로)`);
   for (const r of open) {
-    const merged = r.side ? ` · 합친 안: ${r.side}${r.conflicts ? ` (부딪힌 곳 ${r.conflicts}군데)` : ' (깨끗이 합쳐짐)'}` : '';
+    const how = r.byKeys
+      ? ` (${r.conflicts ? `줄로는 부딪힌 곳 ${r.conflicts}군데, ` : ''}JSON 키 단위로 합침: 양쪽이 더한 항목 모두 살림${r.keyClashes?.length ? `, 둘 다 바꾼 값 ${r.keyClashes.length}곳은 ${NEW_VALUE_WINS.test(r.path) ? '새 버전' : '사용자'} 값으로 둠: ${r.keyClashes.join(', ')}` : ''})`
+      : r.conflicts
+        ? ` (부딪힌 곳 ${r.conflicts}군데)`
+        : ' (깨끗이 합쳐짐)';
+    const merged = r.side ? ` · 합친 안: ${r.side}${how}` : '';
     console.log(`  - ${where(r)} · ${LABEL[r.action]}${merged} · 고를 것: ${(r.choices ?? []).join('/')} · 추천: ${r.recommend}${r.diff ? ` · 사용자 수정: ${r.diff}` : ''}`);
   }
 }
@@ -1220,11 +1218,9 @@ function printOpen(state) {
  */
 function settle(o, r, take) {
   /** @param {string} dir */
-  const copy = (dir) => path.join(o.work, dir, ...r.path.split('/'));
+  const copy = (dir) => path.join(o.work, dir, ...workRel(r.path).split('/'));
   /** @param {string} dir */
   const has = (dir) => fs.existsSync(copy(dir));
-  // v7's update skill offers mine/new/edited: "mine" kept the user's side of a clash and took the rest of the merge.
-  if (take === 'mine') take = r.action === 'merge' ? (r.conflicts ? 'merge-mine' : 'merge') : 'keep';
   const choices = r.choices ?? [];
   if (!choices.includes(take)) throw new Error(`${r.path}에는 ${take}를 고를 수 없어요(고를 것: ${choices.join(', ')})`);
   if (take === 'keep') {
@@ -1255,8 +1251,6 @@ function cmdResolve(opts) {
   const stateFile = path.join(o.work, 'update.json');
   /** @type {{ results: Result[] }} */
   const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-  // Written by an older update.mjs: give its items the choices this one knows.
-  for (const r of state.results) if (isOpen(r) && !r.choices) Object.assign(r, { choices: r.status === 'conflict' ? CHOICES.conflict : CHOICES.ask, recommend: 'keep' });
   if (!one) {
     const open = state.results.filter(isOpen);
     for (const r of open) settle(o, r, r.recommend ?? 'keep');
@@ -1267,17 +1261,16 @@ function cmdResolve(opts) {
     settle(o, r, one.take);
     console.log(`정리함: ${r.path} → ${r.take}`);
   }
+  const marks = writeVersionMarks(o, state);
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 1));
   const left = state.results.filter(isOpen).map((x) => x.path);
   console.log(`남은 부딪힘: ${left.length ? left.join(', ') : '없음'}`);
+  printMarks(marks, state);
 }
 
 /**
  * After the files are settled and npm install has run: what a person used to do after an update, done by the program
  * (v0.11.0). Only what needs no choice is done; what does is listed for the secretary to ask about.
- * - providers.json: a Claude subscription (type claude-subscription, the user's own account) without personalDataAllowed
- *   gets true. Any other provider without it (a gateway, an API key, another CLI) is left as it is, which counts as "no",
- *   and is listed ("물어볼 공급자").
  * - The workspaces: the user's own `node src/cli.ts workspace-links` (the new code, the user's database) puts each
  *   workspace's rules and links right; one it could not fix ("못 고침") is listed ("물어볼 공간").
  * Safe to run again. Exit 1 when a step failed.
@@ -1285,13 +1278,6 @@ function cmdResolve(opts) {
  */
 function cmdFinish(opts) {
   const o = need(opts, 'user');
-  const p = fillSubscriptionPersonalData(scriptPath('providers', o.user));
-  if (p.problem) {
-    console.log(`공급자 개인정보 값(providers.json): 못 함 — ${p.problem}`);
-    process.exitCode = 1;
-  } else console.log(`공급자 개인정보 값(providers.json): ${p.filled.length ? `구독 공급자에 "personalDataAllowed": true를 넣음: ${p.filled.join(', ')}` : '넣을 구독 공급자 없음'}`);
-  const askProviders = p.left.map((x) => `${x.name}(${x.type || 'type 없음'})`);
-  console.log(`물어볼 공급자(personalDataAllowed 없음, 그동안 개인정보를 보내지 않음): ${askProviders.join(', ') || '없음'}`);
   /** @type {string[]} */
   let lines = [];
   try {
@@ -1308,7 +1294,6 @@ function cmdFinish(opts) {
   const askWorkspaces = lines.filter((l) => l.startsWith('못 고침: ')).map((l) => l.slice('못 고침: '.length));
   console.log(`물어볼 공간(workspace-links가 못 고침): ${askWorkspaces.length ? '' : '없음'}`);
   for (const w of askWorkspaces) console.log(`  - ${w}`);
-  console.log(`ASK_PROVIDERS=${askProviders.length}`);
   console.log(`ASK_WORKSPACES=${askWorkspaces.length}`);
 }
 

@@ -23,6 +23,12 @@ export type Level = 'block' | 'warn' | 'off';
  * Migration 18 (store/schema.ts) moved the old records.
  */
 export const RECOMMEND_UNCHECKED = '확인 없이 추천';
+/**
+ * The groups people already wrote the English and path slips under (2026-11-18 user's call: the checks' ids 'english',
+ * 'path-prose', 'path-pair', 'path-link' were counted apart from them; the three path checks are one group).
+ */
+export const ENGLISH_ANSWER = '영어 답';
+export const PATH_FORM = '경로 표기';
 
 export interface AnswerCheck {
   level: Exclude<Level, 'off'>;
@@ -39,6 +45,7 @@ export const ANSWER_CHECKS = {
     level: 'block',
     name: '영어로 쓴 답',
     rule: 'AGENTS.md 답 쓰는 법 > 기본(한국어로 답)',
+    group: ENGLISH_ANSWER,
     format: true,
   },
   // A results-folder path inside a sentence (paths go on their own line in a code block; web addresses, like the phone
@@ -47,6 +54,7 @@ export const ANSWER_CHECKS = {
     level: 'warn',
     name: '문장 속 경로',
     rule: 'AGENTS.md 답 쓰는 법 > 경로(경로는 코드 블록에 한 줄씩)',
+    group: PATH_FORM,
     format: true,
   },
   // A code line with a result path on this PC (under an output folder, a report, a note; not the secretary's own folder,
@@ -55,6 +63,7 @@ export const ANSWER_CHECKS = {
     level: 'block',
     name: '경로 짝 빠짐',
     rule: 'AGENTS.md 답 쓰는 법 > 경로(결과물 경로 줄)',
+    group: PATH_FORM,
     fill: ' 빠진 다른 PC 경로 줄만 자기 코드 블록으로 이어 쓴다(경로 하나에 코드 블록 하나, 링크 줄도 빠졌으면 그 블록 바로 아래 블록 밖에 붙인다).',
     format: true,
   },
@@ -62,9 +71,12 @@ export const ANSWER_CHECKS = {
   // the dashboard gives a phone address), or its link is named other than the address (no phone address code line since
   // 2026-11-07).
   'path-link': {
-    level: 'block',
+    // Only told (2026-11-15, the user's call): the answer is already on the user's screen, and one missing link line is
+    // not worth sending the turn back.
+    level: 'warn',
     name: '경로 링크 줄 빠짐·이름이 주소 아님',
     rule: 'AGENTS.md 답 쓰는 법 > 경로(경로 아래 누르면 열리는 링크 줄)',
+    group: PATH_FORM,
     fill: ' 빠진 링크 줄만 이어 쓴다(이름이 주소가 아닌 링크였으면 이름을 주소 그대로 쓴 링크 줄을, 코드 블록 밖에. 폰 주소는 이 링크 줄로만 쓴다).',
     format: true,
   },
@@ -98,10 +110,10 @@ export const ANSWER_CHECKS = {
     name: '옛 형식 근거',
     rule: 'AGENTS.md 답 쓰는 법 > 추천 근거(추천 근거 두 형식)',
   },
-  // A "근거:" line cites a file, a #number, a commit or a command that no tool call of this turn or the two before it
-  // shows (its input or result, or the memory injection), or cites nothing at all and is neither form for "not seen"
-  // (seen-sources.ts, P1 of the 2026-11-13 askback review: the cited source was often never opened). Only told: "opened" is
-  // read off the words of a tool call.
+  // A "근거:" line cites a file, a #number, a commit or a command that no tool call of this conversation since its last
+  // compaction shows (its input or result, or a hook's injection), or cites nothing at all: no source, neither form for
+  // "not seen", no check said in words, no line number, none of the user's words (seen-sources.ts, P1 of the 2026-11-13
+  // askback review: the cited source was often never opened). Only told: "opened" is read off the words of a tool call.
   'basis-source': {
     level: 'warn',
     name: '근거 자료 안 열어 봄·출처 없는 근거',
@@ -115,6 +127,15 @@ export const ANSWER_CHECKS = {
     name: '보고의 경로를 안 열고 전함',
     rule: 'AGENTS.md 일하는 순서와 확인 > 정확성(업무 세션·run-job의 보고)',
     group: '보고 검수 없이 전함',
+  },
+  // The turn received a report (a subagent's, a work session's, a run-job's) and the answer asks "A. …?" questions, some
+  // with no "비서 판단:" line of the secretary's own (the user's call 2026-11-18: a question a report raised is not passed
+  // on bare). Only told.
+  'report-judgment': {
+    level: 'warn',
+    name: '보고에서 온 질문에 비서 판단 없음',
+    rule: 'AGENTS.md 답 쓰는 법 > 질문(보고에서 나온 질문마다 질문 줄 바로 아래 "> 비서 판단:" 줄)',
+    group: '보고 질문에 비서 판단 없음',
   },
   // A word from the list of words the secretary made up (invented-words.json, and those record_mistake added) stands in a
   // question, an option or a basis line without an explanation in parentheses right after it (P3). Only told.

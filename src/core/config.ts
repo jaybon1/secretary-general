@@ -41,3 +41,12 @@ export const CANDIDATE_POOL = 60;
  * (what the model and the user read), always 24-hour.
  */
 export const TIMEZONE = process.env.SECRETARY_TZ ?? 'Asia/Seoul';
+
+/**
+ * The prompt hook's time limit in .claude/settings.json (UserPromptSubmit timeout; test/prompt-notices.test.ts holds the
+ * two together). The hook's own records of a coming cut (hooks/run-hook.ts) and the budget its notices and searches plan
+ * with (PROMPT_HOOK_BUDGET_MS) are counted from it.
+ */
+export const PROMPT_HOOK_TIMEOUT_S = 330;
+/** What the prompt hook's notices and searches may spend: its limit less room for the rest of the hook. */
+export const PROMPT_HOOK_BUDGET_MS = PROMPT_HOOK_TIMEOUT_S * 1000 - 30_000;

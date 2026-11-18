@@ -1,9 +1,8 @@
 // 상태줄 프로그램: Claude Code가 넘겨주는 5시간·주간 사용량을 공급자·계정별 파일(usage-file.mjs, subscription-<계정>.json)에 기록하고,
 // 상태줄에 "5h 93% · 초기화 14:00" 같은 한 줄을 보여 준다. usage-guard.mjs가 이 파일을 읽는다.
-// 쓴 바로 뒤 옛 이름(<공급자>.json·<공급자>-<계정>.json과 .refresh)은 지운다(dropLegacyUsageFiles).
 // 원격·백그라운드 세션에서는 상태줄이 돌지 않으므로, 그쪽 기록은 usage-query.ps1(/usage 조회)이 채운다.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { usageDir, usageFile, dropLegacyUsageFiles } from './usage-file.mjs';
+import { usageDir, usageFile } from './usage-file.mjs';
 
 let input = {};
 try { input = JSON.parse(readFileSync(0, 'utf8')); } catch {}
@@ -21,7 +20,6 @@ try {
       week_pct: typeof week?.used_percentage === 'number' ? week.used_percentage : null, week_resets_at: toIso(week?.resets_at),
       updated_at: new Date().toISOString(), source: 'statusline',
     }));
-    dropLegacyUsageFiles();
   }
 } catch {}
 

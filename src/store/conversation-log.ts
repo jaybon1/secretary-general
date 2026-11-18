@@ -5,7 +5,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './schema.ts';
 import { getMeta, setMeta } from './meta-usage.ts';
-import { ftsQuery, indexText, queryTerms } from '../memory/search-terms.ts';
+import { ftsQuery, indexText, queryTerms } from './search-terms.ts';
 
 export interface LogEntry {
   id: number;
@@ -65,17 +65,20 @@ export function searchLog(db: DatabaseSync, query: string, opts: { limit: number
 }
 
 /**
- * Run after a turn is archived: memories saved during the turn (created after its prompt
- * and not yet linked) point at that prompt, so their source conversation can be opened later.
+ * Run after a turn is archived: the memories this session saved during the turn (`ids`, read from its transcript:
+ * log/turn-memories.ts; created after its prompt and not yet linked) point at that prompt, so their source conversation
+ * can be opened later. Only those: a memory another session or the memory consolidation saved meanwhile is not this turn's.
  */
-export function linkTurnMemories(db: DatabaseSync, sessionId: string): number {
+export function linkTurnMemories(db: DatabaseSync, sessionId: string, ids: number[]): number {
+  const wanted = [...new Set(ids.filter((i) => Number.isInteger(i) && i > 0))];
+  if (!wanted.length) return 0;
   const prompt = db
     .prepare("SELECT id, created_at FROM raw_log WHERE session_id = ? AND role = 'user' AND substr(content, 1, ?) != ? ORDER BY id DESC LIMIT 1")
     .get(sessionId, QUEUED_PREFIX.length, QUEUED_PREFIX) as { id: number; created_at: string } | undefined;
   if (!prompt) return 0;
   const { changes } = db
-    .prepare('UPDATE memories SET source_log_id = ?, source_session = ? WHERE source_log_id IS NULL AND created_at >= ?')
-    .run(prompt.id, sessionId, new Date(Date.parse(prompt.created_at)).toISOString());
+    .prepare(`UPDATE memories SET source_log_id = ?, source_session = ? WHERE source_log_id IS NULL AND created_at >= ? AND id IN (${wanted.map(() => '?').join(', ')})`)
+    .run(prompt.id, sessionId, new Date(Date.parse(prompt.created_at)).toISOString(), ...wanted);
   return Number(changes);
 }
 
@@ -121,6 +124,11 @@ export function dropLogEntries(db: DatabaseSync, logIds: number[], forgetIds: nu
     // A decision's quote of the user's words (migration 18) goes with the row it was copied from (none before that table).
     const quotes = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_quotes'").get();
     const dropQuote = quotes ? db.prepare('DELETE FROM memory_quotes WHERE log_id = ?') : null;
+    // An action's marks (migration 19) keep their state but lose the row they cited.
+    const actions = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_actions'").get();
+    const unlinkActions = actions
+      ? db.prepare('UPDATE memory_actions SET marked_log_id = CASE WHEN marked_log_id = ?1 THEN NULL ELSE marked_log_id END, done_log_id = CASE WHEN done_log_id = ?1 THEN NULL ELSE done_log_id END WHERE marked_log_id = ?1 OR done_log_id = ?1')
+      : null;
     const unindex = db.prepare('DELETE FROM raw_log_fts WHERE rowid = ?');
     const remove = db.prepare('DELETE FROM raw_log WHERE id = ?');
     for (const id of logIds) {
@@ -128,6 +136,7 @@ export function dropLogEntries(db: DatabaseSync, logIds: number[], forgetIds: nu
       unlinkMemory.run(id);
       unlinkMainAgenda.run(id);
       dropQuote?.run(id);
+      unlinkActions?.run(id);
       unindex.run(id);
       remove.run(id);
     }

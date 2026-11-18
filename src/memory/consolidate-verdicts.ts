@@ -25,7 +25,7 @@
  * (hindsight `adds`/`new`); C8 `about` per candidate and per judged memory, so a lookalike name is seen; C9 the close
  * memories wait for the semantic-search server, and the run stops rather than judge on word search alone.
  */
-import { MEMORY_KINDS, type Memory, type MemoryKind, type Store } from '../store/store.ts';
+import { MEMORY_KINDS, type ActionCondition, type ActionOwner, type Memory, type MemoryKind, type Store } from '../store/store.ts';
 import { formatMemory, recall } from './recall.ts';
 import { findQuote, QUOTE_MISSING, quoteFormProblem, saveQuote } from './source-quote.ts';
 import type { SemanticSearch } from '../semantic-search/client.ts';
@@ -58,6 +58,8 @@ export interface CandidateInput {
   sourceLogId: number;
   /** A decision's short quote of the user's own words (memory/source-quote.ts): checked when proposed, kept when saved. */
   quote?: string;
+  /** An action's owner, due date and condition (store/memory-actions.ts): checked when proposed, kept when it is saved as an action. */
+  action?: { owner: ActionOwner; due: string | null; condition: ActionCondition | null };
 }
 
 export interface Candidate extends CandidateInput {
@@ -354,6 +356,8 @@ export class CandidateBook {
     }
     const applied = applyPlan(this.store, c, plan);
     if (applied.saved && c.quote && plan.save?.kind === 'decision') saveQuote(this.store, applied.saved, c.quote, findQuote(this.store, c.sourceLogId, c.quote));
+    // Saved as an action (not turned into the event of a once or an older candidate): its values go with it.
+    if (applied.saved && c.action && plan.save?.kind === 'action') this.store.setAction(applied.saved, { ...c.action, by: 'consolidation', logId: c.sourceLogId });
     this.open.delete(key);
     const about = new Map(input.verdicts.filter((v) => v.verdict !== 'unrelated' && v.about).map((v) => [v.id, v.about!]));
     return { ok: true, text: appliedText(key, plan, applied, about, input.about), applied };

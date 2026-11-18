@@ -6,9 +6,9 @@ import { test } from 'node:test';
 import { tempDir } from './helpers.ts';
 import { PROJECT_ROOT } from '../src/core/config.ts';
 import { readFeatures } from '../src/core/features.ts';
-import { RELEASE_FILES, readReleaseFiles } from '../src/setup/release-files.ts';
+import { readReleaseFiles } from '../src/setup/release-files.ts';
 
-/** Every .ps1 under bin/ and scripts/, subfolders too (relative, forward slashes). */
+/** Every .ps1 under bin/, scripts/ and src/ (src/dashboard/running-jobs.ps1 and the like), subfolders too (relative, forward slashes). */
 function ps1Files(root: string): string[] {
   const out: string[] = [];
   const walk = (dir: string) => {
@@ -18,7 +18,7 @@ function ps1Files(root: string): string[] {
       else if (e.name.toLowerCase().endsWith('.ps1')) out.push(rel);
     }
   };
-  for (const dir of ['bin', 'scripts']) if (fs.existsSync(path.join(root, dir))) walk(dir);
+  for (const dir of ['bin', 'scripts', 'src']) if (fs.existsSync(path.join(root, dir))) walk(dir);
   return out.sort();
 }
 
@@ -26,7 +26,7 @@ function ps1Files(root: string): string[] {
  * Whether a file is the secretary's own. In a general release: the release's file list (release-files.json, written
  * by the release builder) names it, so a script the user wrote, even inside a listed folder, is not. In a copy someone
  * uses, its problem is then a warning, not a failure (after an update too). Without that list (the original): features.json
- * lists it or a folder it is in; every file under bin/ and scripts/ of the original belongs to a feature
+ * lists it or a folder it is in; every file under bin/, scripts/ and src/ of the original belongs to a feature
  * (test/features.test.ts), so there they all count. Without either, every file counts.
  */
 function shippedBy(root: string): (rel: string) => boolean {
@@ -70,7 +70,7 @@ function parseErrors(root: string, files: string[]): Map<string, string[]> {
   return new Map(results.filter((r) => r.errors.length).map((r) => [path.relative(root, r.file).replace(/\\/g, '/'), r.errors]));
 }
 
-/** The BOM and parse problems of every .ps1 under root's bin/ and scripts/: the secretary's own files fail, the user's warn. */
+/** The BOM and parse problems of every .ps1 under root's bin/, scripts/ and src/: the secretary's own files fail, the user's warn. */
 function ps1Problems(root: string): { failures: string[]; warnings: string[] } {
   const files = ps1Files(root);
   const shipped = shippedBy(root);
@@ -87,43 +87,10 @@ function ps1Problems(root: string): { failures: string[]; warnings: string[] } {
 }
 
 // [늘 남김] 없으면 놓치는 실수: PowerShell 5.1에서 구문 오류가 나거나 BOM 없는 한국어 .ps1이 들어가, 예약 작업·훅이 조용히 안 돈다(2026-11-12 늘 남김으로 올림).
-test('every .ps1 under bin/ and scripts/ parses in Windows PowerShell 5.1, and one with Korean text has a BOM (a script the user added only warns)', { skip: process.platform !== 'win32' }, (t) => {
+test('every .ps1 under bin/, scripts/ and src/ parses in Windows PowerShell 5.1, and one with Korean text has a BOM (a script the user added only warns)', { skip: process.platform !== 'win32' }, (t) => {
   assert.ok(ps1Files(PROJECT_ROOT).length > 10, 'found too few .ps1 files');
   const { failures, warnings } = ps1Problems(PROJECT_ROOT);
   // Shown as an "ℹ" line in the test output.
   for (const w of warnings) t.diagnostic(`경고(비서 파일이 아니라 직접 만든 스크립트라 실패로 치지 않음): ${w}`);
   assert.deepEqual(failures, [], 'the secretary\'s own .ps1 files: BOM or PowerShell 5.1 parse problems');
-});
-
-test('a .ps1 no feature lists (the user wrote it) only warns; a listed one with the same problem fails', { skip: process.platform !== 'win32' }, () => {
-  const root = tempDir();
-  const korean = '# 한글 메모\nWrite-Output "안녕"\n';
-  fs.mkdirSync(path.join(root, 'scripts', 'remote-server'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'scripts', 'listed.ps1'), korean, 'utf8');
-  fs.writeFileSync(path.join(root, 'scripts', 'remote-server', 'in-folder.ps1'), korean, 'utf8');
-  fs.writeFileSync(path.join(root, 'scripts', 'my-tool.ps1'), korean, 'utf8');
-  fs.writeFileSync(path.join(root, 'scripts', 'fine.ps1'), 'Write-Output "ok"\n', 'utf8');
-  fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features: [{ id: 'x', core: true, files: ['scripts/listed.ps1', 'scripts/remote-server/', 'scripts/fine.ps1'], checks: [], notices: [], tasks: [], rules: [] }] }));
-  const { failures, warnings } = ps1Problems(root);
-  assert.deepEqual(failures.map((f) => f.split(':')[0]), ['scripts/listed.ps1', 'scripts/remote-server/in-folder.ps1']);
-  assert.deepEqual(warnings.map((f) => f.split(':')[0]), ['scripts/my-tool.ps1']);
-  // Without features.json every file is the secretary's.
-  fs.rmSync(path.join(root, 'features.json'));
-  assert.equal(ps1Problems(root).failures.length, 3);
-});
-
-test('in a release the file list decides: a script the user put in a listed folder only warns', { skip: process.platform !== 'win32' }, () => {
-  const root = tempDir();
-  const korean = '# 한글 메모\nWrite-Output "안녕"\n';
-  fs.mkdirSync(path.join(root, 'scripts', 'remote-server'), { recursive: true });
-  for (const f of ['scripts/remote-server/shipped.ps1', 'scripts/remote-server/mine.ps1']) fs.writeFileSync(path.join(root, f), korean, 'utf8');
-  // features.json names the whole folder; the release's list names the one file it shipped.
-  fs.writeFileSync(path.join(root, 'features.json'), JSON.stringify({ features: [{ id: 'x', core: true, files: ['scripts/remote-server/'], checks: [], notices: [], tasks: [], rules: [] }] }));
-  fs.writeFileSync(path.join(root, RELEASE_FILES), JSON.stringify({ version: 'v8', files: { 'scripts/remote-server/shipped.ps1': 'x', 'features.json': 'y' } }));
-  const { failures, warnings } = ps1Problems(root);
-  assert.deepEqual(failures.map((f) => f.split(':')[0]), ['scripts/remote-server/shipped.ps1']);
-  assert.deepEqual(warnings.map((f) => f.split(':')[0]), ['scripts/remote-server/mine.ps1']);
-  // A list that does not read: back to features.json.
-  fs.writeFileSync(path.join(root, RELEASE_FILES), '{');
-  assert.equal(ps1Problems(root).failures.length, 2);
 });

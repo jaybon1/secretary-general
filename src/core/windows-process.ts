@@ -4,6 +4,7 @@
  * scripts/lib/common.ps1.
  */
 import { execFileSync } from 'node:child_process';
+import { parseJsonText } from './json-file.ts';
 
 /** True while the process exists; EPERM means it exists but belongs to someone else. */
 export function pidAlive(pid: number): boolean {
@@ -43,7 +44,7 @@ export function processQueryArgs(where?: string, brief = false): string[] {
 /** Turns that JSON (one object or an array, maybe after a BOM) into processes; null if it isn't that. */
 export function parseProcesses(stdout: string): WinProcess[] | null {
   try {
-    const v = JSON.parse(stdout.replace(/^﻿/, '').trim() || '[]') as unknown;
+    const v = parseJsonText<unknown>(stdout.trim() || '[]');
     const list = (Array.isArray(v) ? v : [v]) as Array<Record<string, unknown>>;
     return list.map((p) => ({
       pid: Number(p.pid),

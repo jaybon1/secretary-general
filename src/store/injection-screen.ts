@@ -9,7 +9,7 @@
  * merely bossy must not match.
  */
 
-import { USER_WORD, wordsGroup } from '../store/user-title.ts';
+import { USER_WORD, wordsGroup } from './user-title.ts';
 
 // Bounded filler between key words (unbounded repeats backtrack badly).
 const F = String.raw`(?:\S+\s+){0,8}`;

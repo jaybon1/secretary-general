@@ -127,6 +127,7 @@ test('MCP server: remember → recall → supersede → stats over stdio', async
   }
 });
 
+// [늘 남김] 없으면 놓치는 실수: 업무 세션에 주는 읽기 전용 기억 서버(--readonly)가 recall·search_log 밖의 도구를 내주거나 recall이 DB에 쓴다.
 test('MCP server --readonly: only recall and search_log, and recalls write nothing', async () => {
   const db = path.join(tempDir(), 'ro.db');
   const s = testStore(db);
@@ -213,14 +214,23 @@ test('MCP server: get_unconsolidated_log hands out whole messages, a long one pa
     const r = await client.callTool({ name, arguments: args });
     assert.ok(!r.isError, `${name}: ${text(r)}`);
   };
-  const mark = (id: string) => client.callTool({ name: 'mark_consolidated', arguments: { through_log_id: Number(id) } });
+  const mark = async (id: string) => call('mark_consolidated', { through_log_id: Number(id) });
+  const refused = async (name: string, args: Record<string, unknown>) => assert.ok((await client.callTool({ name, arguments: args })).isError, `${name} is refused`);
   // The secretary's own memories, one before the run and one while it runs (its own server has no --staff).
   const old = s.remember({ kind: 'fact', content: '옛 사실: 회의는 월요일이다' }).id;
   const wrong = s.remember({ kind: 'fact', content: '틀린 사실: 고양이 이름은 나비다' }).id;
+  // Saved by the secretary from row 1 during the chat, with tags the migration split by spaces.
+  const fromChat = s.remember({ kind: 'action', content: '대화 중 저장: 화분을 산다', tags: ['화분', '할', '일'], sourceLogId: 1 }).id;
   try {
+    // 없으면 놓치는 실수: 정리 담당이 끝 번호를 잘못 적어, 넘겨받지 않은(읽지 않은) 대화까지 정리 끝으로 표시되고 거기서 나올 기억이 영영 빠진다.
+    await refused('mark_consolidated', { through_log_id: 0 });
     let r = await next();
     assert.ok(r.includes('가'.repeat(1500)), 'a 1,500-char reply comes whole');
+    // 없으면 놓치는 실수: 정리 담당이 대화 중 이미 저장한 내용을 다시 후보로 냈다가 버린다(정리 한 번마다 되풀이).
+    assert.match(r, new RegExp(`\\[log #1 [^\\]]*\\] \\(이 줄에서 이미 저장한 기억: #${fromChat}\\)`));
     assert.match(r, /through_log_id=2 · 남은 미정리 2건$/);
+    await refused('mark_consolidated', { through_log_id: 3 });
+    assert.equal(s.consolidatedThrough(), 0, 'a number past the batch moves nothing');
     await mark('2');
     r = await next();
     assert.match(r, /\[log #3 .*\] \(1\/3 부분\)/);
@@ -236,7 +246,6 @@ test('MCP server: get_unconsolidated_log hands out whole messages, a long one pa
       const r = text(await client.callTool({ name: 'propose_memory', arguments: { kind: 'fact', content, source_log_id: 1 } }));
       return { key: /후보 (C\d+)/.exec(r)![1], near: [...r.matchAll(/^#(\d+) /gm)].map((m) => Number(m[1])) };
     };
-    const refused = async (name: string, args: Record<string, unknown>) => assert.ok((await client.callTool({ name, arguments: args })).isError, `${name} is refused`);
     const report = (await runConsolidate(s, 'idle', async () => {
       const c1 = await propose('정리 담당이 저장한 첫 사실: 사용자는 차를 좋아한다');
       await call('judge_memory', { candidate: c1.key, about: '사용자', duration: 'lasting', verdicts: c1.near.map((id) => ({ id, observation_about: '기억', verdict: 'unrelated' })) });
@@ -248,9 +257,19 @@ test('MCP server: get_unconsolidated_log hands out whole messages, a long one pa
       // On this server remember takes summaries only and forget is refused: an old state ends through a judged candidate.
       await refused('remember', { kind: 'fact', content: '판정 없이 저장하려는 사실', allow_similar: true });
       await refused('forget', { id: wrong, reason: '틀림' });
+      // 없으면 놓치는 실수: 정리 담당이 낸 할 일의 "질문 답함" 조건이 질문 알파벳 그대로 저장돼, 새 세션에서 같은 알파벳이 다른 질문을 가리킨다.
+      s.setJson('open_questions', { lastLogId: 0, open: ['B'], defs: { B: { text: 'B. 색은 바꿀까요?', session: 'q', at: new Date().toISOString(), logId: 2 } } });
+      const asked = text(await client.callTool({ name: 'propose_memory', arguments: { kind: 'action', content: 'B 답을 받으면 색을 바꾼다', source_log_id: 2, owner: 'secretary', condition: { kind: 'question_answered', value: 'b' } } }));
+      const ca = { key: /후보 (C\d+)/.exec(asked)![1], near: [...asked.matchAll(/^#(\d+) /gm)].map((m) => Number(m[1])) };
+      await call('judge_memory', { candidate: ca.key, about: '색', duration: 'lasting', verdicts: ca.near.map((id) => ({ id, observation_about: '기억', verdict: 'unrelated' })) });
       const c3 = await propose('판정하지 않고 둔 후보');
       await refused('mark_consolidated', { through_log_id: 4 });
       await call('judge_memory', { candidate: c3.key, about: '후보', duration: 'lasting', verdicts: [], withdraw_reason: '시험' });
+      // The upkeep after the batches: close pairs (none without vectors) and the tag boundaries, words kept.
+      assert.match(text(await client.callTool({ name: 'get_memory_pairs', arguments: {} })), /짝 없음/);
+      assert.match(text(await client.callTool({ name: 'get_tag_checks', arguments: {} })), /태그 경계를 확인할/);
+      await refused('set_memory_tags', { id: fromChat, tags: ['화분', '구매'] });
+      await call('set_memory_tags', { id: fromChat, tags: ['화분', '할 일'] });
       await call('set_main_agenda', { name: '이사 준비', state: '진행 중' });
       await call('update_profile', { content: '# 프로필', reason: '시험' });
       await mark('4');
@@ -261,7 +280,10 @@ test('MCP server: get_unconsolidated_log hands out whole messages, a long one pa
     assert.ok(s.getMemory(old)!.superseded_by, 'the changed memory is replaced');
     assert.equal(s.getMemory(wrong)!.valid_to, null, 'forget was refused');
     // A candidate dropped without a verdict is counted with its reason (C10).
-    assert.match(report.text, /\[프로그램이 센 이번 정리 결과\] 새 기억 2개 · 대체 1개 · 무효 0개 · 판정 없이 버린 후보 1개 · 주제 요약 1개 · 주요 현안 고친 줄 1개 · 프로필 갱신함\(v\d+\)\n새 기억 번호: #\d+, #\d+\n버린 후보: C3: 시험$/);
+    assert.match(report.text, /\[프로그램이 센 이번 정리 결과\] 새 기억 3개 · 대체 1개 · 무효 0개 · 판정 없이 버린 후보 1개 · 주제 요약 1개 · 주요 현안 고친 줄 1개 · 프로필 갱신함\(v\d+\)\n새 기억 번호: #\d+, #\d+, #\d+\n버린 후보: C4: 시험\n가까운 기억 짝 다시 판정 0개\(대체한 짝 0개\) · 태그 경계 고친 기억 1개$/);
+    assert.deepEqual(s.tagsOf(fromChat), ['화분', '할 일']);
+    const saved = s.liveActions().find((a) => a.content === 'B 답을 받으면 색을 바꾼다');
+    assert.equal(saved?.action?.cond_value, '2:B', 'kept as the row that asked and its label there');
   } finally {
     await client.close();
   }

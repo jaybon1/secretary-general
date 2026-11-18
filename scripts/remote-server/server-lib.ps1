@@ -16,14 +16,3 @@ function Get-ServerAccount([string]$provider) { if ($provider) { $provider -repl
 # 비서 서버 기록 폴더. 이 비서의 기록 폴더(~/.secretary/<고유 번호>/logs, common.ps1 Get-SecretaryLogDir) 안에 계정마다 따로 둔다(server-a, server-b).
 function Get-ServerLogDir([string]$provider) { Join-Path (Get-SecretaryLogDir) "server-$(Get-ServerAccount $provider)" }
 
-# 옛 서버 기록 폴더: 2026-11-09까지의 ~/.secretary/logs/<고유 번호>/server-a, 그 폴더가 없으면 고유 번호별로 나누기 전의 공용 ~/.secretary/logs/server-a.
-# 옮기지 않고 두며, 새 폴더에 기록이 아직 없을 때만 server-control.ps1 -Action log가 본다.
-function Get-LegacyServerLogDir([string]$provider) { # legacy-name: log-dir
-  $name = "server-$(Get-ServerAccount $provider)"
-  $id = Read-SecretaryId
-  if ($id) {
-    $mine = Join-Path (Get-SecretaryHome) "logs\$id\$name"
-    if (Test-Path -LiteralPath $mine) { return $mine }
-  }
-  Join-Path (Get-SecretaryHome) "logs\$name"
-}

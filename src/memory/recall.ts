@@ -8,10 +8,11 @@
 import { quoteNote } from './source-quote.ts';
 import { CANDIDATE_POOL } from '../core/config.ts';
 import { semanticClient, type SemanticHits, type SemanticSearch } from '../semantic-search/client.ts';
-import type { Memory, Store } from '../store/store.ts';
+import { actionNote, type Memory, type Store } from '../store/store.ts';
 import { estimateTokens } from '../core/token-estimate.ts';
 import { formatLocal } from '../core/kst-time.ts';
-import { queryTerms, searchTerms } from './search-terms.ts';
+import { queryTerms, searchTerms } from '../store/search-terms.ts';
+import { shownTags } from '../store/tag-names.ts';
 
 export interface Candidate {
   memory: Memory;
@@ -159,9 +160,9 @@ export async function recall(store: Store, query: string, opts: RecallOptions): 
   );
   // A decision shows the user's own words it was checked against (memory/source-quote.ts), so a retelling is read with them.
   const quoted = (m: Memory) => (m.kind === 'decision' ? quoteNote(store, m.id) : '');
-  if (!opts.summariesFirst) return pack(scored, opts.budgetTokens, quoted);
+  if (!opts.summariesFirst) return pack(scored, opts.budgetTokens, quoted, store);
   const ordered = [...scored.filter((s) => s.memory.kind === 'summary'), ...scored.filter((s) => s.memory.kind !== 'summary')];
-  return pack(ordered, opts.budgetTokens, (m) => (m.kind === 'summary' ? newerNote(store, m) : quoted(m)));
+  return pack(ordered, opts.budgetTokens, (m) => (m.kind === 'summary' ? newerNote(store, m) : quoted(m)), store);
 }
 
 /** How many newer (and how many ended) memories a summary's note lists by id before "외 N개". */
@@ -176,7 +177,7 @@ const NEWER_LISTED = 8;
  * under another topic). Empty when there are none.
  */
 export function newerNote(store: Store, summary: Memory): string {
-  const topic = summary.tags.split(' ')[0];
+  const topic = summary.topic;
   const list = <T>(xs: T[], show: (x: T) => string) => `${xs.slice(0, NEWER_LISTED).map(show).join(', ')}${xs.length > NEWER_LISTED ? ` 외 ${xs.length - NEWER_LISTED}개` : ''}`;
   const ids = store.newerInTopic(topic, summary.created_at, NEWER_LISTED + 20);
   const ended = store.endedInTopic(topic, summary.created_at, NEWER_LISTED + 20);
@@ -187,14 +188,14 @@ export function newerNote(store: Store, summary: Memory): string {
 }
 
 /** Greedy fill in score order; skips items that don't fit and keeps trying smaller ones. `note` adds a line under an item (counted in the budget). */
-export function pack(scored: Scored[], budgetTokens: number, note?: (m: Memory) => string): RecallResult {
+export function pack(scored: Scored[], budgetTokens: number, note?: (m: Memory) => string, store?: ActionSource): RecallResult {
   const items: Scored[] = [];
   const lines: string[] = [];
   const dropped: Scored[] = [];
   let tokens = 0;
   for (const s of scored) {
     const extra = note?.(s.memory);
-    const line = formatMemory(s.memory) + (extra ? `
+    const line = formatMemory(s.memory, store) + (extra ? `
 ${extra}` : '');
     const cost = estimateTokens(line) + 1;
     if (tokens + cost > budgetTokens) {
@@ -208,11 +209,16 @@ ${extra}` : '');
   return { items, text: lines.join('\n'), tokens, droppedForBudget: dropped.length, dropped };
 }
 
-export function formatMemory(m: Memory): string {
+/** Where formatMemory reads an action memory's owner, due date and condition. */
+export type ActionSource = Pick<Store, 'getAction'>;
+
+/** One memory as a line; an action memory with its values (store/memory-actions.ts actionNote) gets them at the end. */
+export function formatMemory(m: Memory, store?: ActionSource): string {
   const date = formatLocal(m.valid_from, true);
-  const tags = m.tags ? ` [${m.tags}]` : '';
+  const tags = m.tags ? ` [${shownTags(m)}]` : '';
   const status = m.valid_to
     ? ` (무효 ${formatLocal(m.valid_to, true)}${m.superseded_by ? ` → #${m.superseded_by}` : ''})`
     : '';
-  return `#${m.id} ${m.kind} ${date}${status}: ${m.content}${tags}`;
+  const action = store && m.kind === 'action' ? store.getAction(m.id) : undefined;
+  return `#${m.id} ${m.kind} ${date}${status}: ${m.content}${tags}${action ? ` [${actionNote(action)}]` : ''}`;
 }

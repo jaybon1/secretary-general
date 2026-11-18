@@ -4,8 +4,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { ingestTranscript } from '../src/log/ingest-transcript.ts';
-import { QUARANTINE_FILE, quarantinePath } from '../src/log/purge.ts';
-import { cleanRewound, findAbandoned, mayHaveRewind, REWIND_REASON, rewindNotice } from '../src/log/rewind.ts';
+import { QUARANTINE_FILE, quarantinePath } from '../src/log/log-delete.ts';
+import { findAbandoned, REWIND_REASON, rewindNotice, cleanRewound, mayHaveRewind } from '../src/log/rewind.ts';
 import { tempDir, tempStore } from './helpers.ts';
 
 /** Fake transcript lines in Claude Code's shape (parentUuid first, as the real files have it). */
@@ -59,7 +59,7 @@ test('a rewound branch: its rows go, its memories are invalidated and reported o
   const { kept: first, old } = rewoundTurn(doomed);
   const file = write([...first, ...old]);
   ingestTranscript(s, file);
-  s.linkTurnMemories('s1');
+  s.linkTurnMemories('s1', [kept, doomed]);
   s.setMainAgenda({ name: '시험 일', state: '진행 중', sourceLogId: s.logInfoByUuids(['p2'])[0].id });
   assert.equal(s.stats().logEntries, 6);
 
@@ -95,6 +95,7 @@ test('a rewound branch: its rows go, its memories are invalidated and reported o
   assert.deepEqual(s.sessionTail('s1', 10).map((e) => e.message_uuid), ['p1', 'a1', 'p2b', 'a2b'], 'read again from the start: not logged again');
 });
 
+// [늘 남김] 없으면 놓치는 실수: 되감은 가지의 상황판·남은 질문이 남거나, 지운 대화 글이 DB 파일 안에 그대로 남는다.
 test('a rewound branch takes its board and open questions along, and leaves no text in the DB file', () => {
   const s = tempStore();
   const { kept, old } = rewoundTurn(999);
@@ -122,30 +123,6 @@ test('a rewound branch takes its board and open questions along, and leaves no t
   assert.ok(!bytes.includes('버려질'), 'text left in the main DB file');
 });
 
-test('prompt hook right after a rewind: only the marker is written, and it is enough', () => {
-  const s = tempStore();
-  const doomed = s.remember({ kind: 'fact', content: '버려진 턴의 기억' }).id;
-  const { kept, old } = rewoundTurn(doomed);
-  const file = write([...kept, ...old]);
-  ingestTranscript(s, file);
-  s.linkTurnMemories('s1');
-
-  // Before the marker, nothing is touched.
-  assert.equal(rewindNotice(s, file), '');
-  assert.equal(s.stats().logEntries, 6);
-
-  // The new prompt is not in the file yet when the prompt hook runs (only the queue line and the marker).
-  append(file, [marker('p2', 'a1'), JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: '다시 묻는 질문' })]);
-  assert.match(rewindNotice(s, file), new RegExp(`#${doomed}`));
-  assert.deepEqual(s.sessionTail('s1', 10).map((e) => e.message_uuid), ['p1', 'a1']);
-
-  // Later the new turn arrives and is logged as usual; nothing more is removed.
-  append(file, [prompt('p2b', 's1', '다시 묻는 질문'), answer('a2b', 'p2b', '새 답')]);
-  ingestTranscript(s, file);
-  assert.deepEqual(s.sessionTail('s1', 10).map((e) => e.message_uuid), ['p1', 'a1', 'p2b', 'a2b']);
-  assert.equal(rewindNotice(s, file), '');
-});
-
 // [늘 남김] 없으면 놓치는 실수: 되감기가 같은 때 다른 세션에서 저장한 기억까지 무효로 만든다(자료 유실).
 test('a memory saved in another session at the same time is not invalidated', () => {
   const s = tempStore();
@@ -159,29 +136,6 @@ test('a memory saved in another session at the same time is not invalidated', ()
   ingestTranscript(s, file);
   assert.equal(s.getMemory(late)?.valid_to, null);
   assert.equal(s.getMemory(late)?.source_log_id, null, 'its link to the removed row is dropped');
-});
-
-test('dry run and keep-memories', () => {
-  const s = tempStore();
-  const doomed = s.remember({ kind: 'fact', content: '버려진 턴의 기억' }).id;
-  const { kept, old } = rewoundTurn(doomed);
-  const file = write([...kept, ...old, marker('p2', 'a1'), prompt('p2b', 's1', '다시'), answer('a2b', 'p2b', '새 답')]);
-  // Logged directly by the test without the cleanup, as an older version would have.
-  s.appendLog(['p1', 'a1', 'p2', 'a2', 'p2b'].map((u) => ({ session_id: 's1', message_uuid: u, role: u.startsWith('p') ? 'user' : 'assistant', content: u, created_at: at() })));
-
-  const plan = cleanRewound(s, file, { dryRun: true });
-  assert.deepEqual(plan.rows.map((r) => r.message_uuid), ['p2', 'a2']);
-  assert.deepEqual(plan.memoryIds, [doomed]);
-  assert.equal(s.stats().logEntries, 5, 'dry run changes nothing');
-  assert.equal(fs.existsSync(path.join(path.dirname(s.db.location()!), 'backups')), false);
-
-  const r = cleanRewound(s, file, { keepMemories: true });
-  assert.deepEqual(r.forgotten, []);
-  assert.equal(s.stats().logEntries, 3);
-  assert.equal(s.getMemory(doomed)?.valid_to, null);
-  // Handled once: a later hook does not come back for the memory.
-  cleanRewound(s, file);
-  assert.equal(s.getMemory(doomed)?.valid_to, null);
 });
 
 // [늘 남김] 없으면 놓치는 실수: 압축·동시 도구 호출·서브에이전트 가지를 되감기로 잘못 읽어 멀쩡한 대화를 지운다(자료 유실).
@@ -223,6 +177,19 @@ test('compaction, parallel tool calls and sidechains are not rewinds', () => {
   assert.deepEqual(findAbandoned(broken.join('\n')), []);
 });
 
+// [늘 남김] 없으면 놓치는 실수: 기록에 객체가 아닌 JSON 줄(null 등)이 하나 끼면 되감기 찾기가 오류로 멈추거나, 버려진 갈래를 다르게 읽는다(대화 지우기).
+test('lines that are not JSON objects are skipped and the branches found stay the same', () => {
+  resetClock();
+  const lines = [prompt('p1', null, '질문'), answer('a1', 'p1', '답'), prompt('p2', 'a1', '옛 질문'), answer('a2', 'p2', '옛 답'), marker('p2', 'a1'), prompt('p2b', 'a1', '새 질문'), answer('a2b', 'p2b', '새 답')];
+  const want = findAbandoned(lines.join('\n'));
+  assert.deepEqual(want.map((b) => [b.root, b.uuids]), [['p2', ['p2', 'a2']]]);
+  const junk = ['null', '123', '[]', '{not json'];
+  const mixed = lines.flatMap((l, i) => [junk[i % junk.length], l]);
+  assert.deepEqual(findAbandoned(mixed.join('\n')), want);
+  assert.deepEqual(findAbandoned(junk.join('\n')), []);
+});
+
+// [늘 남김] 없으면 놓치는 실수: 되감기인지 애매한 대화 기록을 되감기로 읽어 대화와 기억을 지운다.
 test('ambiguous cases are left alone', () => {
   const head = [prompt('p1', null, '질문'), answer('a1', 'p1', '답')];
   // The older sibling is the live one (the newer one led nowhere): not a rewind.

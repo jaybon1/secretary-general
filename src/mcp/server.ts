@@ -12,7 +12,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH, PROJECT_ROOT } from '../core/config.ts';
-import { moveRenamedLocalFiles } from '../core/local-settings.ts';
 import { openDb } from '../store/schema.ts';
 import { registerMainAgendaTools } from './main-agenda-tools.ts';
 import { fail, ok, type ToolContext } from './tool-common.ts';
@@ -42,12 +41,7 @@ const READONLY_TOOLS = new Set(['recall', 'search_log']);
 const STAFF_ARG = process.argv.includes('--staff') ? process.argv[process.argv.indexOf('--staff') + 1] : undefined;
 
 function openStore(): Store {
-  if (!READONLY) {
-    // This PC's files under names changed since move first: a recall here may start the semantic-search server or write its
-    // files beside the database, and a new one made before the move would leave the old one behind (core/local-settings.ts).
-    moveRenamedLocalFiles(PROJECT_ROOT, DB_PATH);
-    return new Store(openDb());
-  }
+  if (!READONLY) return new Store(openDb());
   if (!fs.existsSync(DB_PATH)) return new Store(openDb(':memory:'));
   const db = new DatabaseSync(DB_PATH, { readOnly: true });
   db.exec('PRAGMA busy_timeout = 5000');

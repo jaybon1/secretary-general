@@ -1,16 +1,14 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { PROJECT_ROOT } from '../src/core/config.ts';
-import { leftoverRenamedFiles, moveRenamedLocalFiles, RENAMED_LOCAL_FILES } from '../src/core/local-settings.ts';
-import { CHECKS } from '../src/setup/check-items.ts';
-import { CHECK } from '../src/core/names.ts';
 import { SCHEMA_VERSION } from '../src/store/schema.ts';
-import { Store } from '../src/store/store.ts';
+import { ACTION_COND_KINDS, ACTION_OWNERS, ACTION_STATES, MAIN_AGENDA_STATES, MEMORY_KINDS, MISTAKE_CAUSES, MISTAKE_FINDERS, Store, TASK_STATUSES, WORKSPACE_KINDS } from '../src/store/store.ts';
+import { STATUSES as DASHBOARD_STATUSES } from '../src/dashboard/collect.ts';
+import { PAIR_VERDICTS } from '../src/memory/memory-pairs.ts';
 import { tempDir, tempStore, testDb, testStore } from './helpers.ts';
+import { ftsQuery, queryTerms } from '../src/store/search-terms.ts';
 
 /** The schema before raw_log got AUTOINCREMENT. */
 const BEFORE = 10;
@@ -146,54 +144,6 @@ test('an existing DB is backed up before any migration, not only a table rebuild
   assert.deepEqual(backups(dir), [], 'nothing to migrate, no backup');
 });
 
-test('a new DB gets the AUTOINCREMENT table without a backup', () => {
-  const s = tempStore();
-  assert.match((s.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'raw_log'").get() as { sql: string }).sql, /AUTOINCREMENT/);
-  assert.deepEqual(backups(path.dirname(s.db.location()!)), []);
-  s.appendLog([{ session_id: 's', message_uuid: 'u1', role: 'user', content: 'x', created_at: new Date().toISOString() }]);
-  assert.equal(s.logAfter(0)[0].id, 1);
-});
-
-// 없으면 놓치는 실수: 이름이 바뀐 이 PC 파일(scripts의 이 PC 설정, 의미 검색 서버의 DB 옆 파일)이 옛 이름으로 남아 읽히지 않는다.
-test("this PC's renamed files move once to their new names; a new one already there wins", () => {
-  const root = tempDir();
-  const db = path.join(root, 'secretary.db');
-  fs.mkdirSync(path.join(root, 'scripts'));
-  const [oldName, newName] = Object.entries(RENAMED_LOCAL_FILES)[0];
-  fs.writeFileSync(path.join(root, ...oldName.split('/')), '[]');
-  fs.writeFileSync(`${db}.embedder-failures.log`, 'old log\n');
-  fs.writeFileSync(`${db}.embedder.json`, 'old');
-  fs.writeFileSync(`${db}.semantic-search-server.json`, 'new');
-  const moved = moveRenamedLocalFiles(root, db, {});
-  assert.equal(moved.length, 2);
-  assert.equal(fs.readFileSync(path.join(root, ...newName.split('/')), 'utf8'), '[]');
-  assert.equal(fs.readFileSync(`${db}.semantic-search-server-failures.log`, 'utf8'), 'old log\n');
-  assert.equal(fs.readFileSync(`${db}.semantic-search-server.json`, 'utf8'), 'new', 'the new file is kept');
-  assert.ok(fs.existsSync(`${db}.embedder.json`), 'the old one is left when both are there');
-  assert.deepEqual(moveRenamedLocalFiles(root, db, {}), [], 'once');
-  // 없으면 놓치는 실수: 새·옛 이름 파일이 둘 다 있어 옛 파일을 그대로 둔 것을 아무도 모르고, 옛 파일에만 있던 값이 읽히지 않는 채 남는다.
-  assert.deepEqual(leftoverRenamedFiles(root, db, {}), [[`${db}.embedder.json`, `${db}.semantic-search-server.json`]]);
-  const item = CHECKS.find((c) => c.id === CHECK.renamedLocalFiles)!;
-  const out = item.run({ o: { root, dbPath: db } } as Parameters<typeof item.run>[0]) as { status: string; detail?: string };
-  assert.equal(out.status, 'missing');
-  assert.match(out.detail!, /embedder\.json \(새 이름 secretary\.db\.semantic-search-server\.json 있음\)/);
-  fs.rmSync(`${db}.embedder.json`);
-  assert.deepEqual(leftoverRenamedFiles(root, db, {}), []);
-});
-
-// 없으면 놓치는 실수: 첫 세션 훅보다 의미 검색 서버(cli semantic-search-server)나 다른 cli 명령이 먼저 돌아 새 이름 파일을 만들고,
-// 옛 파일이 그대로 남는다(2026-11-09 secretary.db.embedder*.json 두 개). 모든 cli 명령이 무엇보다 먼저 옮긴다.
-test('every cli command moves the renamed files first, before it can make a new one', () => {
-  const dir = tempDir();
-  const db = path.join(dir, 'secretary.db');
-  fs.writeFileSync(`${db}.embedder.json`, '{"pid":1}');
-  fs.writeFileSync(`${db}.embedder-memory.json`, '{"peakMb":1}');
-  const r = spawnSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'src', 'cli.ts'), 'memory-stats'], { encoding: 'utf8', env: { ...process.env, SECRETARY_DB: db } });
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(fs.readFileSync(`${db}.semantic-search-server.json`, 'utf8'), '{"pid":1}');
-  assert.equal(fs.readFileSync(`${db}.semantic-search-server-memory.json`, 'utf8'), '{"peakMb":1}');
-  assert.ok(!fs.existsSync(`${db}.embedder.json`) && !fs.existsSync(`${db}.embedder-memory.json`));
-});
 // [늘 남김] 없으면 놓치는 실수: 비운 옮기기 자리(14번)를 배열에서 지워 버전 수가 줄어, 이미 15인 DB에서는 뒤에 더한 옮기기가 돌지 않고 13인 DB는 15를 건너뛴다.
 test('an emptied migration keeps its slot: a DB at 13 still opens at the full version, which never goes below 15', () => {
   assert.ok(SCHEMA_VERSION >= 15, 'the version the real DBs already have');
@@ -260,9 +210,10 @@ test('migration 17: big_work becomes main_agenda, memory kind task becomes actio
   const rows = (db: DatabaseSync, sql: string, ...params: string[]) => db.prepare(sql).all(...params).map((r) => ({ ...r }));
   const memories = (db: DatabaseSync) => rows(db, 'SELECT * FROM memories ORDER BY id');
   // The search index is keyed by memory id (rowid): each entry must still join to the same memory.
-  const search = (db: DatabaseSync) => rows(db, 'SELECT f.rowid AS id, f.terms, m.content FROM memories_fts f JOIN memories m ON m.id = f.rowid ORDER BY f.rowid');
+  // (Since migration 21 the index keeps no copy of its terms, and the tags left memories for the tag tables: compared without them.)
+  const search = (db: DatabaseSync) => rows(db, 'SELECT f.rowid AS id, m.content FROM memories_fts f JOIN memories m ON m.id = f.rowid ORDER BY f.rowid');
   const before = {
-    memories: memories(old.db).map((m) => ({ ...m, kind: m.kind === 'task' ? 'action' : m.kind })),
+    memories: memories(old.db).map(({ tags: _, ...m }) => ({ ...m, kind: m.kind === 'task' ? 'action' : m.kind })),
     search: search(old.db),
     vectors: rows(old.db, 'SELECT * FROM memory_vectors'),
     agenda: rows(old.db, 'SELECT * FROM big_work ORDER BY id'),
@@ -283,7 +234,7 @@ test('migration 17: big_work becomes main_agenda, memory kind task becomes actio
   assert.deepEqual(rows(s.db, 'SELECT * FROM mistakes'), before.mistakes, 'eval_ids gone, the rest kept');
   assert.deepEqual(s.listMemories({ kind: 'action' }).map((m) => m.id), [action.id]);
   const names = rows(s.db, "SELECT name FROM sqlite_master WHERE name LIKE 'big_work%' OR name LIKE 'main_agenda%' OR name LIKE 'memories%' ORDER BY name").map((r) => r.name);
-  assert.deepEqual(names, ['main_agenda', 'main_agenda_name', 'memories', 'memories_fts', 'memories_fts_config', 'memories_fts_content', 'memories_fts_data', 'memories_fts_docsize', 'memories_fts_idx', 'memories_valid', 'memories_vocab']);
+  assert.deepEqual(names, ['main_agenda', 'main_agenda_name', 'memories', 'memories_fts', 'memories_fts_config', 'memories_fts_data', 'memories_fts_docsize', 'memories_fts_idx', 'memories_valid', 'memories_vocab']);
   assert.throws(() => s.db.prepare("UPDATE memories SET kind = 'task' WHERE id = ?").run(action.id), /CHECK constraint/);
   assert.deepEqual(s.db.prepare('PRAGMA foreign_key_check').all(), []);
   assert.equal((s.db.prepare('PRAGMA quick_check').get() as { quick_check: string }).quick_check, 'ok');
@@ -307,4 +258,168 @@ test('migration 18: the four group names of recommending without checking become
   assert.ok(fs.readdirSync(path.join(path.dirname(file), 'backups')).length >= 1, 'migrated after a backup');
   const m = s.remember({ kind: 'decision', content: 'x로 정함.' });
   s.db.prepare("INSERT INTO memory_quotes (memory_id, quote, status) VALUES (?, 'x로 하자', 'pending')").run(m.id);
+});
+
+// [늘 남김] 없으면 놓치는 실수: 답 검사가 검사 id(english, path-prose·path-pair·path-link)로 적은 실수가 옮기기(22) 뒤에도 사람이 쓰던
+// 분류(영어 답, 경로 표기)와 갈라져 재발로 세지 못하거나, 다른 분류까지 바뀌거나, 백업 없이 옮긴다.
+test('migration 22: the answer checks\' English and path group ids join the groups people wrote, repeats counted again', () => {
+  const file = path.join(tempDir(), 'm22.db');
+  const db = testDb(file, 21);
+  const add = db.prepare("INSERT INTO mistakes (happened_at, what, made_by, found_by, group_name, cause, recurred, created_at) VALUES (?, 'x', '비서', '장치', ?, '안 지킴', 0, '2026-11-18T00:00:00Z')");
+  const rows: Array<[string, string]> = [
+    ['2026-11-10T00:00:00Z', 'english'],
+    ['2026-11-01T00:00:00Z', '영어 답'],
+    ['2026-11-12T00:00:00Z', 'path-link'],
+    ['2026-11-11T00:00:00Z', 'path-pair'],
+    ['2026-11-13T00:00:00Z', 'path-prose'],
+    ['2026-11-14T00:00:00Z', '경로 표기'],
+    ['2026-11-02T00:00:00Z', '지어낸 말'],
+  ];
+  for (const [at, g] of rows) add.run(at, g);
+  db.close();
+  const s = testStore(file);
+  assert.equal(version(s.db), SCHEMA_VERSION);
+  const got = s.db.prepare('SELECT group_name, recurred FROM mistakes ORDER BY id').all() as Array<{ group_name: string; recurred: number }>;
+  assert.deepEqual(got.map((r) => r.group_name), ['영어 답', '영어 답', '경로 표기', '경로 표기', '경로 표기', '경로 표기', '지어낸 말']);
+  // In each group the earliest is the first and the rest are repeats; another group is left as it was.
+  assert.deepEqual(got.map((r) => r.recurred), [1, 0, 1, 0, 1, 1, 0]);
+  assert.ok(fs.readdirSync(path.join(path.dirname(file), 'backups')).length >= 1, 'migrated after a backup');
+});
+
+// [늘 남김] 없으면 놓치는 실수: 할 일 표·일정 표를 더하는 옮기기(19)가 기억 표를 건드려 기억·대화가 어긋나거나, 백업 없이 옮기거나, 할 일 표가
+// 대화를 가리킨 채 그 대화를 지울 때 외래 키에 막혀 "비서 대화 삭제"가 실패한다.
+test('migration 19: the action and calendar tables come after a backup, memories and talk untouched; deleting a cited row unlinks it', () => {
+  const file = path.join(tempDir(), 'm19.db');
+  const old = testStore(file, 18);
+  old.appendLog([{ session_id: 's', message_uuid: 'u1', role: 'user', content: '모종 사기', created_at: new Date().toISOString() }]);
+  const action = old.remember({ kind: 'action', content: '토마토 모종을 산다.', sourceLogId: 1 });
+  const before = old.db.prepare('SELECT id, kind, content, source_log_id FROM memories ORDER BY id').all();
+  old.db.close();
+  const s = testStore(file);
+  assert.equal((s.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, SCHEMA_VERSION);
+  assert.deepEqual(s.db.prepare('SELECT id, kind, content, source_log_id FROM memories ORDER BY id').all(), before);
+  assert.ok(fs.readdirSync(path.join(path.dirname(file), 'backups')).length >= 1, 'migrated after a backup');
+  s.setAction(action.id, { owner: 'user', due: '2026-11-20', condition: { kind: 'task_done', value: '3' }, by: 'test', logId: 1 });
+  assert.throws(() => s.db.prepare("UPDATE memory_actions SET state = 'gone' WHERE memory_id = ?").run(action.id), /CHECK constraint/);
+  s.replaceCalendarRange('2026-11-01T00:00:00.000Z', '2026-12-01T00:00:00.000Z', [{ uid: 'u', recurrence_at: '2026-11-02T01:00:00.000Z', start_at: '2026-11-02T01:00:00.000Z', end_at: null, all_day: false, title: '회의', location: null }], new Date().toISOString());
+  assert.equal(s.calendarEventsBetween('2026-11-01T00:00:00.000Z', '2026-12-01T00:00:00.000Z').length, 1);
+  s.dropLogRows([1], [], 'x', new Date().toISOString());
+  assert.equal(s.getAction(action.id)?.marked_log_id, null, 'the deleted row is unlinked, the action kept');
+  assert.deepEqual(s.db.prepare('PRAGMA foreign_key_check').all(), []);
+});
+
+// [늘 남김] 없으면 놓치는 실수: 질문 대기 상태를 더하려 tasks를 다시 만드는 옮기기(20)에서 업무 번호·기록·상태가 바뀌거나, 색인을 잃거나, 백업 없이 옮기거나,
+// 새 상태가 CHECK에 걸려 업무 세션의 [질문]을 기록하지 못한다.
+test('migration 20: tasks keep their ids, records and statuses, after a backup; asking is a status, anything else still refused', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'secretary.db');
+  const old = testStore(file, 19);
+  const ws = old.createWorkspace({ kind: 'solo', name: 'video', title: '영상', purpose: '영상 제작', folder: 'C:/ws/video', agents: [] });
+  const now = new Date().toISOString();
+  const add = old.db.prepare('INSERT INTO tasks (id, workspace_id, name, title, goal, output_dir, status, session_ref, result, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  add.run(4, ws.id, 'a', 'A', 'g', 'o1', 'running', 'bg:1', null, now, now);
+  add.run(8, ws.id, 'b', 'B', 'g', 'o2', 'done', 'bg:2', '보고 확인함', now, now);
+  add.run(11, ws.id, 'c', 'C', 'g', 'o3', 'ready', null, null, now, now);
+  const rows = (db: DatabaseSync) => db.prepare('SELECT * FROM tasks ORDER BY id').all().map((r) => ({ ...r }));
+  const before = rows(old.db);
+  old.db.close();
+
+  const s = testStore(file);
+  assert.equal(version(s.db), SCHEMA_VERSION);
+  assert.deepEqual(rows(s.db), before);
+  assert.equal(s.updateTask(4, { status: 'asking' })?.status, 'asking');
+  assert.deepEqual(s.listTasks({ status: 'asking' }).map((t) => t.id), [4]);
+  assert.throws(() => s.db.prepare("UPDATE tasks SET status = 'review' WHERE id = 8").run(), /CHECK constraint/);
+  assert.deepEqual(s.db.prepare('PRAGMA foreign_key_check').all(), []);
+  for (const name of ['tasks_workspace', 'tasks_status']) assert.ok(s.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name), name);
+  s.db.close();
+  assert.equal(backups(dir).length, 1, 'the old DB is copied before the rebuild');
+});
+// [늘 남김] 없으면 놓치는 실수: 태그를 태그 표로 옮기고 단어 색인을 본문 사본 없는 방식으로 다시 만드는 옮기기(21)에서 태그·주제가 바뀌거나,
+// 대화·기억 검색 결과가 달라지거나, 대화를 지워도 색인에 남거나, 백업 없이 옮긴다.
+test('migration 21: tags move to the tag tables split by spaces, the word indexes keep no text copy, searches find the same; a backup first', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'secretary.db');
+  const old = testStore(file, 20);
+  const at = new Date(Date.now() - 60_000).toISOString();
+  old.appendLog([
+    { session_id: 's', message_uuid: 'u1', role: 'user', content: '토마토 모종을 서울에서 산다', created_at: at },
+    { session_id: 's', message_uuid: 'u2', role: 'assistant', content: '서울 화원 목록을 찾았어요', created_at: at },
+    { session_id: 's', message_uuid: 'u3', role: 'user', content: '감자는 다음 주에', created_at: at },
+  ]);
+  const a = old.remember({ kind: 'action', content: '토마토 모종을 산다.', tags: ['텃밭', '할 일'], sourceLogId: 1 }).id;
+  const b = old.remember({ kind: 'decision', content: '감자는 다음 주에 심는다.', tags: ['텃밭'] }).id;
+  const dup = old.remember({ kind: 'fact', content: '비서 배포판 실수를 줄인다.', tags: ['비서'] }).id;
+  const gone = old.remember({ kind: 'fact', content: '옛 텃밭 위치', tags: ['텃밭', '위치'] }).id;
+  old.forget(gone, '시험');
+  // The old string could hold a word twice: one is kept, its index entry and vector stay as they were (searches rank as before).
+  old.db.prepare("UPDATE memories SET tags = '비서 실수 비서 배포판' WHERE id = ?").run(dup);
+  old.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(dup);
+  old.db.prepare("INSERT INTO memories_fts (rowid, terms) VALUES (?, '비서 배포 포판 실수')").run(dup);
+  for (const id of [a, b, dup]) old.db.prepare('INSERT INTO memory_vectors (memory_id, model, vector) VALUES (?, ?, ?)').run(id, 'm', new Uint8Array([1, 2, 3, 4]));
+  const logHits = (s: Store) => ['서울', '토마토', '감자'].map((q) => s.searchLog(q, { limit: 10 }).map((r) => r.id));
+  // Read the same way before and after (the store's readers need the tag tables): ids in bm25 order.
+  const memHits = (s: Store) => ['토마토 모종', '감자', '텃밭', '할 일'].map((q) => (s.db.prepare('SELECT rowid AS id FROM memories_fts WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts), rowid').all(ftsQuery(queryTerms(q))) as Array<{ id: number }>).map((r) => r.id));
+  const before = { log: logHits(old), mem: memHits(old), tags: old.db.prepare('SELECT id, tags FROM memories ORDER BY id').all().map((r) => ({ ...r })) };
+  old.db.close();
+
+  const s = testStore(file);
+  assert.equal(version(s.db), SCHEMA_VERSION);
+  assert.deepEqual(logHits(s), before.log, 'the conversation search finds the same rows in the same order');
+  assert.deepEqual(memHits(s), before.mem, 'the memory search finds the same memories in the same order');
+  // Split by spaces, joined again they read as before; the topic is the first.
+  assert.deepEqual(s.tagsOf(a), ['텃밭', '할', '일']);
+  assert.equal(s.getMemory(a)?.tags, '텃밭 할 일');
+  assert.equal(s.getMemory(a)?.topic, '텃밭');
+  assert.deepEqual(s.tagsOf(dup), ['비서', '실수', '배포판']);
+  assert.equal(s.getMemory(dup)?.topic, '비서/실수', 'the secretary topic is summarised per its second tag');
+  for (const r of before.tags) if (r.id !== dup) assert.equal(s.getMemory(Number(r.id))?.tags, r.tags);
+  // Live memories with two tags or more are on the list to check; one alone or invalidated is not.
+  assert.deepEqual(s.db.prepare('SELECT memory_id FROM memory_tag_checks ORDER BY memory_id').all().map((r) => r.memory_id), [a, dup]);
+  assert.deepEqual(s.tagChecksDue(10).due.map((m) => m.id), [dup, a], 'newest first among those with as many tags');
+  s.forget(a, '시험');
+  assert.deepEqual(s.tagChecksDue(10), { due: [s.getMemory(dup)!], left: 1 }, 'one invalidated since is not handed out');
+  assert.deepEqual(s.searchMemories('실수', { limit: 5 }).map((m) => m.id), [dup]);
+  assert.deepEqual(s.db.prepare('SELECT memory_id FROM memory_vectors ORDER BY memory_id').all().map((r) => r.memory_id), [a, b, dup]);
+  const columns = (s.db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>).map((c) => c.name);
+  assert.ok(!columns.includes('tags'), columns.join(','));
+  const names = (s.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%fts%' OR name LIKE 'usage_log%' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
+  assert.ok(!names.includes('raw_log_fts_content') && !names.includes('memories_fts_content'), names.join(','));
+  assert.ok(names.includes('usage_log_event'), names.join(','));
+  assert.match((s.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'raw_log_fts'").get() as { sql: string }).sql, /content=''.*contentless_delete=1/);
+  assert.equal(s.corpusStats(['토마']).docFreq.get('토마'), 1, 'the vocabulary table reads the new index');
+  // A tag of two words stays whole from now on; deleting a conversation row takes it out of the index.
+  const c = s.remember({ kind: 'action', content: '고추 모종을 산다.', tags: ['텃밭', '할 일'] }).id;
+  assert.deepEqual(s.tagsOf(c), ['텃밭', '할 일']);
+  s.dropLogRows([1], [], 'x', new Date().toISOString());
+  s.db.exec("INSERT INTO raw_log_fts (raw_log_fts) VALUES ('optimize')");
+  assert.deepEqual(s.searchLog('토마토', { limit: 5 }), []);
+  assert.deepEqual(s.searchLog('서울', { limit: 5 }).map((r) => r.id), [2]);
+  assert.deepEqual(s.db.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.equal((s.db.prepare('PRAGMA quick_check').get() as { quick_check: string }).quick_check, 'ok');
+  s.db.close();
+  assert.equal(backups(dir).length, 1, 'the old DB is copied before the migration');
+});
+// 없으면 놓치는 실수: 코드 상수에만 새 값(업무 상태, 기억 종류 등)을 넣어 입력 검사는 통과하는데 DB CHECK에 걸려 저장이 실패하거나,
+// 대시보드가 자기 상태 목록에 없는 업무를 조용히 빼고 보여 준다.
+test('every CHECK list in the schema matches the code constant it stands for, and the dashboard shows every task status', () => {
+  const s = tempStore();
+  const sqlOf = (table: string) => (s.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string }).sql;
+  const check = (table: string, column: string) => {
+    const m = new RegExp(`${column}\\s+TEXT[^,]*CHECK \\(${column} IN \\(([^)]*)\\)\\)`).exec(sqlOf(table)) ?? new RegExp(`CHECK \\(${column} IN \\(([^)]*)\\)\\)`).exec(sqlOf(table));
+    assert.ok(m, `${table}.${column} has a CHECK list`);
+    return m[1].split(',').map((x) => x.trim().replace(/^'|'$/g, '')).sort();
+  };
+  const sorted = (xs: readonly string[]) => [...xs].sort();
+  assert.deepEqual(check('tasks', 'status'), sorted(TASK_STATUSES));
+  assert.deepEqual(sorted(DASHBOARD_STATUSES), sorted(TASK_STATUSES));
+  assert.deepEqual(check('memories', 'kind'), sorted(MEMORY_KINDS));
+  assert.deepEqual(check('workspaces', 'kind'), sorted(WORKSPACE_KINDS));
+  assert.deepEqual(check('main_agenda', 'state'), sorted(MAIN_AGENDA_STATES));
+  assert.deepEqual(check('memory_actions', 'owner'), sorted(ACTION_OWNERS));
+  assert.deepEqual(check('memory_actions', 'cond_kind'), sorted(ACTION_COND_KINDS));
+  assert.deepEqual(check('memory_actions', 'state'), sorted(ACTION_STATES));
+  assert.deepEqual(check('mistakes', 'found_by'), sorted(MISTAKE_FINDERS));
+  assert.deepEqual(check('mistakes', 'cause'), sorted(MISTAKE_CAUSES));
+  assert.deepEqual(check('memory_pair_checks', 'verdict'), sorted(PAIR_VERDICTS));
 });

@@ -33,30 +33,15 @@ export interface Feature {
   scheduledTasks: ScheduledTask[];
   /** Where AGENTS.md has this feature's rules: text found there as is. */
   rules: string[];
-  /** Its section in this PC's settings file this-secretary.local.json and the separate files it came from (core/this-secretary.ts). */
+  /** Its section in this PC's settings file this-secretary.local.json (core/this-secretary.ts). */
   thisSecretary?: ThisSecretaryColumn;
 }
 
-/** One file a this-secretary.local.json section came from: its path (from the secretary folder), and which of its keys go there (pick) or not (omit). */
-export type ThisSecretarySource =
-  | string
-  | {
-      file: string;
-      pick?: string[];
-      omit?: string[];
-      /** A shape change (core/this-secretary.ts TRANSFORMS): tailscale-device, tailscale-device-field (with field, as, hostFrom). */
-      transform?: string;
-      field?: string;
-      as?: string;
-      hostFrom?: string;
-    };
-
-/** features.json "thisSecretary": the feature's section and the separate files it was in before (until 2026-11-10). */
+/** features.json "thisSecretary": the feature's section. */
 export interface ThisSecretaryColumn {
   section: string;
   /** In the PC's shared file (all-secretaries.local.json), not this secretary's: every secretary on the PC uses the same value. */
   shared?: boolean;
-  from?: ThisSecretarySource[];
 }
 
 export interface ScheduledTask {

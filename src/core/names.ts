@@ -13,7 +13,6 @@ export const CLI = {
   hook: 'hook',
   setupCheck: 'setup-check',
   skillLinks: 'skill-links',
-  contextTokens: 'context-tokens',
   semanticSearchServer: 'semantic-search-server',
   usagePoll: 'usage-poll',
   subscriptionPick: 'subscription-pick',
@@ -32,9 +31,16 @@ export const CLI = {
   memoryConsolidation: 'memory-consolidation',
   sessionHandoffWake: 'session-handoff-wake',
   archiveWorkspace: 'archive-workspace',
-  /** Once, updating from v7: the profile's 큰 일 칸 → the main-agenda board (upgrade/main-agenda-move.ts). */
-  mainAgendaFromProfile: 'main-agenda-from-profile',
-  thisSecretaryMerge: 'this-secretary-merge',
+  actionSet: 'action-set',
+  actionList: 'action-list',
+  calendarFetch: 'calendar-fetch',
+  todoSummary: 'todo-summary',
+  workerAsking: 'worker-asking',
+  workerTranscript: 'worker-transcript',
+  workerStatus: 'worker-status',
+  workerAgent: 'worker-agent',
+  jobStall: 'job-stall',
+  backupRecord: 'backup-record',
 } as const;
 
 /** The prompt hook's notices (hooks/prompt-notices.ts; features.json notices). */
@@ -51,6 +57,9 @@ export const NOTICE = {
   memoryCore: 'memory-core',
   answerCheckWarn: 'answer-check-warn',
   questionLabel: 'question-label',
+  todoSummary: 'todo-summary',
+  jobStall: 'job-stall',
+  stopHookError: 'stop-hook-error',
 } as const;
 
 /** The install check's items (setup/check-items.ts; features.json checks, `setup-check --skip`). */
@@ -62,7 +71,6 @@ export const CHECK = {
   skills: 'skills',
   entryPoints: 'entry-points',
   releaseFiles: 'release-files',
-  renamedLocalFiles: 'renamed-local-files',
   secretaryDirEnv: 'secretary-dir-env',
   workspaceLinks: 'workspace-links',
   workspaceAuxFolders: 'workspace-aux-folders',
@@ -99,6 +107,7 @@ export const FEATURE = {
   usagePoll: 'usage-poll',
   dashboard: 'dashboard',
   mistakeGuards: 'mistake-guards',
+  todoSummary: 'todo-summary',
 } as const;
 
 /** The tags the hooks wrap what they inject in: `<secretary-…>` (AGENTS.md says what each asks of the secretary). */
@@ -125,4 +134,8 @@ export const TAG = {
   purgeDone: 'secretary-purge-done',
   consolidate: 'secretary-consolidate',
   consolidateReport: 'secretary-consolidate-report',
+  todoSummary: 'secretary-todo',
+  todoDue: 'secretary-todo-due',
+  jobStall: 'secretary-job-stall',
+  hookError: 'secretary-hook-error',
 } as const;

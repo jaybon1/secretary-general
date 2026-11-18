@@ -1,6 +1,7 @@
 /**
  * What the session-start hook injects: the core profile, the main-agenda board, a status line, this PC's result paths when
- * set (resultPathsBlock), and for a new
+ * set (resultPathsBlock), the records a person never looks at (a DB backup gone stale inside the status, the hook failures
+ * since the last session start: core/backup-record.ts, core/hook-errors.ts), and for a new
  * conversation the situation board (started here, injected on the first prompt by session-continuity/situation-board-notice.ts).
  * The memories injected on every prompt are in prompt-memory.ts.
  */
@@ -13,6 +14,19 @@ import { accountLabel, chatProvider } from '../usage/usage-files.ts';
 import { TAG } from '../core/names.ts';
 import { forgetContextNudge } from './context-size-nudge.ts';
 import { readResultPaths, type ResultPaths } from '../core/result-paths.ts';
+import { backupNotice } from '../core/backup-record.ts';
+import { hookErrorSummary, noteHookError } from '../core/hook-errors.ts';
+import { carryGuardWarnings } from '../mistake-guards/stop-guard.ts';
+
+/** A record's line, or '' when reading it failed (recorded; the profile and the rest still go out). */
+function recordLine(part: string, read: () => string): string {
+  try {
+    return read();
+  } catch (err) {
+    noteHookError('session-start', err, part);
+    return '';
+  }
+}
 
 /** SessionStart sources after which earlier injections are no longer in context. */
 const CONTEXT_RESETS = new Set(['clear', 'compact']);
@@ -21,17 +35,22 @@ export function sessionStartContext(store: Store, sessionId?: string, source?: s
   if (sessionId && source && CONTEXT_RESETS.has(source)) store.logUsage('context_reset', 0, { session: sessionId, source });
   // The session id stays the same over a compaction, and so would the step already nudged (decided 2026-11-12).
   if (sessionId && source === 'compact') forgetContextNudge(store, sessionId);
+  // A /clear right after an answer the checks warned about: the warning goes to this session's first prompt.
+  if (sessionId && source === 'clear') recordLine('guard-warn-carry', () => String(carryGuardWarnings(store, sessionId)));
   const profile = store.getProfile();
   const s = store.stats();
+  const backup = recordLine('backup-stale', () => backupNotice(store));
   const parts = [
     `<${TAG.profile}>`,
     profile
       ? `핵심 프로필 v${profile.version} (${formatLocal(profile.created_at, true)} 갱신)\n${profile.content}`
-      : '핵심 프로필이 아직 없습니다. 첫 대화라면 사용자 이름·부를 호칭·핵심 선호를 짧게 묻고 update_profile 도구로 만들어 주세요.',
+      : '핵심 프로필이 아직 없습니다. 첫 대화라면 부를 호칭과 핵심 선호를 짧게 묻고(이름은 묻지 않는다) update_profile 도구로 만들어 주세요.',
     `</${TAG.profile}>`,
     mainAgendaBlock(store),
-    `<${TAG.status}>${chatProvider() === 'subscription' ? '' : `이 세션: ${accountLabel(chatProvider())} · `}활성 기억 ${s.memoriesActive}개 · 정리 대기 대화 ${s.unconsolidated}건</${TAG.status}>`,
+    `<${TAG.status}>${chatProvider() === 'subscription' ? '' : `이 세션: ${accountLabel(chatProvider())} · `}활성 기억 ${s.memoriesActive}개 · 정리 대기 대화 ${s.unconsolidated}건${backup ? `\n${backup}` : ''}</${TAG.status}>`,
   ];
+  const hookErrors = recordLine('hook-error-summary', () => hookErrorSummary(store));
+  if (hookErrors) parts.push(hookErrors);
   const paths = resultPathsBlock(readResultPaths());
   if (paths) parts.push(paths);
   // A brand-new conversation, and a compacted one (decided 2026-11-12: the summary loses detail), wakes up with the

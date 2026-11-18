@@ -30,8 +30,8 @@ export type { Level };
 /**
  * Each check's level, as answer-check-table.ts sets it. block: the Stop hook sends the turn back with the reason (the
  * model writes again, once). warn: the turn ends as it is, the next prompt carries the reason (fixed first at the top of
- * the next answer), and the turn record keeps it. Either way the slip goes into the mistakes record (stop-guard.ts
- * recordGuardMistakes).
+ * the next answer), and the turn record keeps it. A block goes into the mistakes record; a warning only when the next
+ * answer sets it right with a "> 바로잡음(…)" line (stop-guard.ts recordGuardMistakes).
  */
 export const DEFAULT_LEVELS = Object.fromEntries(Object.entries(ANSWER_CHECKS).map(([id, c]) => [id, c.level])) as Record<CheckId, Level>;
 

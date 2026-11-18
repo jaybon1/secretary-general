@@ -1,136 +1,84 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECT_ROOT } from '../src/core/config.ts';
-import { tempDir } from './helpers.ts';
-import { claudeOwner, type ProcTable, unwatchedTasks, WATCH_TIMEOUT_MS, watcherAlive, watcherOurs } from '../src/workspace/watch-check.ts';
+import { tempDir, tempStore } from './helpers.ts';
+import { lastAnswerAsks, markAnswered, markAskingFromTranscript, refMatches } from '../src/workspace/worker-asking.ts';
+import { findTranscript } from '../src/core/transcript.ts';
 
-test('the watcher stops at 55 minutes, before the time limit the secretary gives its background command', () => {
-  // 55 minutes: the secretary wakes while its 1-hour prompt cache is still warm.
+// 없으면 놓치는 실수: 업무 세션이 [질문]으로 멈췄는데 업무 상태가 running으로 남아, 할 일 요약·대시보드가 질문 대기를 못 보여 주고 모니터링을 다시 띄울 대상에 남는다.
+// 화면보다 긴 [질문](선택지가 많은 질문)은 claude logs 화면 글에서 밀려나 놓쳤으므로 대화 기록 jsonl로 본다.
+// 반대로 지난 [질문] 뒤에 다시 일하는 세션이나 이미 끝난(done) 업무까지 asking으로 바꾼다.
+test('a work session whose transcript ends on a [질문] puts its running task to asking; other transcripts and statuses are left alone', () => {
+  const say = (...texts: string[]) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: texts.map((text) => ({ type: 'text', text })) } });
+  const tool = (input: object) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Write', input }] } });
+  const result = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } });
+  const prompt = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: text } });
+  const longChoices = Array.from({ length: 60 }, (_, i) => `${i + 1}. 선택지 ${i + 1}`).join('\n');
+  const asks = [prompt('계획을 써 주세요'), say('plan.md를 썼어요.'), tool({ file_path: 'plan.md' }), result, say(`[질문] 계획 승인\n${longChoices}\n61. 기타 (직접 입력)`), JSON.stringify({ type: 'system', subtype: 'turn_duration' })];
+  assert.equal(lastAnswerAsks(asks), true);
+  // The last text block of the turn decides; an assistant line with only a tool call after it is skipped.
+  assert.equal(lastAnswerAsks([say('정리했어요.', '[질문] 어느 쪽으로 할까요?'), tool({ file_path: 'q.md' })]), true);
+  // An older [질문] the session went on from, a report, a [질문] inside a tool call, a sub-agent's line: not asking.
+  assert.equal(lastAnswerAsks([say('[질문] 계획 승인'), prompt('승인해요'), tool({ command: 'npm test' }), result, say('끝났어요. REPORT.md를 썼어요.')]), false);
+  assert.equal(lastAnswerAsks([say('[질문] 계획 승인'), prompt('승인해요')]), false);
+  assert.equal(lastAnswerAsks([say('[질문] 어느 쪽?', '끝났어요.')]), false);
+  assert.equal(lastAnswerAsks([say('끝났어요.'), tool({ file_path: 'notes/q.md', content: '[질문] 메모' })]), false);
+  assert.equal(lastAnswerAsks([say('끝났어요.'), JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: '[질문] 하위' }] } })]), false);
+  assert.equal(lastAnswerAsks(['{"type":"assist', '']), false);
+
+  assert.equal(refMatches('bg:abcd1234', 'abcd1234'), true);
+  assert.equal(refMatches('bg:abcd1234', 'bg:abcd1234'), true);
+  assert.equal(refMatches('abcd1234-0000-4000-8000-000000000000', 'abcd1234'), true);
+  assert.equal(refMatches('bg:abcd1234', 'ffff0000'), false);
+  assert.equal(refMatches(null, 'abcd1234'), false);
+
+  // The transcript is found under the config folder's projects folder by the short id or the full uuid.
+  const config = tempDir();
+  const projects = path.join(config, 'projects');
+  const uuid = 'abcd1234-0000-4000-8000-000000000000';
+  const file = path.join(projects, 'C--work-space', `${uuid}.jsonl`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, [say('끝났어요.'), ''].join('\n'));
+  assert.equal(findTranscript(projects, 'bg:abcd1234'), file);
+  assert.equal(findTranscript(projects, uuid), file);
+  assert.equal(findTranscript(projects, 'ffff0000'), null);
+  assert.equal(findTranscript(path.join(projects, 'none'), 'abcd1234'), null);
+
+  const s = tempStore();
+  const ws = s.createWorkspace({ kind: 'quick', name: 'quick', title: '간단', purpose: 'p', folder: path.join(tempDir(), 'q'), agents: [] });
+  const make = (ref: string, status: 'running' | 'done') => {
+    const t = s.createTask({ workspaceId: ws.id, name: `t${Math.random()}`, title: `업무 ${ref}`, goal: 'g', outputDir: `o${Math.random()}` });
+    s.updateTask(t.id, { status, sessionRef: ref });
+    return t.id;
+  };
+  const running = make('bg:abcd1234', 'running');
+  const done = make('bg:abcd1234', 'done');
+  const other = make('bg:ffff0000', 'running');
+  assert.deepEqual(markAskingFromTranscript(s, 'abcd1234', config), []);
+  assert.equal(s.getTask(running)?.status, 'running');
+  // No transcript for the session: nothing changes.
+  assert.deepEqual(markAskingFromTranscript(s, 'ffff0000', config), []);
+  fs.writeFileSync(file, [...asks, ''].join('\n'));
+  const out = markAskingFromTranscript(s, 'abcd1234', config, uuid);
+  assert.equal(out.length, 1);
+  assert.match(out[0], new RegExp(`업무${running}\\(.*질문 대기\\(asking\\)`));
+  assert.deepEqual([s.getTask(running)?.status, s.getTask(done)?.status, s.getTask(other)?.status], ['asking', 'done', 'running']);
+  // Already asking: nothing to say the second time.
+  assert.deepEqual(markAskingFromTranscript(s, 'abcd1234', config), []);
+  // 없으면 놓치는 실수: 비서가 [질문]의 답을 보낸 뒤 상태를 직접 되돌리는 것을 잊어 업무가 질문 대기로 남고, 모니터링을 다시 띄울 대상에서 빠진다.
+  // send-worker가 보낸 뒤 부른다(worker-asking <id> --answered): 그 세션의 질문 대기 업무만 진행 중으로, 끝난 업무와 다른 세션은 그대로.
+  const answered = markAnswered(s, 'bg:abcd1234');
+  assert.equal(answered.length, 1);
+  assert.match(answered[0], new RegExp(`업무${running}\\(.*진행 중\\(running\\)`));
+  assert.deepEqual([s.getTask(running)?.status, s.getTask(done)?.status, s.getTask(other)?.status], ['running', 'done', 'running']);
+  assert.deepEqual(markAnswered(s, 'abcd1234'), [], 'nothing asking any more');
+  const lib = fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'worker', 'worker-lib.ps1'), 'utf8');
+  assert.match(lib, /Invoke-SecretaryCli @\('worker-asking', \$Id, '--answered'\)/);
+  assert.equal((lib.match(/; Set-WorkerAnswered \$Id; exit 0/g) ?? []).length, 3, 'every way that ends sent: 보냄, 보냄 not checked, 깨워서 보냄');
+  // The watcher hands its config folder to this at idle (and only there), when worker-status saw the [질문].
   const script = fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'worker', 'watch-worker.ps1'), 'utf8');
-  // The default is the shared cache-wake minutes (lib/common.ps1), also wait-job.ps1's and the session reuse limit.
-  assert.match(script, /if \(-not \$MaxMinutes\) \{ \$MaxMinutes = \$CacheWakeMinutes \}/);
-  const env = fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'lib', 'common.ps1'), 'utf8');
-  const max = Number(/^\$CacheWakeMinutes = (\d+)/m.exec(env)?.[1]);
-  assert.equal(max, 55);
-  assert.ok(max * 60_000 < WATCH_TIMEOUT_MS, 'the watcher ends first');
-  assert.equal(WATCH_TIMEOUT_MS, 3_600_000);
-  // The time-up line says the task still runs and the watch is to be relaunched without a notification.
-  assert.match(script, /시간 끝\(\$span\): .*아직 일하는 중.*알림 없이 모니터링을 다시 띄우세요/);
-  // The delegate skill tells the secretary the same limit.
-  const skill = fs.readFileSync(path.join(PROJECT_ROOT, '.agents', 'skills', 'delegate', 'SKILL.md'), 'utf8');
-  assert.match(skill, new RegExp(`watch-worker\\.ps1 -Id <id>\`를 백그라운드 명령\\(run_in_background, timeout ${WATCH_TIMEOUT_MS}\\)`));
-  assert.doesNotMatch(skill, /7200000/);
-});
-
-test('unwatchedTasks lists only bg tasks without a live watcher', () => {
-  const tasks = [
-    { id: 1, title: 'a', sessionRef: 'bg:aaaa1111' },
-    { id: 2, title: 'b', sessionRef: 'bg:bbbb2222' },
-    { id: 3, title: 'c', sessionRef: 'app:xyz' },
-    { id: 4, title: 'd', sessionRef: null },
-  ];
-  const off = unwatchedTasks(tasks, (id) => id === 'aaaa1111');
-  assert.deepEqual(off, [{ id: 2, title: 'b', bg: 'bbbb2222' }]);
-});
-
-test('watcherAlive reads the pid file and checks the process', () => {
-  const dir = tempDir('watch-');
-  fs.writeFileSync(path.join(dir, 'abcd1234.pid'), `${process.pid}\r\n`);
-  assert.equal(watcherAlive('abcd1234', dir), true);
-  assert.equal(watcherAlive('abcd1234', dir, () => false), false);
-  assert.equal(watcherAlive('missing0', dir), false);
-  fs.writeFileSync(path.join(dir, 'bad00000.pid'), 'x');
-  assert.equal(watcherAlive('bad00000', dir), false);
-});
-
-test('a watcher counts as ours only when it hangs under the same claude.exe as the hook', () => {
-  // 1 remote-control server > 10 session A > 11 bash > 12 watcher; 10 > 13 hook; 20 session B > 21 watcher
-  const table: ProcTable = new Map([
-    [1, { ppid: 0, name: 'claude.exe' }],
-    [10, { ppid: 1, name: 'claude.exe' }],
-    [11, { ppid: 10, name: 'bash.exe' }],
-    [12, { ppid: 11, name: 'powershell.exe' }],
-    [13, { ppid: 10, name: 'node.exe' }],
-    [20, { ppid: 1, name: 'claude.exe' }],
-    [21, { ppid: 20, name: 'powershell.exe' }],
-  ]);
-  assert.equal(claudeOwner(12, table), 10);
-  assert.equal(claudeOwner(13, table), 10);
-  assert.equal(claudeOwner(99, table), undefined);
-  const dir = tempDir('watch-own-');
-  fs.writeFileSync(path.join(dir, 'aaaa.pid'), '12');
-  fs.writeFileSync(path.join(dir, 'bbbb.pid'), '21');
-  fs.writeFileSync(path.join(dir, 'cccc.pid'), '77');
-  assert.equal(watcherOurs('aaaa', table, 13, dir), true);
-  assert.equal(watcherOurs('bbbb', table, 13, dir), false); // another session's watcher wakes that session
-  assert.equal(watcherOurs('cccc', table, 13, dir), false); // dead pid
-  assert.equal(watcherOurs('dddd', table, 13, dir), false); // no pid file
-  assert.equal(watcherOurs('aaaa', null, 13, dir), false); // table unreadable: relaunch rather than miss
-});
-
-// 없으면 놓치는 실수: 업무 세션이 테스트를 백그라운드 셸로 돌려 자식 명령으로 안 잡히면, 결과 파일이 몇 분마다 쓰여도 10분 뒤 '멈춤 의심'이 떠
-// 비서(모델)가 헛되이 깬다(업무 159에서 두 번). 반대로 외부 기기에서 사용자 크롬을 세면 정말 멈춘 업무를 놓친다.
-// 없으면 놓치는 실수: 이 PC의 시험 프로그램 CPU는 업무와 상관없는 프로그램으로도 늘어 멈춘 업무를 놓치므로 보지 않기로 했는데(2026-11-11 보류), 모니터링이 다시 이 PC에서 잰다.
-test('the watcher counts result/sandbox file changes as movement, not this PC\'s test-program CPU (external devices skip the user\'s Chrome)', () => {
-  const watch = path.join(PROJECT_ROOT, 'scripts', 'worker', 'watch-worker.ps1');
-  const text = fs.readFileSync(watch, 'utf8');
-  // The file check feeds the evidence lines of the stall and time-up messages; nothing samples this PC's test programs.
-  assert.match(text, /\$evidence = @\(\$child\.text, \$files\.text/);
-  const loop = text.slice(text.indexOf('# ---- 모니터링'));
-  assert.ok(loop.length < text.length && !/Get-TestProcSample|Select-TestProcesses/.test(loop), 'the monitoring loop does not sample this PC');
-  const devices = text.includes('function Get-DeviceLines');
-  if (devices) assert.match(text, /\$remote = \$TestProcCode \+ @'/);
-  const root = tempDir('watch-move-');
-  const cwd = path.join(root, 'space-a');
-  const task = path.join(cwd, 'output', 'records', 'prod', '20261111-run');
-  const older = path.join(cwd, 'output', 'research', '20261101-old');
-  const sandbox = path.join(root, '_sandbox', 'space-a-159');
-  const other = path.join(root, '_sandbox', 'space-b-1');
-  for (const d of [task, older, sandbox, other, path.join(task, 'node_modules')]) fs.mkdirSync(d, { recursive: true });
-  for (const f of [path.join(task, 'TASK.md'), path.join(older, 'a.txt'), path.join(sandbox, 'out.png'), path.join(other, 'x.png'), path.join(task, 'node_modules', 'm.js')]) fs.writeFileSync(f, 'x');
-  const ps1 = path.join(tempDir(), 'probe.ps1');
-  fs.writeFileSync(ps1, '\uFEFF' + [
-    '[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false',
-    `$ast = [Management.Automation.Language.Parser]::ParseFile('${watch}', [ref]$null, [ref]$null)`,
-    "foreach ($a in $ast.FindAll({ param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and \"$($n.Left)\" -eq '$TestProcCode' }, $false)) { . ([scriptblock]::Create($a.Extent.Text)) }",
-    "foreach ($f in $ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in 'Get-WatchFolders', 'Find-RecentFile' }, $true)) { . ([scriptblock]::Create($f.Extent.Text)) }",
-    `$cwd = '${cwd}'`,
-    "$old = (Get-Date).AddHours(-1)",
-    `Get-ChildItem -LiteralPath '${root}' -Recurse -File | ForEach-Object { $_.LastWriteTime = $old }`,
-    `(Get-Item -LiteralPath '${older}').CreationTime = (Get-Date).AddDays(-3)`,
-    `(Get-Item -LiteralPath '${task}').CreationTime = (Get-Date).AddDays(-1)`,
-    "$byIntent = @(Get-WatchFolders $cwd 'output/records/prod/20261111-run/TASK.md의 업무를 이 폴더의 AGENTS.md 규칙대로 수행하고')",
-    "$byNewest = @(Get-WatchFolders $cwd '')",
-    "$since = (Get-Date).AddMinutes(-5)",
-    "$quiet = Find-RecentFile $byIntent $since",
-    `(Get-Item -LiteralPath '${path.join(task, 'node_modules', 'm.js')}').LastWriteTime = Get-Date`,
-    "$quietDeps = Find-RecentFile $byIntent $since",
-    `(Get-Item -LiteralPath '${path.join(sandbox, 'out.png')}').LastWriteTime = Get-Date`,
-    "$wrote = Find-RecentFile $byIntent $since",
-    "$none = Find-RecentFile @() $since",
-    // Fake processes for the external-device filter: the user's Chrome and its renderer, a headless Chrome's renderer, a test node, claude.
-    "function P($id, $parent, $name, $cl, $sec) { [pscustomobject]@{ ProcessId = $id; ParentProcessId = $parent; Name = $name; CommandLine = $cl; KernelModeTime = 0; UserModeTime = $sec * 1e7 } }",
-    "$procs = @((P 10 1 'chrome.exe' '\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"' 50), (P 11 10 'chrome.exe' 'chrome.exe --type=renderer' 40),",
-    "  (P 20 1 'chrome.exe' 'chrome.exe --headless=new --user-data-dir=C:\\t\\p' 5), (P 21 20 'chrome.exe' 'chrome.exe --type=renderer' 9),",
-    "  (P 40 1 'node.exe' 'node --test test/a.test.ts' 12), (P 50 1 'claude.exe' 'claude' 99))",
-    "$picked = if ($TestProcCode) { . ([scriptblock]::Create($TestProcCode)); @((Select-TestProcesses $procs).Keys | Sort-Object) } else { $null }",
-    '@{ byIntent = $byIntent; byNewest = $byNewest; quiet = $quiet; quietDeps = $quietDeps; wrote = $wrote; none = $none; picked = $picked } | ConvertTo-Json -Depth 4 -Compress',
-  ].join('\n'));
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { encoding: 'utf8' });
-  assert.equal(r.status, 0, r.stderr);
-  const got = JSON.parse(r.stdout);
-  // The task folder named in the session's instruction, else the newest task folder; this workspace's sandbox folders only.
-  assert.deepEqual(got.byIntent, [task, sandbox]);
-  assert.deepEqual(got.byNewest, [task, sandbox]);
-  assert.equal(got.quiet.moved, false);
-  assert.match(got.quiet.text, /바뀐 파일 없음/);
-  assert.equal(got.quietDeps.moved, false, 'node_modules is not looked in');
-  assert.equal(got.wrote.moved, true);
-  assert.match(got.wrote.text, /out\.png/);
-  assert.match(got.none.text, /모름/);
-  // On an external device only the headless Chrome (and its renderer) and the test node: not the user's Chrome or claude.
-  if (devices) assert.deepEqual(got.picked, [20, 21, 40]);
+  assert.match(script, /\$cliArgs = @\('worker-asking', \$WorkerId, \(Get-ClaudeConfigDir\)\)/);
+  assert.match(script, /idle\(대기\): [^\n]*\r?\n\s*if \(\$st\.asks\) \{ Set-AskingFromTranscript \$Id "\$\(\$st\.sessionId\)" \}\r?\n/);
 });

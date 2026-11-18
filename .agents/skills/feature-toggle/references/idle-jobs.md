@@ -1,6 +1,6 @@
 # 쉬는 시간 작업 (`idle-jobs`, 처음부터 켜짐)
 
-예약 작업 'Secretary Idle Jobs (비서 고유 번호)'가 5분마다 `node src/cli.ts idle-jobs`를 돌린다(관리자 권한 필요 없음). 대화가 10분 멈추면 상황판을 미리 고쳐 쓰고, 정리 안 된 대화가 60건 넘고 30분 멈추면 기억 정리를 돌린다. 둘 다 같은 구독의 Haiku로 돌아 그만큼 사용량을 쓴다. 기록: `%USERPROFILE%\.secretary\<비서 고유 번호>\logs\idle-jobs.log`.
+예약 작업 'Secretary Idle Jobs (비서 고유 번호)'가 5분마다 `node src/cli.ts idle-jobs`를 돌린다(관리자 권한 필요 없음). 대화가 10분 멈추면 상황판을 미리 고쳐 쓰고, 정리 안 된 대화가 60건 이상이고 30분 멈추면 기억 정리를 돌린다. 둘 다 같은 구독의 Haiku로 돌아 그만큼 사용량을 쓴다. 기록: `%USERPROFILE%\.secretary\<비서 고유 번호>\logs\idle-jobs.log`.
 
 ## 켜는 순서(설치 때 이미 했으면 건너뜀)
 

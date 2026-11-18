@@ -1,6 +1,6 @@
 /**
  * 비서 DB의 진입점: Store 클래스가 갈래별 파일(기억 memories, 대화 기록 conversation-log, 주요 현안 main-agenda,
- * 공간·업무 workspaces-tasks, meta·사용량 meta-usage)의 함수를 메서드로 묶는다. 바깥은 여기서만 가져다 쓴다.
+ * 공간·업무 workspaces-tasks, meta·사용량 meta-usage, 할 일 값 memory-actions, 캘린더 일정 calendar-events)의 함수를 메서드로 묶는다. 바깥은 여기서만 가져다 쓴다.
  */
 import type { DatabaseSync } from 'node:sqlite';
 import * as mainAgendaDb from './main-agenda.ts';
@@ -14,19 +14,24 @@ import * as titleDb from './user-title.ts';
 import * as workDb from './workspaces-tasks.ts';
 import type { Task, TaskStatus, TaskWithWorkspace, Workspace, WorkspaceKind } from './workspaces-tasks.ts';
 import * as guardDb from './mistake-guards.ts';
+import * as actionDb from './memory-actions.ts';
+import type { ActionInput, LiveAction, MemoryAction } from './memory-actions.ts';
+import * as calendarDb from './calendar-events.ts';
+import type { CalendarEvent } from './calendar-events.ts';
 import type { GuardHit, Mistake, MistakeCause, NewMistake, TurnTools } from './mistake-guards.ts';
 
 export {
   MEMORY_KINDS,
   MemoryRaceError,
   SUMMARY_MIN_MEMORIES,
-  SUMMARY_SKIP_TOPICS,
   normalizeTags,
+  writeMemoryTags,
   type Memory,
   type MemoryKind,
   type NewMemory,
   type Profile,
 } from './memories.ts';
+export { SUMMARY_SPLIT_TOPICS, TOPIC_SPLIT, tagList, topicKey } from './tag-names.ts';
 export { MAIN_AGENDA_CHECK, MAIN_AGENDA_LIMITS, MAIN_AGENDA_STATES, renderMainAgenda, type MainAgenda, type MainAgendaState } from './main-agenda.ts';
 export type { LogEntry, LogRowInfo } from './conversation-log.ts';
 export {
@@ -39,6 +44,26 @@ export {
   type NewMistake,
   type TurnTools,
 } from './mistake-guards.ts';
+export {
+  ACTION_COND_KINDS,
+  ACTION_OWNERS,
+  ACTION_STATES,
+  actionNote,
+  checkCondition,
+  conditionText,
+  dueDate,
+  localToUtc,
+  normalizeDue,
+  parseCondition,
+  type ActionCondKind,
+  type ActionCondition,
+  type ActionInput,
+  type ActionOwner,
+  type ActionState,
+  type LiveAction,
+  type MemoryAction,
+} from './memory-actions.ts';
+export type { CalendarEvent } from './calendar-events.ts';
 export {
   TASK_STATUSES,
   WORKSPACE_KINDS,
@@ -145,6 +170,88 @@ export class Store {
     return memoryDb.sessionMemoryIds(this.db, sessionId);
   }
 
+  // ---- tags (store/memories.ts, the tag tables of migration 21) ----------------
+
+  /** A memory's tags in order (the first its topic). */
+  tagsOf(memoryId: number): string[] {
+    return memoryDb.tagsOf(this.db, memoryId);
+  }
+
+  /** New tags for a memory: indexed again, its vector dropped, off the list still to check. Returns the names kept. */
+  setMemoryTags(memoryId: number, tags: string[]): string[] {
+    return memoryDb.setMemoryTags(this.db, memoryId, tags);
+  }
+
+  /** `alias` read as `canonical` from now on, and on the memories that carry it. Returns the memories changed. */
+  mergeTags(alias: string, canonical: string): number[] {
+    return memoryDb.mergeTags(this.db, alias, canonical);
+  }
+
+  /** Live memories whose tag boundaries the migration split by spaces and no one has checked yet. */
+  tagChecksDue(limit: number): { due: Memory[]; left: number } {
+    return memoryDb.tagChecksDue(this.db, limit);
+  }
+
+  /** Tags written again at the end of a live memory's content taken off (kept as tags); null when it has none. */
+  stripTrailingTags(memoryId: number): { content: string; tags: string[] } | null {
+    return memoryDb.stripTrailingTags(this.db, memoryId);
+  }
+
+  /** Topic summaries unlinked from the conversation rows an old link step tied them to. Returns how many changed. */
+  unlinkSummaries(ids: number[]): number {
+    return memoryDb.unlinkSummaries(this.db, ids);
+  }
+
+  /** Live memories other than topic summaries with their topic tag and kind. */
+  liveTopicTags(): Array<{ id: number; kind: MemoryKind; topic: string }> {
+    return memoryDb.liveTopicTags(this.db);
+  }
+
+  /** Pairs of close memories the consolidation has judged, as "older:newer". */
+  checkedPairs(): Set<string> {
+    return memoryDb.checkedPairs(this.db);
+  }
+
+  recordPairCheck(olderId: number, newerId: number, verdict: string): void {
+    memoryDb.recordPairCheck(this.db, olderId, newerId, verdict);
+  }
+
+  /** The live memories each of these conversation rows gave (source_log_id), by row. */
+  memoriesFromRows(logIds: number[]): Map<number, number[]> {
+    return memoryDb.memoriesFromRows(this.db, logIds);
+  }
+
+  // ---- action values (store/memory-actions.ts) --------------------------------
+
+  /** An action memory's owner, due date, condition and state; only the given fields change (a new row needs its owner). */
+  setAction(memoryId: number, input: ActionInput): MemoryAction {
+    return actionDb.setAction(this.db, memoryId, input);
+  }
+
+  getAction(memoryId: number): MemoryAction | undefined {
+    return actionDb.getAction(this.db, memoryId);
+  }
+
+  /** The board model's "seems done": shown only, the secretary checks and closes the memory. */
+  markActionDone(memoryId: number, logId: number | null): boolean {
+    return actionDb.markActionDone(this.db, memoryId, logId);
+  }
+
+  /** Every live action memory, oldest first, with its row if it has one. */
+  liveActions(): LiveAction[] {
+    return actionDb.liveActions(this.db);
+  }
+
+  // ---- calendar (store/calendar-events.ts) ------------------------------------
+
+  replaceCalendarRange(fromIso: string, toIso: string, events: CalendarEvent[], fetchedAt: string): number {
+    return calendarDb.replaceCalendarRange(this.db, fromIso, toIso, events, fetchedAt);
+  }
+
+  calendarEventsBetween(fromIso: string, toIso: string): CalendarEvent[] {
+    return calendarDb.calendarEventsBetween(this.db, fromIso, toIso);
+  }
+
   // ---- profile (store/memories.ts) -----------------------------------------
 
   getProfile(): Profile | undefined {
@@ -187,11 +294,11 @@ export class Store {
   }
 
   /**
-   * Run after a turn is archived: memories saved during the turn (created after its prompt
-   * and not yet linked) point at that prompt, so their source conversation can be opened later.
+   * Run after a turn is archived: the memories this session saved during the turn (ids from its transcript, created after
+   * its prompt and not yet linked) point at that prompt, so their source conversation can be opened later.
    */
-  linkTurnMemories(sessionId: string): number {
-    return logDb.linkTurnMemories(this.db, sessionId);
+  linkTurnMemories(sessionId: string, ids: number[]): number {
+    return logDb.linkTurnMemories(this.db, sessionId, ids);
   }
 
   /** Log rows of these transcript messages (a recap's derived uuid included), oldest first, without their text. */
@@ -369,6 +476,11 @@ export class Store {
    */
   injectedIds(sessionId: string): Set<number> {
     return metaDb.injectedIds(this.db, sessionId);
+  }
+
+  /** The usage_log id of this session's last /clear or compaction (0: none): what was injected before it is gone. */
+  lastContextReset(sessionId: string): number {
+    return metaDb.lastContextReset(this.db, sessionId);
   }
 
   // ---- mistake guards (store/mistake-guards.ts) -----------------------------------------

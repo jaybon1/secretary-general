@@ -14,9 +14,13 @@ import { hookNoticeText } from '../core/hook-notice-text.ts';
 import type { Store } from '../store/store.ts';
 import { USER_WORD, userWords, wordsGroup } from '../store/user-title.ts';
 import { TAG } from '../core/names.ts';
+import { shownTags } from '../store/tag-names.ts';
 
 /** Auto-injection is stricter than an explicit recall: a wrong memory costs tokens every turn. */
 const AUTO_MIN_SCORE = 0.3;
+
+/** The memory block when the search found nothing new for this question. */
+export const EMPTY_MEMORY_BLOCK = `<${TAG.memory}>새로 붙일 관련 기억 없음(자동 검색, 이 대화에 이미 붙인 기억은 빼고 찾음)</${TAG.memory}>`;
 
 /** Memories cut for budget are listed as id + tags + opening words, so the model can pick which to expand. */
 const DROPPED_LIST_MAX = 10;
@@ -32,7 +36,7 @@ export function droppedLabel(m: { id: number; content: string; tags: string }, u
     .replace(/^(?:\d{4}-\d{2}-\d{2}(?:\s*\d{2}:\d{2})?(?:\s*기준)?(?:에는|에|부터)?[,\s]*)/, '')
     .replace(new RegExp(String.raw`^${wordsGroup(userWords)}(?:님)?(?:은|는|이|가)\s*`), '');
   const chars = Array.from(body);
-  const tags = m.tags ? `[${m.tags}] ` : '';
+  const tags = m.tags ? `[${shownTags(m)}] ` : '';
   return `#${m.id} ${tags}${chars.slice(0, DROPPED_LABEL_CHARS).join('')}${chars.length > DROPPED_LABEL_CHARS ? '…' : ''}`;
 }
 
@@ -86,7 +90,9 @@ export async function promptContext(
   ]
     .filter(Boolean)
     .join('\n');
-  if (result.items.length === 0) return notice;
+  // Nothing to inject still comes as an empty block: a block with no memories means none is relevant, while no block at all
+  // means the hook did not run here (another CLI, or a failure), and the secretary calls recall itself (AGENTS.md).
+  if (result.items.length === 0) return [notice, EMPTY_MEMORY_BLOCK].filter(Boolean).join('\n');
   const more = result.droppedForBudget > 0 ? ` 예산 초과로 ${result.droppedForBudget}개 생략됨(아래 목록, 필요한 것만 recall의 ids로 조회).` : '';
   const listed = result.dropped.slice(0, DROPPED_LIST_MAX).map((s) => s.memory);
   const words = userWords(store.db);

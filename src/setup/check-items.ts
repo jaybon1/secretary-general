@@ -7,8 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { baseTaskNames, disabledItems, FEATURES_FILE, featuresProblem } from '../core/features.ts';
 import { readSecretaryId, taskNameWith } from '../core/secretary-id.ts';
-import { ENTRY_DIR, ENTRY_POINTS, entryPath, LEGACY_SECRETARY_DIR_ENV, SECRETARY_DIR_ENV_TEXT, secretaryDirEnv, scriptPath, SCRIPTS, type EntryName } from '../core/paths.ts';
-import { CLAUDE_SKILLS_DIR, OLD_SKILLS_DIR, skillLayout, skillLinkProblems, SKILLS_DIR } from './skill-links.ts';
+import { ENTRY_DIR, ENTRY_POINTS, entryPath, SECRETARY_DIR_ENV_TEXT, secretaryDirEnv, scriptPath, SCRIPTS, type EntryName } from '../core/paths.ts';
+import { CLAUDE_SKILLS_DIR, skillLayout, skillLinkProblems, SKILLS_DIR } from '../workspace/skill-links.ts';
 import { formatFeatureSkills, OFF_SKILLS_DIR, planFeatureSkills } from './feature-skills.ts';
 import { disabled as semanticSearchOff, MODEL_FILES } from '../semantic-search/client.ts';
 import type { Check, Ctx, Outcome, Proc, SetupOptions } from './setup-check.ts';
@@ -17,22 +17,21 @@ import { hookKind, ownerOf } from './other-secretaries.ts';
 import { missingReleaseFiles, readReleaseFiles, RELEASE_FILES } from './release-files.ts';
 import { commonSkillsDirOf, LINK_FILE, linkedFolders, linkProblems } from '../workspace/secretary-link.ts';
 import { formatSpecProblems, skillsDirProblems } from './skill-spec.ts';
-import { commonSkillProblem } from '../workspace/common-skills.ts';
-import { formatFolderPlan, planAuxFolders } from '../workspace/aux-folders.ts';
+import { commonSkillProblem, shippedCommonSkillProblem } from '../workspace/common-skills.ts';
+import { formatFolderPlan, planAuxFolders } from './aux-folders.ts';
 import { isClaudeCode, providersWithoutPersonalData } from './provider-personal-data.ts';
 import { readNotifySettings } from '../phone-push/ntfy.ts';
 import { CHECK, CLI, FEATURE, TASK } from '../core/names.ts';
-import { leftoverRenamedFiles } from '../core/local-settings.ts';
 import { parseTailscaleStatus, readTailscaleStatus } from '../core/tailscale.ts';
-import { ALL_SECRETARIES_EXAMPLE, ALL_SECRETARIES_FILE, hasThisSecretary, leftoverThisSecretaryFiles, readThisSecretary, THIS_SECRETARY_FILE } from '../core/this-secretary.ts';
+import { ALL_SECRETARIES_EXAMPLE, ALL_SECRETARIES_FILE, hasThisSecretary, readThisSecretary, THIS_SECRETARY_FILE } from '../core/this-secretary.ts';
 
 const ok: Outcome = { status: 'ok' };
 const missingOf = (names: string[]): Outcome => (names.length ? { status: 'missing', detail: names.join(', ') } : ok);
 
 /**
  * Scheduled task names: the name in features.json (install-scheduled-tasks.ps1 reads the same file) with the checked copy's
- * secretary id after it (core/secretary-id.ts), e.g. 'Secretary Idle Jobs (A3F9)'. The name alone is the old name tasks
- * had before the id. This copy's features.json stands in when the checked copy's can't be read.
+ * secretary id after it (core/secretary-id.ts), e.g. 'Secretary Idle Jobs (A3F9)'. This copy's features.json stands in
+ * when the checked copy's can't be read.
  */
 const BASE_NAMES = baseTaskNames();
 const baseName = (o: SetupOptions, id: string): string | undefined => baseTaskNames(o.root)[id] ?? BASE_NAMES[id];
@@ -46,11 +45,10 @@ const taskName = (o: SetupOptions, id: string): string | undefined => {
   const base = baseName(o, id);
   return base && taskNameWith(base, readSecretaryId(o.root));
 };
-/** The probe asks for the task and its old name (to move from); the item reads both answers. */
+/** The probe asks for the task by its name. */
 const taskProbe = (id: string) => (o: SetupOptions) => {
   const name = taskName(o, id);
-  const old = baseName(o, id);
-  return { tasks: name ? [...new Set([name, old!])] : [] };
+  return { tasks: name ? [name] : [] };
 };
 
 const scriptCmd = (id: string) => `\`${SCRIPTS.installScheduledTasks} -Task ${id}\`${id === TASK.server ? '(관리자 PowerShell에서)' : ''}`;
@@ -60,20 +58,10 @@ const otherTaskFix = (name: string, folder: string, id: string) =>
   `이 비서의 이름(번호 포함)인 예약 작업 '${name}'이 이 PC의 다른 비서(${folder})의 파일을 부른다. 다시 등록하면 그 비서가 쓰던 작업을 이 비서로 바꾸게 되므로(\`${SCRIPTS.installScheduledTasks}\`도 건너뛴다) 사용자에게 묻는다. ` +
   `이 비서로 가져오기로 하면 ${scriptCmd(id)}에 \`-TakeOver\`를 붙여 돌리고, 그대로 두면 \`node src/cli.ts ${CLI.setupCheck} --skip ${id}-task\`로 빼 둔다`;
 
-/** Moving this copy's task from its old name (no id) to the new one: install-scheduled-tasks.ps1 registers the new and removes the old. */
-const moveFix = (id: string, name: string, old: string) =>
-  `예약 작업 이름에 이 비서의 고유 번호가 붙게 바뀌었다('${old}' → '${name}'). ${scriptCmd(id)}가 새 이름으로 등록하고 이 비서의 옛 이름 작업을 지운다(옛 작업의 실행 시각·간격과 사용 안 함 상태를 이어받는다). ` +
-  `이 PC의 다른 비서가 같은 옛 이름을 쓰면 그 작업은 그 비서 것이라 건드리지 않는다`;
-
 function taskOutcome(c: Ctx, id: string): Outcome {
   const name = taskName(c.o, id);
   if (!name) return { status: 'unknown', detail: `${FEATURES_FILE}에 작업 이름이 없음` };
   const registered = c.probe?.tasks[name];
-  // The same task under its old name (before the secretary id): this copy's (to move) only when it runs this copy's files
-  // or an old path of this copy; another secretary's keeps its name, and one that can't be told is left alone too.
-  const old = baseName(c.o, id)!; // legacy-name: task-name-no-id
-  const oldFile = old !== name && c.probe?.tasks[old] === true ? c.probe?.taskFiles?.[old] : null;
-  const oldMine = !!oldFile && ownerOf(oldFile, c.o.root).whose !== 'other';
   if (registered === true) {
     const file = c.probe?.taskFiles?.[name];
     if (file) {
@@ -89,14 +77,9 @@ function taskOutcome(c: Ctx, id: string): Outcome {
       // This copy's left-behind copy (same secretary id): re-register here.
       if (owner.copy) return { status: 'missing', detail: `이 비서의 옛 사본(같은 고유 번호)을 부름: ${file}` };
     }
-    // Both names: the old task still runs alongside the new one.
-    if (oldMine) return { status: 'missing', detail: `옛 이름 '${old}' 작업도 남아 있음: ${oldFile}`, fix: moveFix(id, name, old) };
     return ok;
   }
-  if (registered === false) {
-    if (oldMine) return { status: 'missing', detail: `옛 이름 '${old}'으로 등록됨${fs.existsSync(oldFile!) ? '' : '(가리키는 파일 없음)'}: ${oldFile}`, fix: moveFix(id, name, old) };
-    return { status: 'missing' };
-  }
+  if (registered === false) return { status: 'missing' };
   return { status: 'unknown', detail: '예약 작업 조회 실패' };
 }
 
@@ -197,32 +180,21 @@ const OTHER_GONE_FIX =
 /** The command that registers this copy's folder variable (from the secretary folder; no administrator needed). */
 const setDirCmd = (name: string) => `\`[Environment]::SetEnvironmentVariable('${name}', (Get-Location).Path, 'User')\``;
 
-/**
- * The secretary-dir item's fix: register this copy's own variable SECRETARY_<id>_DIR. The old SECRETARY_DIR (one per
- * user, before secretary ids) is not removed here: tools outside may still read it until they are moved to the new name.
- */
-const dirFix = (name: string, legacy: string | null | undefined, root: string) =>
+/** The secretary-dir item's fix: register this copy's own variable SECRETARY_<id>_DIR. */
+const dirFix = (name: string) =>
   `비서 폴더의 PowerShell에서 ${setDirCmd(name)} 한 번(관리자 권한 필요 없음, 그 뒤 새로 띄운 프로그램부터 보인다. 비서 폴더를 옮겼으면 새 위치에서 다시). ` +
-  `비서 폴더 밖 도구(작업 공간 도구 등)는 이 값에 \`${ENTRY_DIR}\\<이름>\`을 붙여 이 비서의 스크립트를 부른다. 이름에 이 비서의 고유 번호가 들어 있어 한 PC의 비서마다 따로다` +
-  (legacy && samePath(legacy, root)
-    ? `. 옛 이름 \`${LEGACY_SECRETARY_DIR_ENV}\`도 이 비서를 가리킨다: 그 이름을 읽는 바깥 도구를 새 이름으로 옮긴 뒤(사용자에게 목록을 보여 주고) 지운다`
-    : '');
+  `비서 폴더 밖 도구(작업 공간 도구 등)는 이 값에 \`${ENTRY_DIR}\\<이름>\`을 붙여 이 비서의 스크립트를 부른다. 이름에 이 비서의 고유 번호가 들어 있어 한 PC의 비서마다 따로다`;
 
 /** The skills item's fix: one command makes or mends the layout (no administrator needed). */
 const SKILL_LINK_FIX =
   `비서 폴더에서 \`node src/cli.ts ${CLI.skillLinks}\` (먼저 보기만: \`--dry-run\`). 스킬 원본은 \`${SKILLS_DIR}/<이름>/\`(Codex·Antigravity가 읽는 곳)에 실제 폴더로 두고, Claude Code가 읽는 \`${CLAUDE_SKILLS_DIR}\`은 그곳을 가리키는 링크(Windows 디렉터리 정션, 관리자 권한 필요 없음) 하나만 둔다. ` +
-  `옛 구조(\`${OLD_SKILLS_DIR}/<이름>/\`과 스킬마다의 링크)도 이 명령이 옮긴다. 선택 기능의 스킬은 그 기능이 켜져 있으면 \`${SKILLS_DIR}/<이름>/\`, 꺼져 있으면 \`${OFF_SKILLS_DIR}/<이름>/\`(어느 CLI도 읽지 않는 곳)에 두고, 이 명령이 \`features.json\`대로 폴더째 옮긴다(두 곳에 다 있으면 옮기지 않으니 비교해 사용자에게 묻는다). 링크(정션)는 git·배포판에 들어가지 않아 받은 저장소·새 설치·폴더를 옮긴 뒤에는 다시 만든다. 없으면 업무 위임·정리 같은 스킬이 안 읽힌다`;
+  `선택 기능의 스킬은 그 기능이 켜져 있으면 \`${SKILLS_DIR}/<이름>/\`, 꺼져 있으면 \`${OFF_SKILLS_DIR}/<이름>/\`(어느 CLI도 읽지 않는 곳)에 두고, 이 명령이 \`features.json\`대로 폴더째 옮긴다(두 곳에 다 있으면 옮기지 않으니 비교해 사용자에게 묻는다). 링크(정션)는 git·배포판에 들어가지 않아 받은 저장소·새 설치·폴더를 옮긴 뒤에는 다시 만든다. 없으면 업무 위임·정리 같은 스킬이 안 읽힌다`;
 /** A real folder that meets another of the same name: the command leaves it; what to do is the user's call. */
 const REAL_SKILL_FIX =
   `같은 이름이 이미 있어 옮기지 못한 실제 폴더는 명령이 지우거나 합치지 않는다. \`${SKILLS_DIR}/<이름>\`과 비교해 사용자에게 보여 주고 묻는다: 고친 내용을 \`${SKILLS_DIR}/<이름>\`에 옮기고 그 폴더를 지울지(다른 이름의 사용자 스킬이면 \`${SKILLS_DIR}/<새 이름>\`으로 옮길지). 정리한 뒤 \`node src/cli.ts ${CLI.skillLinks}\`를 다시 돌린다`;
 /** A skill against the format (setup/skill-spec.ts): no command fixes it, the secretary fixes the skill directly. */
 const SPEC_FIX =
   '스킬 사양(agentskills.io): SKILL.md 머리말(`---`)의 name은 폴더 이름과 같게(소문자·숫자·하이픈), description은 무엇을·언제(1024자 안), SKILL.md는 500줄 미만, 옆에는 scripts/(코드)·references/(참고 문서)·assets/(템플릿·설정·데이터)만 둔다(맨 위의 참고 파일은 references/로 옮기고 SKILL.md의 경로를 고친다). 공간 스킬 이름은 common-으로 시작하지 않는다(공통 스킬 링크 이름과 겹친다). 사양 밖 머리말(`---`) 키를 일부러 두는 스킬은 src/setup/skill-spec.ts의 SPEC_KEY_EXCEPTIONS 한 곳에 이유와 함께 적는다';
-
-/** Separate settings files left beside this-secretary.local.json (core/this-secretary.ts): what the secretary does. */
-const THIS_SECRETARY_MERGE_FIX =
-  `git 밖 설정은 2026-11-10부터 기능별 키로 비서 폴더 맨 위 \`${THIS_SECRETARY_FILE}\`(이 비서 것)과 \`~/.secretary/${ALL_SECRETARIES_FILE}\`(한 PC의 비서들이 같이 쓰는 것)에서 읽고, 따로 있던 \`scripts/*.local.json\`은 읽지 않는다. 비서 폴더에서 \`node src/cli.ts ${CLI.thisSecretaryMerge} --dry-run\`으로 먼저 보고 \`node src/cli.ts ${CLI.thisSecretaryMerge}\`로 옮긴다(옛 파일은 지우지 않고 \`backups/this-secretary-merge/\`로 옮김). ` +
-  `"그대로 둠"으로 남은 파일은 그 키에 이미 다른 값이 있거나, JSON이 아니거나, 기기의 Tailscale 이름을 못 찾은 것(tailscale status에 그 주소가 없음): 비서가 두 값을 비교해 사용자에게 보여 주고, 고를 값을 사용자가 정한 뒤에 그 키를 고치고 옛 파일을 옮긴다(이 명령은 있는 값을 덮어쓰지 않는다). 그 전에는 옛 파일의 값이 읽히지 않는다(그 기능은 설정이 없는 것처럼 돈다), 서버 동반 프로그램처럼 서버가 켤 때 읽는 값은 옮긴 뒤 서버를 다시 켜야 적용된다`;
 
 /** The model files the first automatic download leaves; it skips special_tokens_map.json, which loading does not need. */
 export const LOADED_MODEL_FILES = MODEL_FILES.filter((f) => f !== 'special_tokens_map.json');
@@ -255,7 +227,7 @@ export const CHECKS: Check[] = [
   {
     id: CHECK.semanticSearchModel,
     label: '의미 검색 모델 파일',
-    fix: '처음 쓰는 PC면 정상: 첫 질문 때 의미 검색 서버가 `models/`에 자동으로 받는다(약 570MB, 1분 남짓, 그동안은 단어 검색만). 받은 뒤에도 그대로면 인터넷 연결을 확인하고 `node scripts/semantic-search/watch-semantic-search-server.mjs --retry`로 다시 띄운다(README "의미 검색")',
+    fix: '처음 쓰는 PC면 정상: 첫 질문 때 의미 검색 서버가 `models/`에 자동으로 받는다(약 570MB, 1분 남짓, 그동안 질문은 받기가 끝나기를 기다린다). 받은 뒤에도 그대로면 인터넷 연결을 확인하고 `node scripts/semantic-search/watch-semantic-search-server.mjs --retry`로 다시 띄운다(README "의미 검색")',
     applies: () => !semanticSearchOff(),
     run: ({ o }) => missingOf(LOADED_MODEL_FILES.filter((f) => !fs.existsSync(path.join(o.modelPath, f)))),
   },
@@ -266,6 +238,9 @@ export const CHECKS: Check[] = [
     run: ({ o }) => {
       const layout = skillLayout(o.root);
       const problems = skillLinkProblems(layout);
+      // A general release's own common skills first: the folder's links to them need them in _skills.
+      const shipped = shippedCommonSkillProblem(o.root, commonSkillsDirOf(o.root));
+      if (shipped) problems.push(shipped);
       const common = commonSkillProblem(o.root, commonSkillsDirOf(o.root));
       if (common) problems.push(common);
       // An optional feature's skill in the place of the other state (on: .agents/skills, off: .agents/skills-off).
@@ -303,40 +278,19 @@ export const CHECKS: Check[] = [
     },
   },
   {
-    id: CHECK.renamedLocalFiles,
-    label: '이름이 바뀐 이 PC 파일(옛 이름 파일이 남음)',
-    fix: '새 이름 파일이 먼저 생겨 옛 이름 파일을 옮기지 않고 그대로 둔 것이다(지금은 새 이름 파일만 읽힌다). 비서가 두 파일을 비교해 사용자에게 보여 주고, 옛 파일에만 있는 값이 있으면 새 파일에 옮길지 묻는다. 옛 파일은 사용자가 정한 뒤에 지운다',
-    run: ({ o }) => {
-      const renamed = leftoverRenamedFiles(o.root, o.dbPath).map(([from, to]) => `${from} (새 이름 ${path.basename(to)} 있음)`);
-      // The separate settings files this-secretary.local.json took over (2026-11-10): not read any more until merged.
-      const merge = leftoverThisSecretaryFiles(o.root).map((f) => `${f} (${THIS_SECRETARY_FILE}에 아직 안 옮김)`);
-      const out = missingOf([...renamed, ...merge]);
-      return merge.length ? { ...out, fix: THIS_SECRETARY_MERGE_FIX } : out;
-    },
-  },
-  {
     id: CHECK.secretaryDirEnv,
     label: `비서 폴더 환경변수(${SECRETARY_DIR_ENV_TEXT})`,
     fix: `비서 폴더의 PowerShell에서 ${setDirCmd(SECRETARY_DIR_ENV_TEXT)} 한 번(번호는 비서 폴더 \`.secretary-id\`, 관리자 권한 필요 없음). 비서 폴더 밖 도구는 이 값에 \`${ENTRY_DIR}\\<이름>\`을 붙여 비서 스크립트를 부른다`,
     windows: true,
-    // This copy's own variable (its secretary id in the name) and the old one without the id, read while tools move on.
-    probe: (o) => ({ env: [...new Set([secretaryDirEnv(readSecretaryId(o.root)), LEGACY_SECRETARY_DIR_ENV])] }),
+    // This copy's own variable (its secretary id in the name).
+    probe: (o) => ({ env: [secretaryDirEnv(readSecretaryId(o.root))] }),
     run: ({ o, probe }) => {
       const name = secretaryDirEnv(readSecretaryId(o.root));
       const value = probe?.env?.[name];
-      const legacy = probe?.env?.[LEGACY_SECRETARY_DIR_ENV]; // legacy-name: env-secretary-dir
-      const fix = dirFix(name, legacy, o.root);
+      const fix = dirFix(name);
       if (value === undefined || value === null) return { status: 'unknown', detail: '환경변수 조회 실패' };
-      if (!value) {
-        const old = legacy && samePath(legacy, o.root) ? `, 옛 이름 ${LEGACY_SECRETARY_DIR_ENV}만 이 비서를 가리킴` : '';
-        return { status: 'missing', detail: `${name} 등록 안 됨${old}`, fix };
-      }
-      if (samePath(value, o.root)) {
-        // Done; the old name still pointing here is only a note (its readers move first).
-        return legacy && samePath(legacy, o.root) && name !== LEGACY_SECRETARY_DIR_ENV
-          ? { status: 'ok', detail: `옛 이름 ${LEGACY_SECRETARY_DIR_ENV}도 이 비서를 가리킴(그 이름을 읽는 바깥 도구를 ${name}으로 옮긴 뒤 지운다)` }
-          : ok;
-      }
+      if (!value) return { status: 'missing', detail: `${name} 등록 안 됨`, fix };
+      if (samePath(value, o.root)) return ok;
       const owner = ownerOf(value, o.root);
       if (owner.copy) return { status: 'missing', detail: `${name}이 이 비서의 옛 사본(같은 고유 번호)을 가리킴: ${value}`, fix };
       return { status: 'missing', detail: `${name}이 다른 폴더를 가리킴: ${value}`, fix };
@@ -345,7 +299,7 @@ export const CHECKS: Check[] = [
   {
     id: CHECK.workspaceLinks,
     label: `작업 공간의 비서 위치 파일(${LINK_FILE})과 공통 스킬 링크`,
-    fix: `비서 폴더에서 \`node src/cli.ts ${CLI.workspaceLinks}\` (공간마다 맨 위 \`${LINK_FILE}\`에 이 비서의 진입점 폴더(bin)와 번호를 쓰고 \`.gitignore\`에 넣는다. 스킬 위치도 비서 폴더와 같게 맞춘다: 스킬 원본은 \`.agents/skills/<이름>/\`, \`.claude/skills\`는 그곳을 가리키는 링크(정션) 하나, 옛 \`skills/\`는 옮긴다. 공간의 \`common-skills.json\`에 적힌 공통 스킬(\`workspaces/_skills/common-<이름>\`, 목록에도 \`common-\`까지 적는다)은 \`.agents/skills/common-<이름>\` 링크(정션)와 Antigravity용 \`.agents/skills.json\`으로 붙인다(옛 형식 목록과 옛 이름 폴더도 이 명령이 옮긴다). 먼저 보기만: \`--dry-run\`). 공간 도구는 이 파일로 비서 진입점을 찾고, 없으면 환경변수를 본다. "공통 스킬 없음"은 목록의 이름을 고치거나 _skills에 그 스킬을 만든다. "스킬 사양과 다름"은 명령이 고치지 않는다: ${SPEC_FIX}`,
+    fix: `비서 폴더에서 \`node src/cli.ts ${CLI.workspaceLinks}\` (공간마다 맨 위 \`${LINK_FILE}\`에 이 비서의 진입점 폴더(bin)와 번호를 쓰고 \`.gitignore\`에 넣는다. 스킬 위치도 비서 폴더와 같게 맞춘다: 스킬 원본은 \`.agents/skills/<이름>/\`, \`.claude/skills\`는 그곳을 가리키는 링크(정션) 하나다. 공간의 \`common-skills.json\`에 적힌 공통 스킬(\`workspaces/_skills/common-<이름>\`, 목록에도 \`common-\`까지 적는다)은 \`.agents/skills/common-<이름>\` 링크(정션)와 Antigravity용 \`.agents/skills.json\`으로 붙인다. 먼저 보기만: \`--dry-run\`). 공간 도구는 이 파일로 비서 진입점을 찾고, 없으면 환경변수를 본다. "공통 스킬 없음"은 목록의 이름을 고치거나 _skills에 그 스킬을 만든다. "스킬 사양과 다름"은 명령이 고치지 않는다: ${SPEC_FIX}`,
     // The database's workspaces and run-job's home; a fresh install without workspaces has nothing to look at.
     run: ({ o }) => {
       const bad = linkProblems(o.dbPath, o.root).map((b) => `${path.basename(b.folder)}: ${b.problem}`);
@@ -359,10 +313,10 @@ export const CHECKS: Check[] = [
   },
   {
     id: CHECK.workspaceAuxFolders,
-    label: '작업 공간 옆 보조 폴더(_run-job-home, _archived, 담당자 폴더 _staff/<담당자>)',
-    fix: `비서 폴더에서 \`node src/cli.ts ${CLI.workspaceAuxFolders}\` (먼저 보기만: \`--dry-run\`). 옛 이름 \`run-job-home\`·\`old\`·\`_old\`를 새 이름(\`_run-job-home\`·\`_archived\`)으로 옮기고(옛 이름 링크는 남기지 않는다), DB에 \`old\\\`·\`_old\\\` 아래로 적힌 보관 공간의 폴더를 \`_archived\\\`로 고치고, 옛 담당자 폴더 \`_consolidate\`·\`_board\`와 \`_workers/<담당자>\`를 \`_staff/memory-consolidation\`·\`_staff/situation-board\`로 옮기고(실행 기록은 그대로, 새 폴더가 이미 있으면 실행 기록을 이어 붙여 합친다. 빈 \`_workers\`는 지운다), 담당자 폴더(\`_staff/<담당자>\`, 역할 AGENTS.md)를 만들고, run-job 기본 폴더 \`_run-job-home\`이 없으면 규칙(AGENTS.md)과 함께 만든다(있는 파일은 고치지 않는다). 옮기다 실패하면(그 폴더를 쓰는 중) 그 일을 끝낸 뒤 다시 돌린다. "둘 다 있음"은 명령이 합치지 않으니 두 폴더를 비교해 사용자에게 묻는다. \`_run-job-home\`이 없으면 run-job이 \`-Folder\` 없이는 멈춘다. 담당자 폴더는 없어도 담당자가 돌 때 만든다`,
+    label: '작업 공간 옆 보조 폴더(_run-job-home, 담당자 폴더 _staff/<담당자>)',
+    fix: `비서 폴더에서 \`node src/cli.ts ${CLI.workspaceAuxFolders}\` (먼저 보기만: \`--dry-run\`). 담당자 폴더(\`_staff/<담당자>\`, 역할 AGENTS.md)를 만들고, run-job 기본 폴더 \`_run-job-home\`이 없으면 규칙(AGENTS.md)과 함께 만든다(있는 파일은 고치지 않는다). \`_run-job-home\`이 없으면 run-job이 \`-Folder\` 없이는 멈춘다. 담당자 폴더는 없어도 담당자가 돌 때 만든다`,
     run: ({ o }) => {
-      const lines = formatFolderPlan(planAuxFolders(o.root, o.dbPath));
+      const lines = formatFolderPlan(planAuxFolders(o.root));
       return lines.length ? { status: 'missing', detail: lines.join(', ') } : ok;
     },
   },

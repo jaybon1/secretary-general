@@ -2,14 +2,20 @@
  * The open questions the secretary asked (label + text, kept in meta), carried across secretary sessions:
  * read from each answer by the Stop hook, relabelled A, B, … for a new session. The pointers to the previous
  * session are in situation-board-notice.ts, the running tasks in workspace/watch-check.ts.
+ *
+ * Also the question labels per session (once their own file): the next free label is counted here so the secretary never
+ * has to. A new session (or /clear, which starts one) begins after the open questions it carried over, relabelled A, B, …
+ * (carryOverQuestions); a compaction keeps the session, so labels go on where they were. The Stop hook reads the
+ * "X. …?" question lines (also "X(note). …?") of each turn's text; the prompt hook says the next label, after every
+ * label the session asked with.
  */
-import type { Store } from '../store/store.ts';
-import { startLabelsAfter } from '../mistake-guards/question-labels.ts';
+import type { Store } from './store.ts';
+import { atomic } from './schema.ts';
+import { TAG } from '../core/names.ts';
 
 const META_KEY = 'open_questions';
 /** Questions nobody returned to within this long are dropped. */
 const EXPIRE_MS = 7 * 24 * 3600 * 1000;
-const QUESTION_CHARS = 400;
 interface QuestionDef {
   text: string;
   session: string;
@@ -18,6 +24,8 @@ interface QuestionDef {
   logId?: number;
   /** Labels it had in earlier sessions, oldest first. */
   formerly?: string[];
+  /** Its short name as the closing step last gave it ("AA(할 일 고치는 기억 도구)"): the to-do summary shows it. */
+  name?: string;
 }
 /**
  * Why a question left the open list (fix C12 of the 2026-11-13 source review, after gbrain's open loops that close "by
@@ -40,7 +48,7 @@ interface OpenState {
   lastLogId: number;
   open: string[];
   defs: Record<string, QuestionDef>;
-  /** Questions closed within EXPIRE_MS, by the label they had then: the board's question lines are marked from these. */
+  /** Questions closed within EXPIRE_MS, by the label they had then, with why and the row that shows it. */
   closed?: Record<string, ClosedQuestion>;
 }
 
@@ -73,7 +81,11 @@ export function labelAt(i: number): string {
   return i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26));
 }
 
-/** Labeled questions ("A. …?" plus its option lines) defined in one assistant message. */
+/**
+ * Labeled questions defined in one assistant message: the "A. …?" line and the lines under it up to a blank line (its
+ * "> 비서 판단:" line, options and basis lines), joined, whole. The block ends at the blank line, so its length is the
+ * one paragraph's: no cap, so the carried question keeps every option.
+ */
 export function parseQuestions(text: string): Record<string, string> {
   const lines = text.split('\n');
   const found: Record<string, string> = {};
@@ -83,7 +95,7 @@ export function parseQuestions(text: string): Record<string, string> {
     const block = [lines[i]];
     for (let j = i + 1; j < lines.length && lines[j].trim() && !LABEL_LINE.test(lines[j]) && !REMAINING_LINE.test(lines[j]); j++) block.push(lines[j]);
     const joined = block.map((l) => l.trim()).join(' ').replace(/\*\*/g, '');
-    if (joined.includes('?')) found[m[1]] = joined.slice(0, QUESTION_CHARS);
+    if (joined.includes('?')) found[m[1]] = joined;
   }
   return found;
 }
@@ -108,6 +120,34 @@ export function parseRemaining(text: string): string[] | null {
   return labels;
 }
 
+/**
+ * The short names the remaining-questions line gives its labels: "AA(할 일 고치는 기억 도구), AB" → { AA: '할 일 고치는 기억
+ * 도구' }. A label without a note in brackets has none. Commas inside a note ("A(옛 G, #1234)") stay in it.
+ */
+export function parseRemainingNames(text: string): Record<string, string> {
+  const m = REMAINING_LINE.exec(text);
+  if (!m) return {};
+  const items: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of m[1]) {
+    if (ch === '(' || ch === '（') depth++;
+    else if ((ch === ')' || ch === '）') && depth > 0) depth--;
+    if (depth === 0 && /[,，、·;]/.test(ch)) {
+      items.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  items.push(cur);
+  const names: Record<string, string> = {};
+  for (const item of items) {
+    const x = /^\**([A-Z]{1,2})\**\s*[(（](.+)[)）]\**\s*$/.exec(item.trim().replace(/^[^A-Z:：(（]*[:：]\s*/, '').replace(/^[\s*]+/, ''));
+    // Not the carried label's origin ("A(옛 G, #1234)"), which says where it came from, not what it asks.
+    if (x && x[2].trim() && !/^옛\s*[A-Z]{1,2}\s*(?:[,，]\s*#\d+)?$|^#\d+$/.test(x[2].trim())) names[x[1]] = x[2].trim();
+  }
+  return names;
+}
+
 /** Labels the user picked an option for ("c1", "A2 B1"); a bare "e - …" is discussion, not an answer. */
 export function parseAnswers(text: string): string[] {
   return [...text.matchAll(/(?<![A-Za-z])([A-Za-z]{1,2})(\d{1,2})(?![\dA-Za-z])/g)].map((x) => x[1].toUpperCase());
@@ -117,8 +157,16 @@ function readState(store: Store): OpenState {
   return store.getJson<OpenState>(META_KEY) ?? { lastLogId: 0, open: [], defs: {} };
 }
 
-/** Stop hook: fold the session's latest assistant message into the open-question list (`now`: the evaluation set replays old talk). */
+/**
+ * Stop hook: fold the session's latest assistant message into the open-question list (`now`: the evaluation set replays old talk).
+ * Read and written in one transaction: two Stop hooks at once (two secretaries, a session and its handoff) would each
+ * read the old list and the later write would drop the other's new labels.
+ */
 export function updateOpenQuestions(store: Store, sessionId: string, now = Date.now()): void {
+  atomic(store.db, () => updateInTx(store, sessionId, now));
+}
+
+function updateInTx(store: Store, sessionId: string, now: number): void {
   const [last] = store.sessionTail(sessionId, 1, 'assistant');
   const state = readState(store);
   if (!last || last.id <= state.lastLogId) return;
@@ -149,6 +197,8 @@ export function updateOpenQuestions(store: Store, sessionId: string, now = Date.
     else close(l, 'not-in-list', last.id);
   }
   for (const [label, text] of Object.entries(defs)) state.defs[label] = { text, session: sessionId, at: last.created_at, logId: last.id };
+  // The closing step's names for its labels (asked now or before): the latest one is kept.
+  for (const [label, name] of Object.entries(parseRemainingNames(last.content))) if (state.defs[label]) state.defs[label] = { ...state.defs[label], name };
   const cutoff = now - EXPIRE_MS;
   for (const l of open) if (state.defs[l] && Date.parse(state.defs[l].at) < cutoff) close(l, 'expired');
   open = open.filter((l) => !state.defs[l] || Date.parse(state.defs[l].at) >= cutoff);
@@ -162,6 +212,10 @@ export function updateOpenQuestions(store: Store, sessionId: string, now = Date.
  * them leave the list (their text came from those rows). Returns their labels; dryRun only reports.
  */
 export function dropQuestionsFrom(store: Store, logIds: number[], dryRun = false): string[] {
+  return atomic(store.db, () => dropInTx(store, logIds, dryRun));
+}
+
+function dropInTx(store: Store, logIds: number[], dryRun: boolean): string[] {
   const state = store.getJson<OpenState>(META_KEY);
   if (!state) return [];
   const gone = new Set(logIds);
@@ -177,7 +231,7 @@ export function dropQuestionsFrom(store: Store, logIds: number[], dryRun = false
   return dropped;
 }
 
-/** What the open-question list knows about the board's question lines (situation-board.ts markClosedQuestions). */
+/** What the open-question list knows now: whether a label (or the row that asked) is still open (todo-summary/conditions.ts). */
 export interface QuestionKeys {
   /** The open labels with the labels they had in earlier sessions. */
   labels: Set<string>;
@@ -185,6 +239,12 @@ export interface QuestionKeys {
   closed: Map<string, ClosedQuestion>;
   /** How many questions are open now. */
   openCount: number;
+  /** The log rows that asked the open questions (a question's lasting id across relabels). */
+  askedAt: Set<number>;
+  /** Questions closed in the last EXPIRE_MS, by the log row that asked them (one row may ask several), each with its label when closed. */
+  closedByAsked: Map<number, Array<ClosedQuestion & { label: string }>>;
+  /** The open questions' labels (with their earlier ones), by the log row that asked them. */
+  openByAsked: Map<number, string[]>;
 }
 
 /**
@@ -195,18 +255,67 @@ export function openQuestionKeys(store: Store): QuestionKeys | undefined {
   const state = store.getJson<OpenState>(META_KEY);
   if (!state) return undefined;
   const labels = new Set<string>();
+  const askedAt = new Set<number>();
+  const openByAsked = new Map<number, string[]>();
   for (const l of state.open) {
     labels.add(l);
     const def = state.defs[l];
+    if (def?.logId) {
+      askedAt.add(def.logId);
+      openByAsked.set(def.logId, [...(openByAsked.get(def.logId) ?? []), l, ...(def.formerly ?? [])]);
+    }
     for (const old of def?.formerly ?? []) labels.add(old);
   }
   const closed = new Map<string, ClosedQuestion>();
+  const closedByAsked = new Map<number, Array<ClosedQuestion & { label: string }>>();
   for (const [l, c] of Object.entries(keepClosed(state.closed, state.open, -Infinity))) {
     // The label it had when closed counts over an earlier label another question may have had.
     for (const old of c.formerly ?? []) if (!closed.has(old)) closed.set(old, c);
     closed.set(l, c);
+    if (c.logId) closedByAsked.set(c.logId, [...(closedByAsked.get(c.logId) ?? []), { ...c, label: l }]);
   }
-  return { labels, closed, openCount: state.open.length };
+  return { labels, closed, openCount: state.open.length, askedAt, closedByAsked, openByAsked };
+}
+
+/**
+ * A "question answered" condition kept by the row that asked the question (the user's call, 2026-11-18): a label
+ * ("B") is relabelled in the next session and may then name another question, the asking row never changes. A label the
+ * open list knows (open now, or closed lately, by its label then or an earlier one) becomes "<row>:<label>" (one row may
+ * ask several); one it does not know stays as given. Other conditions come back as they are.
+ */
+export function resolveQuestionCondition<C extends { kind: string; value: string }>(store: Store, c: C): C {
+  if (c.kind !== 'question_answered' || /^\d+/.test(c.value)) return c;
+  const state = store.getJson<OpenState>(META_KEY);
+  const label = c.value.toUpperCase();
+  const open = state && (state.open.find((l) => l === label) ?? state.open.find((l) => state.defs[l]?.formerly?.includes(label)));
+  if (open && state!.defs[open]?.logId) return { ...c, value: `${state!.defs[open].logId}:${open}` };
+  const keys = openQuestionKeys(store);
+  const closed = keys?.closed.get(label);
+  const at = closed?.logId && keys!.closedByAsked.get(closed.logId)?.find((r) => r.label === label || r.formerly?.includes(label));
+  return closed?.logId ? { ...c, value: `${closed.logId}:${at ? at.label : label}` } : c;
+}
+
+/**
+ * Whether the user answered the question a condition names (undefined: the list cannot tell). "<row>:<label>" (or a
+ * bare row id, every question it asked): answered by label, not just gone from the list (expired, left out of the
+ * closing list, deleted are no answer). A bare label the list does not know any more: by its closed record, if kept.
+ */
+export function questionAnswered(store: Store, value: string): boolean | undefined {
+  const keys = openQuestionKeys(store);
+  if (!keys) return undefined;
+  const m = /^(\d+)(?::([A-Z]{1,2}))?$/.exec(value);
+  if (!m) return keys.labels.has(value) ? false : keys.closed.get(value)?.reason === 'answered';
+  const row = Number(m[1]);
+  const named = (labels: string[]) => !m[2] || labels.includes(m[2]);
+  if ((keys.openByAsked.get(row) ?? []).some((l) => named([l]))) return false;
+  const closed = (keys.closedByAsked.get(row) ?? []).filter((r) => named([r.label, ...(r.formerly ?? [])]));
+  return closed.length > 0 && closed.every((r) => r.reason === 'answered');
+}
+
+/** Open questions with the text after their label and their short name, if the closing step gave one (the to-do summary, todo-summary/todo-summary.ts). */
+export function openQuestionItems(store: Store): Array<{ label: string; text: string; name?: string }> {
+  const state = readState(store);
+  return state.open.map((l) => ({ label: l, name: state.defs[l]?.name, text: (state.defs[l]?.text ?? '').replace(/^\s*(?:[-*]\s*)?[A-Z]{1,2}(?:\s?\([^()\n]{1,60}\))?\.\s*/, '') }));
 }
 
 /** Open questions as "- A. …?" lines, for the board rewrite. */
@@ -218,12 +327,16 @@ export function openQuestionLines(store: Store): string[] {
 /**
  * A new session relabels the carried questions A, B, … (keeping each one's asking log id and old
  * label) so labels stay short; its own new questions continue after them (with its id, the next label is counted from
- * there: guards/question-labels.ts). After a compaction (keepLabels) the session goes on and its labels with it: the
+ * there: nextLabel below). After a compaction (keepLabels) the session goes on and its labels with it: the
  * questions are listed as they are, nothing relabelled (relabelling would give A, B … again to labels this session may
  * already have used for other questions), and not shown again with their options: the earlier talk stays on the user's
  * screen after a compaction (checked by the user 2026-11-12), so they only go on in the closing "남은 질문" step.
  */
 export function carryOverQuestions(store: Store, sessionId?: string, keepLabels = false): string[] {
+  return atomic(store.db, () => carryInTx(store, sessionId, keepLabels));
+}
+
+function carryInTx(store: Store, sessionId: string | undefined, keepLabels: boolean): string[] {
   const state = readState(store);
   if (state.open.length === 0) return [];
   if (keepLabels) {
@@ -253,4 +366,50 @@ export function carryOverQuestions(store: Store, sessionId?: string, keepLabels 
     `남은 질문(이 세션에서 질문 알파벳을 A부터 다시 붙였다. 처음 물은 대화는 search_log(log_id)로 조회한다. 이 세션의 새 질문은 ${labelAt(open.length)}부터. 첫 답 끝("다음 행동" 위)에 이 질문들을 "A(옛 G, #1234). 질문?" 형식으로 선택지까지 한 줄에 하나씩 다시 보여 주고, "다음 행동 및 순서:"의 번호 단계 하나로 "N. 남은 질문에 답해 주세요: A(뜻), B(뜻)"를 쓴다):`,
     ...lines,
   ];
+}
+
+// Question labels per session.
+
+export const LABELS_PREFIX = 'question_labels:';
+
+interface LabelState {
+  /** Index of the next free label (A=0). */
+  next: number;
+}
+
+const read = (store: Store, sessionId: string): LabelState => store.getJson<LabelState>(LABELS_PREFIX + sessionId) ?? { next: 0 };
+
+/** The next free label of a session ('A' for one with none used). */
+export function nextLabel(store: Store, sessionId: string): string {
+  return labelAt(read(store, sessionId).next);
+}
+
+/** A new session's carried questions took A … up to `count` - 1: its own start after them. */
+export function startLabelsAfter(store: Store, sessionId: string, count: number): void {
+  const s = read(store, sessionId);
+  store.setJson(LABELS_PREFIX + sessionId, { next: Math.max(s.next, count) } satisfies LabelState);
+}
+
+/**
+ * Every label a turn's text asked a question with: the question lines ("X. …?", "X(note). …?", a carried one shown again as
+ * "A(옛 G, #1234). …?"). The remaining-questions list (the closing step "N. 남은 질문에 답해 주세요: …", before
+ * 2026-11-12 a "남은 질문:" line) is not read here: its labels were asked on question lines before (or carried
+ * over, startLabelsAfter), and words on it ("F(새PC 단계)") once moved the next label far past them.
+ */
+export function usedLabels(text: string): string[] {
+  return Object.keys(parseQuestions(text));
+}
+
+/** Stop hook: the labels a turn used move the next one past them (never back). */
+export function noteAnswerLabels(store: Store, sessionId: string, answer: string): void {
+  const used = usedLabels(answer).map(labelIndex);
+  if (!used.length) return;
+  const s = read(store, sessionId);
+  const next = Math.max(s.next, Math.max(...used) + 1);
+  if (next !== s.next) store.setJson(LABELS_PREFIX + sessionId, { next } satisfies LabelState);
+}
+
+/** Prompt hook: one line with the next label. */
+export function labelNotice(store: Store, sessionId: string): string {
+  return `<${TAG.questionLabel}>이 세션의 다음 질문 알파벳: ${nextLabel(store, sessionId)} (훅이 센다. 새로 묻는 질문은 이 알파벳부터 붙인다)</${TAG.questionLabel}>`;
 }

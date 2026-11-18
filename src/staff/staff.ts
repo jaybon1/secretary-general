@@ -7,8 +7,7 @@
  * the database), and it is shared by the secretaries on one PC like _run-job-home. Running there and
  * not in the secretary folder keeps the secretary's hooks (log saving, phone notices, memory injection) and its chat rules
  * away from the job (2026-11-09). "Staff" is set apart from "worker", which is a work session (scripts/worker/).
- * Earlier names of their folders: workspaces/_consolidate and _board, then (later on 2026-11-09, src/workers) _workers/<name>;
- * workspace/aux-folders.ts moves those (STAFF_OLD_FOLDERS).
+ * setup/aux-folders.ts makes the folders (workspace-aux-folders).
  *
  * The run goes through scripts/run-job/run-job.ps1 -Staff <name>, which reads the same file (one place for the tool
  * list). The instructions are a skill's references file in this repository, so a skill keeps only what the
@@ -22,22 +21,13 @@ import { readSecretaryId } from '../core/secretary-id.ts';
 import { workspaceRootOf } from '../workspace/secretary-link.ts';
 import { CLAUDE_IMPORT } from '../workspace/workspace-paths.ts';
 import { STAFF } from '../core/names.ts';
+import { readJsonStrict } from '../core/json-file.ts';
 
 export const STAFF_DIR = 'src/staff';
 export const STAFF_NAMES = [STAFF.memoryConsolidation, STAFF.situationBoard] as const;
 export type StaffName = (typeof STAFF_NAMES)[number];
 /** The folder in the workspaces folder that holds one folder per staff member (an aux folder, not a workspace). */
 export const STAFF_HOME = '_staff';
-/** The folder that held them for a while on 2026-11-09 (src/workers, run-job -Worker), emptied and removed by workspace-aux-folders. */
-export const OLD_STAFF_HOME = '_workers'; // legacy-name: aux-folders
-/**
- * Each staff member's earlier folders, relative to the workspaces folder (oldest first), moved to its folder by
- * workspace-aux-folders: directly in the workspaces folder before the first rename, then in _workers.
- */
-export const STAFF_OLD_FOLDERS: Record<StaffName, string[]> = { // legacy-name: aux-folders
-  [STAFF.memoryConsolidation]: ['_consolidate', `${OLD_STAFF_HOME}/${STAFF.memoryConsolidation}`],
-  [STAFF.situationBoard]: ['_board', `${OLD_STAFF_HOME}/${STAFF.situationBoard}`],
-};
 
 export interface StaffConfig {
   /** The staff member's name (its file's name; set by readStaff, not written in the file). */
@@ -98,7 +88,7 @@ export function readStaff(name: string, root = PROJECT_ROOT): StaffConfig {
   const file = staffFile(name, root);
   let v: unknown;
   try {
-    v = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    v = readJsonStrict(file);
   } catch (err) {
     throw new Error(`담당자 설정을 못 읽음(${file}): ${(err as Error).message}`);
   }

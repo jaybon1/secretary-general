@@ -1,7 +1,7 @@
 /**
  * The repeat reminder (feature 'mistake-guards'): a PostToolUse hook that counts, within one turn, the tool calls of one kind
  * (the same tool on the same kind of target: a shell command's head, files read in one folder, pages of one site, one
- * browser tool) and, the first time a kind reaches the limit (scripts/mistake-guards.local.json repeatLimit, default 10), adds a
+ * browser tool) and, the first time a kind reaches the limit (this-secretary.local.json mistake-guards repeatLimit, default 10), adds a
  * note to the model's context: check whether a tool or script could do the rest at once, and count what is left and how
  * long it takes. It never refuses a call, and says it once per kind per turn.
  *
@@ -24,8 +24,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { repeatLimit } from './mistake-guard-settings.ts';
-import { blocks, startsTurn, type Line } from './last-turn.ts';
+import { startsTurn, type Line } from './last-turn.ts';
+import { blocks, parseLine } from '../core/transcript.ts';
 import { noteToolHookHit } from './tool-hook-hits.ts';
+import { noteHookError } from '../core/hook-errors.ts';
 
 /** Where the per-session counts live; tests point it elsewhere. */
 export const STATE_DIR_ENV = 'SECRETARY_TEST_REPEAT_HOOK_STATE_DIR';
@@ -191,12 +193,8 @@ const fresh = (): RepeatState => ({ offset: 0, turn: '', calls: {}, units: {}, t
 /** Feeds transcript lines (JSON strings) into the counts. */
 export function feed(state: RepeatState, lines: string[]): void {
   for (const l of lines) {
-    let o: Line & { message?: { content?: unknown } };
-    try {
-      o = JSON.parse(l);
-    } catch {
-      continue;
-    }
+    const o = parseLine(l) as (Line & { message?: { content?: unknown } }) | null;
+    if (!o) continue;
     if (startsTurn(o)) {
       state.turn = o.uuid ?? '';
       state.calls = {};
@@ -334,5 +332,6 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => {});
+  // The call goes through either way; the failure is recorded (core/hook-errors.ts).
+  main().catch((err) => noteHookError('repeat', err));
 }

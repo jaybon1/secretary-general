@@ -15,7 +15,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { SKILLS_DIR } from './skill-links.ts';
+import { SKILLS_DIR } from '../workspace/skill-links.ts';
+import { readJsonStrict } from '../core/json-file.ts';
 
 export const OFF_SKILLS_DIR = '.agents/skills-off';
 
@@ -30,7 +31,7 @@ interface FeatureEntry {
 export function featureSkills(root: string): { name: string; feature: string; on: boolean }[] {
   let list: FeatureEntry[];
   try {
-    list = JSON.parse(fs.readFileSync(path.join(root, 'features.json'), 'utf8').replace(/^﻿/, '')).features;
+    list = readJsonStrict<{ features: typeof list }>(path.join(root, 'features.json')).features;
   } catch {
     return [];
   }

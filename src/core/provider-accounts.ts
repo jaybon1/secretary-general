@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PROJECT_ROOT } from './config.ts';
 import { scriptPath, SECRETARY_HOME } from './paths.ts';
-import { readJsonFile } from './json-file.ts';
+import { readJsonFile, readJsonStrict } from './json-file.ts';
 
 export function keysDir(env = process.env): string {
   return env.SECRETARY_KEYS_DIR || path.join(SECRETARY_HOME, 'keys');
@@ -52,8 +52,7 @@ export interface AccountDeps {
   env?: NodeJS.ProcessEnv;
   /**
    * Read the login as the provider's own clean environment would (Clear-HostClaudeEnv + Use-Provider): its key file's
-   * CLAUDE_CONFIG_DIR, else the default login, never this process's CLAUDE_CONFIG_DIR. For other providers' names now
-   * (dropLegacyUsageFiles), so an odd environment here doesn't take another provider's real file for an old one.
+   * CLAUDE_CONFIG_DIR, else the default login, never this process's CLAUDE_CONFIG_DIR (providers.ps1 Get-UsageKey -Clean: the same).
    */
   clean?: boolean;
 }
@@ -90,7 +89,7 @@ export function loginAccount(file: string): string | null {
   if (hit && hit.mtimeMs === mtimeMs) return hit.account;
   let account: string | null = null;
   try {
-    const email: unknown = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))?.oauthAccount?.emailAddress;
+    const email: unknown = readJsonStrict<{ oauthAccount?: { emailAddress?: unknown } } | null>(file)?.oauthAccount?.emailAddress;
     if (typeof email === 'string') account = email.split('@')[0].trim() || null;
   } catch {}
   accountCache.set(file, { mtimeMs, account });

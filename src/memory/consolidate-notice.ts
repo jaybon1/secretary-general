@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECT_ROOT } from '../core/config.ts';
 import { hookNoticeText } from '../core/hook-notice-text.ts';
-import { personText } from '../hooks/prompt-sender.ts';
+import { personText } from '../core/prompt-sender.ts';
 import type { Store } from '../store/store.ts';
 import { formatLocal } from '../core/kst-time.ts';
 import { TAG } from '../core/names.ts';
@@ -67,9 +67,17 @@ export function rulesSizeLine(store: Store, root = PROJECT_ROOT): string {
   return `규칙 파일 크기: AGENTS.md ${chars}자 (${since})`;
 }
 
+/** The line an answer carries while reports wait (its words are what the Stop hook looks for: consolidateLineShown). */
+const REPORT_LINE_END = "'기억 정리 확인'을 보내 주세요.";
+const NUDGE_LINE_END = '/consolidate 하세요.';
+/** Where the line goes and when: only in an answer whose closing list is "없음" (the user's call, 2026-11-14). */
+const LINE_PLACE =
+  '"다음 행동 및 순서"가 "없음"인 답에만, 답 끝("다음 행동 및 순서: 없음" 위, /compact·/clear 안내가 있으면 그 윗줄)에 "{line}" 한 줄을 앞뒤 줄과 빈 줄로 띄운 따로 된 문단으로 붙인다. 할 일이 있는 답에는 붙이지 않는다(그 줄을 붙인 답이 나올 때까지 이 안내가 다시 온다).';
+
 /**
- * Prompt hook. With reports waiting: a "기억 정리 확인" prompt gets them (and clears them); any other
- * prompt gets, once per session per new report, the one line to put above the /compact·/clear nudge.
+ * Prompt hook. With reports waiting: a "기억 정리 확인" prompt gets them (and clears them); any other prompt gets the one
+ * line to put above the /compact·/clear nudge, every prompt until an answer of this session carries it (the Stop hook
+ * marks it shown: consolidateLineShown), so an answer with things to do, which leaves it out, does not lose it.
  */
 export function consolidateNotice(store: Store, sessionId: string, prompt: string): string {
   const reports = unseenReports(store);
@@ -87,20 +95,36 @@ export function consolidateNotice(store: Store, sessionId: string, prompt: strin
       `</${TAG.consolidateReport}>`,
     ].join('\n');
   }
-  if (!store.markOnce(NOTICED_PREFIX + sessionId, reports[reports.length - 1].at)) return '';
+  if ((store.getMeta(NOTICED_PREFIX + sessionId) ?? '') >= reports[reports.length - 1].at) return '';
   const failed = reports.filter((r) => !r.ok);
   const line = failed.length
-    ? `기억 정리가 실패했어요(${failed[failed.length - 1].text.slice(0, 80)}). 확인하려면 '기억 정리 확인'만 보내 주세요.`
-    : `기억 정리가 끝났어요${reports.length > 1 ? `(${reports.length}번)` : ''}. 확인하려면 '기억 정리 확인'만 보내 주세요.`;
-  return `<${TAG.consolidate}>기억 정리 보고가 기다린다. 답 끝("다음 행동" 위, /compact·/clear 안내가 있으면 그 윗줄)에 "${line}" 한 줄을 붙인다.</${TAG.consolidate}>`;
+    ? `기억 정리가 실패했어요(${failed[failed.length - 1].text.slice(0, 80)}). 필요하신 경우 ${REPORT_LINE_END}`
+    : `기억 정리가 끝났어요${reports.length > 1 ? `(${reports.length}번)` : ''}. 필요하신 경우 ${REPORT_LINE_END}`;
+  return `<${TAG.consolidate}>기억 정리 보고가 기다린다. ${LINE_PLACE.replace('{line}', line)}</${TAG.consolidate}>`;
 }
 
-/** Consolidations waiting, counted in steps of this many entries for the fallback nudge below. */
+/**
+ * Stop hook: the answer that ended the turn carries the report line or the fallback nudge line, so it was shown to the
+ * user in this session: the notices stop until a newer report, or the next step of waiting talk.
+ */
+export function consolidateLineShown(store: Store, sessionId: string, answer: string): void {
+  const reports = unseenReports(store);
+  if (reports.length && answer.includes(REPORT_LINE_END)) store.setMeta(NOTICED_PREFIX + sessionId, reports[reports.length - 1].at);
+  if (answer.includes(NUDGE_LINE_END)) {
+    const step = Math.floor(store.stats().unconsolidated / CONSOLIDATE_STEP);
+    store.setMeta(NUDGED_PREFIX + sessionId, `${store.consolidatedThrough()}:${step}`);
+  }
+}
+
+/**
+ * Consolidations waiting, counted in steps of this many entries for the fallback nudge below; also how many the idle jobs
+ * wait for before they start one (idle/idle-jobs.ts CONSOLIDATE_MIN), so the nudge counts in the idle job's units.
+ */
 export const CONSOLIDATE_STEP = 60;
 /**
- * The /consolidate nudge is only a fallback for the idle consolidation: once per session at every
- * CONSOLIDATE_STEP entries, starting at twice the step, when the idle job has evidently not run
- * (talk never paused 30 minutes, the scheduled task is missing, or it keeps failing).
+ * The /consolidate nudge is only a fallback for the idle consolidation: at every CONSOLIDATE_STEP entries, starting at
+ * twice the step, when the idle job has evidently not run (talk never paused 30 minutes, the scheduled task is missing,
+ * or it keeps failing); told on every prompt until an answer of the session carries it (consolidateLineShown).
  */
 const FALLBACK_STEPS = 2;
 
@@ -114,6 +138,8 @@ export function consolidateNudge(store: Store, sessionId: string): string {
     const [at, seen] = last.split(':');
     return at === through && Number(seen) >= step;
   };
-  if (!store.markOnce(NUDGED_PREFIX + sessionId, `${through}:${step}`, covered)) return '';
-  return `<${TAG.consolidate}>정리 안 된 대화가 ${pending}건인데 쉬는 시간 자동 정리가 아직 돌지 않았다(대화가 30분 넘게 멈춘 적이 없거나, 예약 작업 'Secretary Idle Jobs (비서 고유 번호)'가 없거나 실패). 답 끝("다음 행동" 위, /compact·/clear 안내가 있으면 그 윗줄)에 "정리 안 된 대화가 ${pending}건 쌓였는데 자동 정리가 아직 안 돌았어요. 적당할 때 /consolidate 하세요." 한 줄을 붙인다.</${TAG.consolidate}>`;
+  const last = store.getMeta(NUDGED_PREFIX + sessionId);
+  if (last && covered(last)) return '';
+  const line = `정리 안 된 대화가 ${pending}건 쌓였는데 자동 정리가 아직 안 돌았어요. 적당할 때 ${NUDGE_LINE_END}`;
+  return `<${TAG.consolidate}>정리 안 된 대화가 ${pending}건인데 쉬는 시간 자동 정리가 아직 돌지 않았다(대화가 30분 넘게 멈춘 적이 없거나, 예약 작업 'Secretary Idle Jobs (비서 고유 번호)'가 없거나 실패). ${LINE_PLACE.replace('{line}', line)}</${TAG.consolidate}>`;
 }

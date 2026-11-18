@@ -1,7 +1,6 @@
 /**
  * How a workspace's tools find the secretary's scripts: a small `secretary-link.local.json` at the top of each workspace
- * folder (until 2026-11-10 `secretary.json`: OLD_LINK_FILE below),
- * written by the secretary ({ bin: the secretary's entrance folder bin/, id: its secretary id }). Only the entrance
+ * folder, written by the secretary ({ bin: the secretary's entrance folder bin/, id: its secretary id }). Only the entrance
  * folder is named, not the secretary folder itself: tools call the fixed names in bin/ (core/paths.ts ENTRY_POINTS)
  * and nothing else of the secretary (a worker's shell commands that touch the secretary folder otherwise are blocked,
  * scripts/worker/worker-folder-guard.mjs). A tool reads the file (searching upward from its own folder; the code is in the
@@ -18,19 +17,13 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ENTRY_DIR } from '../core/paths.ts';
 import { readSecretaryId } from '../core/secretary-id.ts';
-import { fixSkillLinks, skillLayout, skillLinkProblems } from '../setup/skill-links.ts';
+import { fixSkillLinks, skillLayout, skillLinkProblems } from './skill-links.ts';
 import { fixCharter } from './charter-blocks.ts';
-import { commonSkillProblem, commonSkillsDirOf, fixCommonSkills } from './common-skills.ts';
-import { blockBegin, renderMemory } from './rules-text.ts';
-import { LINK_FILE, MEMORY_FILE, PENDING_DIR, RUN_JOB_HOME, workspaceRootOf } from './workspace-paths.ts';
+import { commonSkillProblem, commonSkillsDirOf, fixCommonSkills, WORKSPACE_COMMON_SKILLS } from './common-skills.ts';
+import { LINK_FILE, RUN_JOB_HOME, workspaceRootOf } from './workspace-paths.ts';
+import { readJsonStrict } from '../core/json-file.ts';
 
 export { commonSkillsDirOf, LINK_FILE, RUN_JOB_HOME, workspaceRootOf };
-/**
- * The file's name until 2026-11-10. Workspace tools that copied the old finding code read it, so while one is there the
- * secretary keeps it the same as the new one (writeLink; never makes a new one). Goes once 0.10.0 is out and the
- * workspaces' tools read the new name.
- */
-export const OLD_LINK_FILE = 'secretary.json'; // legacy-name: secretary-link-file
 
 export interface SecretaryLink {
   about?: string;
@@ -53,8 +46,8 @@ export function linkFor(root: string): SecretaryLink {
 
 export function readLink(folder: string): SecretaryLink | null {
   try {
-    const v = JSON.parse(fs.readFileSync(path.join(folder, LINK_FILE), 'utf8').replace(/^﻿/, ''));
-    return v && typeof v.bin === 'string' ? v : null;
+    const v = readJsonStrict<Partial<SecretaryLink> | null>(path.join(folder, LINK_FILE));
+    return v && typeof v.bin === 'string' ? (v as SecretaryLink) : null;
   } catch {
     return null;
   }
@@ -69,16 +62,6 @@ const ignores = (folder: string) => {
     return false;
   }
 };
-
-/** The old-name file's text when it is there and not the same as the new one (it is kept the same while there). */
-function staleOldLink(folder: string, text: string): boolean { // legacy-name: secretary-link-file
-  const old = path.join(folder, OLD_LINK_FILE);
-  try {
-    return fs.readFileSync(old, 'utf8') !== text;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Why folder's link is not right for the secretary at root, every problem joined with "; "; null when it is. All of them, not
@@ -96,71 +79,44 @@ export function linkProblem(folder: string, root: string): string | null {
     if (Object.keys(link).some((k) => !['about', 'bin', 'id'].includes(k))) out.push('다른 키가 있음');
   }
   if (!ignores(folder)) out.push(`.gitignore에 ${LINK_FILE} 없음`);
-  if (oldIgnoreComment(folder)) out.push('.gitignore 주석에 2026-11-11에 쉬운 말로 바꾼 옛 말이 남음');
-  if (staleOldLink(folder, linkText(root))) out.push(`옛 이름 ${OLD_LINK_FILE}이 새 파일과 다름`);
   const skills = skillProblem(folder, root);
   if (skills) out.push(skills);
   return out.length ? out.join('; ') : null;
 }
 
-/** The skill layout (setup/skill-links.ts), the charter's secretary blocks and the common skills of a workspace; null when right. */
+/** The skill layout (workspace/skill-links.ts), the charter's secretary blocks and the common skills of a workspace; null when right. */
 export function skillProblem(folder: string, root: string): string | null {
   const out = skillLinkProblems(skillLayout(folder));
   const charter = charterProblem(folder, root);
   if (charter) out.push(charter);
-  const common = commonSkillProblem(folder, commonSkillsDirOf(root));
+  const common = commonSkillProblem(folder, commonSkillsDirOf(root), WORKSPACE_COMMON_SKILLS);
   if (common) out.push(common);
   return out.length ? out.join('; ') : null;
 }
 
 /** The lines .gitignore gets: the reason, then the file. */
 export const GITIGNORE_LINES = ['# 이 공간을 맡은 비서의 진입점 폴더(비서가 써 둔다, PC마다 다르다)', LINK_FILE];
-/** The comment line GITIGNORE_LINES[0] was until 2026-11-11 → what it is now: put right in place in a workspace's .gitignore. */
-const GITIGNORE_COMMENT_FIX: [string, string] = // legacy-name: link-gitignore-comment
-  ['# 이 공간을 맡은 비서의 입구 폴더(비서가 써 둔다, PC마다 다르다)', GITIGNORE_LINES[0]];
-
-const ignoreText = (folder: string) => {
-  try {
-    return fs.readFileSync(path.join(folder, '.gitignore'), 'utf8');
-  } catch {
-    return '';
-  }
-};
-const oldIgnoreComment = (folder: string) => ignoreText(folder).includes(GITIGNORE_COMMENT_FIX[0]);
 
 /**
  * Writes folder's link for the secretary at root, and its .gitignore line first (so a worker's `git add -A` never
- * takes it), and puts its skill links, common skills and charter blocks right. addMissing: a charter without marks that
- * lacks a section the template has gets it (workspace-links --add-missing, after the user said yes). Returns whether
- * anything changed (or was tried: a charter left with a problem stays as it was).
+ * takes it), and puts its skill links, common skills and charter blocks right. Returns whether anything changed (or was
+ * tried: a charter left with a problem stays as it was).
  */
-export function writeLink(folder: string, root: string, addMissing = false): boolean {
-  if (!linkProblem(folder, root) && !(addMissing && charterFix(folder, root, true))) return false;
+export function writeLink(folder: string, root: string): boolean {
+  if (!linkProblem(folder, root)) return false;
   if (!ignores(folder)) {
     const file = path.join(folder, '.gitignore');
     const old = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
     const sep = old && !old.endsWith('\n') ? '\n' : '';
     fs.writeFileSync(file, `${old}${sep}${GITIGNORE_LINES.join('\n')}\n`);
   }
-  if (oldIgnoreComment(folder)) fs.writeFileSync(path.join(folder, '.gitignore'), ignoreText(folder).replaceAll(...GITIGNORE_COMMENT_FIX));
   const file = path.join(folder, LINK_FILE);
   const text = linkText(root);
   if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) fs.writeFileSync(file, text);
-  // The old-name file, where it is, is kept the same for tools that still read it (never made new).
-  if (staleOldLink(folder, text)) fs.writeFileSync(path.join(folder, OLD_LINK_FILE), text); // legacy-name: secretary-link-file
   fixSkillLinks(folder);
-  fixCommonSkills(folder, commonSkillsDirOf(root));
-  const charter = charterFix(folder, root, addMissing);
-  if (charter && 'text' in charter) {
-    fs.writeFileSync(path.join(folder, 'AGENTS.md'), charter.text);
-    // A charter that got the "스킬과 기억" block (addMissing) also gets the files it names, as a new workspace has them.
-    if (charter.text.includes(blockBegin('learning')) && !fs.existsSync(path.join(folder, MEMORY_FILE))) {
-      const title = charter.text.match(/^# (.+)$/m)?.[1] ?? path.basename(folder);
-      fs.writeFileSync(path.join(folder, MEMORY_FILE), renderMemory({ kind: 'solo', name: '', title, purpose: '' }));
-      fs.mkdirSync(path.join(folder, PENDING_DIR), { recursive: true });
-      if (!fs.readdirSync(path.join(folder, PENDING_DIR)).length) fs.writeFileSync(path.join(folder, PENDING_DIR, '.gitkeep'), '');
-    }
-  }
+  fixCommonSkills(folder, commonSkillsDirOf(root), WORKSPACE_COMMON_SKILLS);
+  const charter = charterFix(folder, root);
+  if (charter && 'text' in charter) fs.writeFileSync(path.join(folder, 'AGENTS.md'), charter.text);
   return true;
 }
 
@@ -169,22 +125,21 @@ export function writeLink(folder: string, root: string, addMissing = false): boo
  * is left; null when it is right or there is none. A charter goes out with LF line endings: git checks it out as CRLF
  * (core.autocrlf) while the secretary writes LF, and stores LF either way.
  */
-function charterFix(folder: string, root: string, addMissing = false): { text: string; moved: boolean } | { problem: string } | null {
+function charterFix(folder: string, root: string): { text: string } | { problem: string } | null {
   let text: string;
   try {
     text = fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8');
   } catch {
     return null;
   }
-  const fix = fixCharter(text, folder, root, addMissing);
+  const fix = fixCharter(text, root);
   return 'text' in fix && fix.text === text ? null : fix;
 }
 
 function charterProblem(folder: string, root: string): string | null {
   const fix = charterFix(folder, root);
   if (!fix) return null;
-  if ('problem' in fix) return fix.problem;
-  return fix.moved ? 'AGENTS.md에 비서 표시가 없음(비서 관리 부분을 표시로 감싸 지금 틀로 옮길 수 있음)' : 'AGENTS.md의 비서 표시 안이 지금 틀과 다름';
+  return 'problem' in fix ? fix.problem : 'AGENTS.md의 비서 표시 안이 지금 틀과 다름';
 }
 
 /**

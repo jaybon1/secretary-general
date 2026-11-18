@@ -22,20 +22,3 @@ export function redactSecrets(text: string): string {
     text,
   );
 }
-
-/**
- * Where secret-looking strings are: 1-based line, start and length within that line (a private key block
- * counts on its first line, up to the line end), one per line and in line order.
- */
-export function secretSpans(text: string): { line: number; start: number; length: number }[] {
-  const spans = new Map<number, { line: number; start: number; length: number }>();
-  for (const re of SECRET_PATTERNS) {
-    for (const m of text.matchAll(new RegExp(re.source, re.flags))) {
-      const before = text.slice(0, m.index);
-      const line = before.split('\n').length;
-      const start = m.index - (before.lastIndexOf('\n') + 1);
-      if (!spans.has(line)) spans.set(line, { line, start, length: m[0].split(/\r?\n/)[0].length });
-    }
-  }
-  return [...spans.values()].sort((a, b) => a.line - b.line);
-}

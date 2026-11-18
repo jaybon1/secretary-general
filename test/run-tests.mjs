@@ -27,8 +27,17 @@ function repoEntries() {
 }
 
 const before = repoEntries();
+// Where the failed tests go and the branch and commit they carry, settled before the run (test/test-failures.ts runRecord):
+// read at the end, a work copy (git worktree) removed or a git that stopped answering meanwhile sent them to the id-less
+// ~/.secretary/logs with no branch or commit.
+let record = null;
+let revisionEnv = {};
+try {
+  const { runRecord } = await import('./test-failures.ts');
+  ({ record, env: revisionEnv } = await runRecord(ROOT));
+} catch {}
 const runDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'secretary-testrun-')));
-const env = { ...process.env, TEMP: runDir, TMP: runDir };
+const env = { ...process.env, ...revisionEnv, TEMP: runDir, TMP: runDir };
 // Run under another node --test (the release test runs this one): report here, not to that runner.
 delete env.NODE_TEST_CONTEXT;
 // The usual report on the screen, and beside it the failed tests into a file of this run (outside %TEMP%: the tests' own).
@@ -36,10 +45,11 @@ const failed = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'secretary-testfa
 const reporters = ['--test-reporter=spec', '--test-reporter-destination=stdout', `--test-reporter=${pathToFileURL(path.join(ROOT, 'test', 'test-failures.ts')).href}`, `--test-reporter-destination=${failed}`];
 const r = spawnSync(process.execPath, ['--import', './test/env.ts', '--test', ...reporters, ...files], { cwd: ROOT, stdio: 'inherit', env });
 try {
-  const { appendFailures, failuresFile } = await import('./test-failures.ts');
-  const record = await failuresFile();
-  const n = appendFailures(failed, record);
-  if (n) console.log(`\n실패한 테스트 ${n}개를 기록에 적음: ${record}`);
+  if (record) {
+    const { appendFailures } = await import('./test-failures.ts');
+    const n = appendFailures(failed, record);
+    if (n) console.log(`\n실패한 테스트 ${n}개를 기록에 적음: ${record}`);
+  }
 } catch {}
 try {
   fs.rmSync(path.dirname(failed), { recursive: true, force: true, maxRetries: 3 });

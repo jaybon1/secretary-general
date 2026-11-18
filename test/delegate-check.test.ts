@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { tempDir, testStore, write, writeFiles } from './helpers.ts';
-import { PROJECT_ROOT } from '../src/core/config.ts';
-import { entryPath } from '../src/core/paths.ts';
-import { ASSUMED_REPORT, renderCharter, renderTaskBrief } from '../src/workspace/rules-text.ts';
-import { briefPartsReport, emptyBriefParts, briefCoverage, briefReport, decisionBody, decisionsFor, findSpaceRoot, leftoverFolders, main, otherMemories, pathsIn, rankCoverage, reportCheck, skillRulesFor, spaceSkillFiles, withoutFolders } from '../scripts/delegate-check/delegate-check.ts';
+import { tempDir, testStore, write } from './helpers.ts';
+import { briefCoverage, decisionBody, decisionsFor, main, privateWords, privateHits, profileTitles } from '../scripts/delegate-check/delegate-check.ts';
 
 test('brief: the decisions of the given tags (and a query), the ones the brief leaves out first', () => {
   const file = path.join(tempDir(), 'd.db');
@@ -22,9 +18,16 @@ test('brief: the decisions of the given tags (and a query), the ones the brief l
   assert.deepEqual(ds.map((d) => d.id), [tts], 'decisions only, active only, by tag');
   assert.deepEqual(decisionsFor(store.db, ['영상']).map((d) => d.id), [tts, sub]);
   assert.deepEqual(decisionsFor(store.db, [], '자막 줄').map((d) => d.id), [sub], 'a query finds one without the tag');
+  // 없으면 놓치는 실수: 사용자가 하라고 한 할 일(action 기억)이 지시서에서 빠져도 대조에 안 걸린다. 두 낱말 태그("모종 가게")는 한 태그로든,
+  // 옛 태그를 띄어쓰기로 나눈 두 태그로든 찾는다(태그 표, 옮기기 21).
+  const todo = store.remember({ kind: 'action', content: '더빙 파일 이름에 날짜를 붙인다.', tags: ['영상', '모종 가게'] }).id;
+  const split = store.remember({ kind: 'decision', content: '더빙은 두 번 듣고 넘긴다.', tags: ['영상', '모종', '가게'] }).id;
+  assert.deepEqual(decisionsFor(store.db, ['모종 가게']).map((d) => [d.id, d.kind]), [[todo, 'action'], [split, 'decision']]);
+  store.forget(todo, 'x');
+  store.forget(split, 'x');
   assert.equal(decisionBody('2026-11-01 사용자 결정(더빙): 더빙 목소리'), '더빙 목소리');
   // A brief that leaves the voice out: shown first, with the name it lacks.
-  const left = briefCoverage('# 더빙\n해외 반응 영상의 더빙을 만든다. 자막은 화면 아래 두 줄까지만.', decisionsFor(store.db, ['영상']));
+  const left = briefCoverage('# 더빙\n안내 영상의 더빙을 만든다. 자막은 화면 아래 두 줄까지만.', decisionsFor(store.db, ['영상']));
   assert.equal(left[0].decision.id, tts);
   assert.ok(left[0].covered < 0.5, String(left[0].covered));
   assert.deepEqual(left[0].missingNames, ['Speechify-K2']);
@@ -43,155 +46,55 @@ test('brief: the decisions of the given tags (and a query), the ones the brief l
   assert.equal(main(['brief', brief, '--tag', 'x', '--db', path.join(tempDir(), 'none.db')], () => {}), 2);
 });
 
-// 없으면 놓치는 실수: 공간 태그에 걸린 결정을 모두 "빠진 듯"으로 내면 효과음·소재 고르기처럼 이 일과 상관없는 결정이 위를 채워, 정작 백업 방식 결정이 묻힌다(2026-11-08 영상 채널 백업 업무, 68개 중 57개).
-test('brief: left-out decisions ranked by the words they share with the brief, only the top few, unrelated ones no finding', () => {
-  const file = path.join(tempDir(), 'd.db');
+// [늘 남김] 없으면 놓치는 실수: 개인정보를 넣으면 안 되는 공급자(게이트웨이·무료 플랜)로 보내는 지시나 그 TASK.md에 사용자 호칭, 기억·대화 번호,
+// 다른 작업 공간 이야기가 그대로 들어가 그 회사 서버로 나가거나, 개인정보를 넣어도 되는 공급자의 지시까지 막는다.
+test('private: a brief for a provider personal data may not go to is stopped on the title, record numbers and other workspaces', () => {
+  const file = path.join(tempDir(), 'p.db');
   const store = testStore(file);
-  const noise = [
-    '효과음은 전환에 Simple Whoosh, 등장에 Bubble Pop을 쓰고 미리보기에서 켜고 끌 수 있게 한다.',
-    '소재는 한 회차에 생활 속 궁금증과 낯선 제도를 각 5개씩 출처 자료에 근거해 낸다.',
-    '첫 15초 훅은 결론 먼저로 하고 롱폼 길이는 고정하지 않는다.',
-    '기본 화면 스타일은 어두운 바탕에 외곽선 두른 큰 글자와 아래 자막 띠다.',
-  ].map((c) => store.remember({ kind: 'decision', content: `2026-11-03 사용자 결정(채널): ${c}`, tags: ['채널'] }).id);
-  const backup = store.remember({ kind: 'decision', content: '2026-10-28 사용자 결정(백업): 백업은 공개된 편을 yt-dlp로 유튜브가 최적화한 공개본으로 받아 백업 폴더에 넣는다.', tags: ['채널', '백업'] }).id;
-  const when = store.remember({ kind: 'decision', content: '2026-11-08 사용자 결정(백업): 백업 시점은 다음 영상을 올릴 때 이전 편이 공개됐는지 확인하고 공개된 편만 한다.', tags: ['채널', '백업'] }).id;
-  store.remember({ kind: 'fact', content: '효과음 모음은 공용 폴더에 있다. 효과음 이름은 영어다.', tags: ['소리'] });
-  const brief = '# 백업 방식 바로잡기\n공개된 영상의 백업을 렌더본이 아니라 유튜브 공개본으로 바꾼다.\n1. 네 영상을 유튜브에서 가장 좋은 화질로 받아 각 편 최종 폴더에 넣는다.';
-  const decisions = decisionsFor(store.db, ['채널']);
-  const ranked = rankCoverage(brief, briefCoverage(brief, decisions), otherMemories(store.db, decisions));
-  assert.deepEqual(ranked.slice(0, 2).map((c) => c.decision.id).sort(), [backup, when].sort(), JSON.stringify(ranked.map((c) => [c.decision.id, c.relevance])));
-  assert.ok(ranked.find((c) => c.decision.id === backup)!.shared.includes('백업'));
-  assert.ok(noise.every((id) => ranked.find((c) => c.decision.id === id)!.relevance === 0), 'a decision sharing nothing telling scores 0');
-  // Only the top N left-out ones are listed; the rest are counted. Those sharing nothing are no finding.
-  const r = briefReport('TASK.md', ranked, ['채널'], 1);
-  assert.equal(r.leftOut, ranked.filter((c) => c.covered < 0.5 && c.relevance > 0).length);
-  assert.ok(r.leftOut >= 1 && r.leftOut <= 2, r.text);
-  assert.equal((r.text.match(/\[빠진 듯/g) ?? []).length, 1, r.text);
-  assert.match(r.text, /관련 높은 위 1개\(최대 1, --memories로 바꿈\)[^]*안 보인 빠진 듯한 결정 \d+개[^]*--memories \d+/);
-  assert.doesNotMatch(r.text.split('안 보인')[0], /효과음|소재는|훅은|스타일은/);
+  store.setUserTitle('홍길동');
+  store.updateProfile('# 핵심 프로필\n- 호칭: **길동** / **길동님**.\n- 개발자다.', 'test');
+  const ws = tempDir();
+  const own = path.join(ws, 'blog-20260101');
+  for (const [kind, name, title, folder] of [
+    ['solo', 'blog', '여행 블로그', own],
+    ['solo', 'cafe-shop', '동네 카페 쇼핑몰', path.join(ws, 'cafe-shop-20260102')],
+    ['quick', 'quick-outputs', '간단한 결과물 모음', path.join(ws, 'quick-outputs')],
+  ] as const) store.createWorkspace({ kind, name, title, purpose: 'p', folder, agents: [] });
   store.db.close();
-  // The command line: --memories sets how many; a brief sharing nothing with any decision exits 0.
-  const task = path.join(tempDir(), 'TASK.md');
-  write(task, brief);
-  const out: string[] = [];
-  assert.equal(main(['brief', task, '--tag', '채널', '--db', file, '--memories', '5'], (s) => out.push(s)), 1);
-  assert.match(out.join('\n'), /최대 5, --memories/);
-  const other = path.join(tempDir(), 'TASK.md');
-  write(other, '# 블로그 글\n주간 소식 글을 쓴다.\n의도: 독자에게 소식 전하기\n범위 밖: 없음\n사용자 원문: "써 줘" (#1)');
-  assert.equal(main(['brief', other, '--tag', '채널', '--db', file], () => {}), 0, 'left-out decisions unrelated to the brief are not findings');
-});
-
-// 없으면 놓치는 실수: 지시서가 그 공간 스킬 규칙과 어긋나도(스킬은 "공개가 끝난 뒤 backup.py로 백업", 지시서는 "올린 뒤 바로 백업") 기억만 대조해 놓친다(2026-11-08 영상 채널 공간).
-test('brief: the space skill rules sharing words with the brief, the backup rule first, common skills too', () => {
-  const root = tempDir('dc-space-');
-  const space = path.join(root, 'workspaces', 'cafe-1');
-  writeFiles(space, {
-    'AGENTS.md': '# 공간',
-    'common-skills.json': JSON.stringify({ skills: ['youtube-ops'] }),
-    '.agents/skills/channel-ops/SKILL.md': [
-      '---',
-      'name: channel-ops',
-      'description: 채널 업로드와 백업을 한다.',
-      '---',
-      '# 채널 프로그램',
-      '1. 로그인이 필요하면 [질문]으로 멈춘다.',
-      '3. 채널 공개 상태는 `channel_info.py`로 본다.',
-      '10. 공개가 끝난 영상은 `backup.py`로 에셋을 NAS `...\\<YYMMDD-N 제목>\\에셋\\`에 백업한다.',
-      '   이유: NAS 백업을 업로드 직후에 하면 공개 전에 고친 파일이 빠진다.',
-      '```',
-      'python backup.py push --dry-run',
-      '```',
-    ].join('\n'),
-    '.agents/skills/voice/SKILL.md': '# 목소리\n- 새 목소리 견본은 목소리 모음에 넣는다.',
-  });
-  // The list says youtube-ops (old form, no common- prefix); the skill is in its common- folder.
-  writeFiles(path.join(root, 'workspaces', '_skills'), { 'common-youtube-ops/SKILL.md': '# 유튜브\n- 업로드는 비공개로 하고 영어 자막을 함께 올린다.\n- 쇼츠 관련 동영상은 사람이 지정한다.' });
-  const task = path.join(space, 'output', 'records', 'ep02-upload', 'TASK.md');
-  write(task, '# 2편 업로드\n1단계: 영상을 비공개로 업로드하고 영어 자막을 올린다.\n2단계: 올린 뒤 바로 렌더본으로 NAS에 백업한다(backup.py).');
-  assert.equal(findSpaceRoot(task), space);
-  assert.equal(findSpaceRoot(path.join(root, 'x.md')), null);
-  const files = spaceSkillFiles(space);
-  assert.deepEqual(files.map((f) => f.skill), ['공통 youtube-ops', 'channel-ops', 'voice']);
-  const rules = skillRulesFor(fs.readFileSync(task, 'utf8'), files);
-  const backup = rules.find((r) => /공개가 끝난 영상은 `backup\.py`/.test(r.text));
-  assert.ok(backup && rules.indexOf(backup) <= 1, JSON.stringify(rules, null, 1));
-  assert.ok(backup.shared.includes('백업') && backup.shared.includes('backup') && !backup.shared.includes('py'));
-  assert.ok(rules.some((r) => r.skill === '공통 youtube-ops' && /비공개/.test(r.text)), 'a common skill rule');
-  assert.ok(!rules.some((r) => /^이유|python backup|^name|목소리/.test(r.text)), 'no why lines, code, front matter or unrelated rules');
-  assert.equal(skillRulesFor(fs.readFileSync(task, 'utf8'), files, 1).length, 1);
-  assert.equal(withoutFolders('본보기 `output/records/a-b/check.py` 참고'), '본보기 `check` 참고');
-  // The command line shows the rules after the memories, as many as --rules says.
-  const db = path.join(tempDir(), 'd.db');
-  testStore(db).db.close();
-  const out: string[] = [];
-  fs.appendFileSync(task, '\n의도: 독자에게 소식 전하기\n범위 밖: 없음\n사용자 원문: "써 줘" (#1)\n');
-  assert.equal(main(['brief', task, '--tag', '영상', '--db', db, '--rules', '2'], (s) => out.push(s)), 0);
-  assert.match(out.join('\n'), /공간 스킬 규칙\(지시서와 맞는지 확인\): .*cafe-1의 스킬 3개에서 지시서와 단어가 겹치는 줄 위 2개[^]*\[channel-ops channel-ops\/SKILL\.md:8\] 10\. 공개가 끝난/);
-  const lone = path.join(tempDir(), 'TASK.md');
-  write(lone, '백업한다');
-  const out2: string[] = [];
-  main(['brief', lone, '--tag', 'x', '--db', db], (s) => out2.push(s));
-  assert.match(out2.join('\n'), /공간 스킬 규칙: .*못 찾음/);
-});
-
-test('report: a "deleted" claim against what is there, paths that are not, leftover test folders, strange entries on top', () => {
-  const top = tempDir('dc-top-');
-  for (const d of ['workspaces', 'notes', 'secretary-1', 'stray-test']) fs.mkdirSync(path.join(top, d));
-  const out = path.join(top, 'workspaces', 'space', 'output', 'research', '20261107-run');
-  fs.mkdirSync(path.join(out, 'trial-2'), { recursive: true });
-  fs.mkdirSync(path.join(out, 'final'), { recursive: true });
-  write(path.join(out, 'REPORT.md'), '');
-  const report = [
-    '# 보고',
-    '시험 폴더는 모두 지웠습니다(`trial-1`, `trial-2`).',
-    '`final/` 안에 결과가 있다.',
-    '임시 서버도 정리했어요.',
-    '결과:',
-    '```',
-    path.join(out, 'REPORT.md'),
-    path.join(out, 'missing.md'),
-    '```',
-  ].join('\n');
-  const r = reportCheck(report, { reportFile: path.join(out, 'REPORT.md'), roots: [out], top, hours: 24 });
-  const kinds = r.findings.map((f) => f.kind);
-  assert.ok(r.findings.some((f) => f.kind === 'still-there' && f.text.endsWith(path.join(out, 'trial-2'))), r.text);
-  assert.ok(!r.findings.some((f) => f.text.endsWith('trial-1')), 'a deleted one that is gone is fine');
-  assert.ok(r.findings.some((f) => f.kind === 'missing-path' && f.text.endsWith('missing.md')));
-  assert.ok(!r.findings.some((f) => f.kind === 'missing-path' && f.text.endsWith('REPORT.md')));
-  assert.ok(r.findings.some((f) => f.kind === 'leftover' && f.text.endsWith('trial-2')));
-  assert.deepEqual(r.findings.filter((f) => f.kind === 'top-unknown').map((f) => path.basename(f.text)), ['stray-test']);
-  assert.ok(kinds.length >= 4);
-  assert.match(r.text, /"지웠다·없다" 류 주장 2줄/);
-  assert.match(r.text, /최근 24시간에 바뀐 항목 /);
-  assert.deepEqual(pathsIn('`a\\b.txt`와 C:\\x\\y 그리고 `npm test -- --x`'), ['a\\b.txt', 'C:\\x\\y']);
-  assert.deepEqual(leftoverFolders(out).map((p) => path.basename(p)), ['trial-2']);
-  // Nothing wrong: exit 0.
-  const clean = path.join(tempDir(), 'R.md');
-  write(clean, '다 만들었어요.');
-  assert.equal(main(['report', clean, '--top', tempDir()], () => {}), 0);
-  assert.equal(main(['report', path.join(out, 'REPORT.md'), '--root', out, '--top', top], () => {}), 1, 'an empty report claims nothing, but the leftover folder is told');
-});
-
-test('bin/delegate-check.mjs runs the script (usage on a wrong call)', () => {
-  const r = spawnSync(process.execPath, ['--no-warnings', entryPath('delegate-check.mjs')], { encoding: 'utf8' });
-  assert.equal(r.status, 2);
-  assert.match(r.stdout, /^사용:\n {2}node bin\/delegate-check\.mjs brief/);
-  const help = execFileSync(process.execPath, ['--no-warnings', path.join(PROJECT_ROOT, 'scripts', 'delegate-check', 'delegate-check.ts'), 'report', path.join(PROJECT_ROOT, 'package.json'), '--top', tempDir()], { encoding: 'utf8' });
-  assert.match(help, /^보고 대조: /);
-});
-
-// 없으면 놓치는 실수: 지시서에 사용자가 왜 이 일을 하려는지(의도), 하지 않을 것, 사용자 말 그대로가 빠져, 받는 쪽이 바꿔 쓴 지시대로 엉뚱한 결과를 가져온다(2026-11-13 사용자 결정, 의도 조사 사례 C).
-test('brief: TASK.md has intent, out of scope and the user\'s words (empty ones say so), and delegate-check tells which are empty; reports ask what was settled without asking', () => {
-  const task = { name: 'a', title: 'T', goal: 'g', doneCriteria: ['x'], proof: ['y'] };
-  assert.deepEqual(emptyBriefParts(renderTaskBrief(task)), ['의도', '범위 밖', '사용자 원문']);
-  const full = renderTaskBrief({ ...task, intent: '다음 주 회의에서 고를 자료', outOfScope: ['push 하지 않음'], userWords: '"비교해 줘" (#900543)' });
-  assert.deepEqual(emptyBriefParts(full), []);
-  assert.match(full, /## 의도\n\n다음 주 회의에서 고를 자료[^]*## 범위 밖 \(하지 않는 것\)\n\n- push 하지 않음[^]*## 사용자 원문\n\n"비교해 줘" \(#900543\)/);
-  // A run-job's or subagent's instruction: "의도: …" lines or headings with their words below.
-  assert.deepEqual(emptyBriefParts('일: 조사\n의도: 사러 가기 전 비교\n범위 밖: 구매\n사용자 원문: "알아봐 줘"'), []);
-  assert.deepEqual(emptyBriefParts('일: 조사\n## 의도\n\n## 범위 밖 (하지 않는 것)\n- 구매'), ['의도', '사용자 원문']);
-  assert.match(briefPartsReport('일: 조사').text, /지시서 칸 빠짐: 의도, 범위 밖, 사용자 원문/);
-  // The end-of-task report asks for what the worker settled without asking.
-  assert.match(ASSUMED_REPORT, /묻지 않고 대신 정한 것·가정/);
-  assert.ok(renderCharter({ kind: "solo", name: "w", title: "W", purpose: "p" } as never).includes(ASSUMED_REPORT));
+  assert.deepEqual(profileTitles('- 호칭: **길동** / **길동님**.\n- 부르는 법: 사용자'), ['길동']);
+  const db = testStore(file).db;
+  const words = privateWords(db, own);
+  assert.deepEqual([...words.titles].sort(), ['길동', '홍길동']);
+  // The workspace the work goes to and the shared quick one are not "other".
+  assert.deepEqual(words.workspaces.map((w) => w.label), ['동네 카페 쇼핑몰']);
+  // Not numbers of records: a colour on a colour line, a URL fragment, an HTML entity (the # joined in, so the records check does not read them as citations).
+  const h = '#';
+  const hits = privateHits(
+    ['홍길동님이 고른 색으로 만든다.', '근거 대화 #900123, 기억 #900124.', '동네 카페 쇼핑몰 공간과 같은 톤.', `배경은 ${h}333333, 링크는 page${h}2, 개체는 &${h}123;.`, 'website와 blog 글.'].join('\n'),
+    'TASK.md',
+    words,
+  );
+  assert.deepEqual(hits.map((h) => `${h.line}:${h.kind}:${h.what}`), ['1:호칭:홍길동', '1:호칭:길동', '2:기억·대화 번호:#900123', '2:기억·대화 번호:#900124', '3:다른 작업 공간:동네 카페 쇼핑몰(동네 카페 쇼핑몰)']);
+  db.close();
+  // The command line: the prompt and the TASK.md it names (relative to the workspace), exit 1 on a hit, 0 when clean,
+  // nothing checked for a provider personal data may go to, 2 without the DB.
+  const providers = path.join(tempDir(), 'providers.json');
+  write(providers, JSON.stringify({ providers: { sub: { type: 'claude-subscription', personalDataAllowed: true }, gw: { type: 'claude-gateway', personalDataAllowed: false } } }));
+  write(path.join(own, 'output', 'records', 'x', 'TASK.md'), '# 업무\n## 사용자 원문\n"만들어 줘" (#900125)\n');
+  const prompt = path.join(tempDir(), 'prompt.md');
+  write(prompt, 'output/records/x/TASK.md의 업무를 이 폴더의 AGENTS.md 규칙대로 수행하라.');
+  const run = (provider: string, db = file) => {
+    const out: string[] = [];
+    const code = main(['private', prompt, '--provider', provider, '--folder', own, '--db', db, '--providers', providers], (s) => out.push(s));
+    return { code, out: out.join('\n') };
+  };
+  const gw = run('gw');
+  assert.equal(gw.code, 1, gw.out);
+  assert.match(gw.out, /TASK\.md:3 \[기억·대화 번호\] #900125/);
+  assert.equal(run('unknown-provider').code, 1, 'a provider not in the file counts as one personal data may not go to');
+  assert.match(run('sub').out, /검사 안 함/);
+  assert.equal(run('sub').code, 0);
+  assert.equal(run('gw', path.join(tempDir(), 'none.db')).code, 2);
+  write(path.join(own, 'output', 'records', 'x', 'TASK.md'), '# 업무\n## 사용자 원문\n"만들어 줘"\n');
+  assert.equal(run('gw').code, 0);
 });

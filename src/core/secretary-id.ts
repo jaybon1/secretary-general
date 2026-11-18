@@ -55,9 +55,15 @@ export function newSecretaryId(): string {
   return Array.from({ length: SECRETARY_ID_LENGTH }, () => SECRETARY_ID_ALPHABET[crypto.randomInt(SECRETARY_ID_ALPHABET.length)]).join('');
 }
 
+/** How long a new id waits for another process that made the file first to finish writing it. */
+const OTHER_WRITER_WAIT_MS = 500;
+
 /**
  * root's id, made and written first when there is none. A file not in the one shape (lower case, a BOM, CRLF) is written
  * again as `<ID>\n`; only this copy's own folder comes here (reading another secretary's id never writes it).
+ * A new id is written only when no file is there yet (exclusive create): two processes starting at once (the session-start
+ * check and the scheduled-task install on a first run) would otherwise each write their own id, and the task names and
+ * the records folder would split. The one that finds the file made reads the other's id instead.
  * A folder that can't be written gives null for a new id.
  */
 export function ensureSecretaryId(root: string): { id: string | null; created: boolean } {
@@ -69,6 +75,18 @@ export function ensureSecretaryId(root: string): { id: string | null; created: b
     return { id, created: false };
   }
   const made = newSecretaryId();
+  try {
+    fs.writeFileSync(secretaryIdPath(root), `${made}\n`, { flag: 'wx' });
+    return { id: made, created: true };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return { id: null, created: false };
+  }
+  // Another process made it a moment ago: its id, once written (an empty file is still being written).
+  const until = Date.now() + OTHER_WRITER_WAIT_MS;
+  while (Date.now() <= until && !rawId(root)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  const theirs = readSecretaryId(root);
+  if (theirs) return { id: theirs, created: false };
+  // A file that holds no id (broken, or left empty): written over, as before.
   try {
     fs.writeFileSync(secretaryIdPath(root), `${made}\n`);
     return { id: made, created: true };

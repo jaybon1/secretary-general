@@ -33,6 +33,14 @@ Object.assign(process.env, {
   SECRETARY_TEST_FAILURES_FILE: path.join(ENV_DIR, 'test-failures.jsonl'),
   // Where the searches the semantic-search server did not answer are recorded (src/semantic-search/misses.ts), otherwise this secretary's records folder.
   SECRETARY_SEMANTIC_SEARCH_MISS_LOG: path.join(ENV_DIR, 'semantic-search-misses.jsonl'),
+  // Stalled jobs and how far the prompt hook told them (src/workspace/job-stalls.ts), otherwise this secretary's records folder.
+  SECRETARY_JOB_STALLS_DIR: path.join(ENV_DIR, 'job-stalls'),
+  // What a hook could not do (src/core/hook-errors.ts), otherwise this secretary's records folder.
+  SECRETARY_HOOK_ERRORS_LOG: path.join(ENV_DIR, 'hook-errors.jsonl'),
+  // What a failed cli command left (src/core/cli-errors.ts), otherwise this secretary's records folder.
+  SECRETARY_CLI_ERRORS_LOG: path.join(ENV_DIR, 'cli-errors.log'),
+  // What each DB backup run did (src/core/backup-record.ts), otherwise this secretary's records folder.
+  SECRETARY_BACKUP_RECORD: path.join(ENV_DIR, 'db-backup.jsonl'),
   // Tests never start the semantic-search server or download its model; semantic tests inject a fake.
   SECRETARY_SEMANTIC_SEARCH: 'off',
   [NO_MODEL_ENV]: '1',

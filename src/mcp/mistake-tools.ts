@@ -8,7 +8,7 @@ import { guardsOn } from '../mistake-guards/mistake-guard-settings.ts';
 import { answerCheck } from '../mistake-guards/answer-check-table.ts';
 import { TOOL_HOOK_GUARDS } from '../mistake-guards/tool-hook-hits.ts';
 import { addInventedWords } from '../mistake-guards/invented-words.ts';
-import { searchTerms } from '../memory/search-terms.ts';
+import { searchTerms } from '../store/search-terms.ts';
 import { MISTAKE_CAUSES, MISTAKE_FINDERS, type Mistake } from '../store/store.ts';
 import { fail, ok, type ToolContext } from './tool-common.ts';
 
@@ -81,7 +81,7 @@ export function registerMistakeTools({ server, store }: ToolContext): void {
         invented_words: z
           .array(z.string().min(1).max(20))
           .optional()
-          .describe('지어낸 말 실수일 때만: 사용자가 되물은 그 낱말(예: "칸"). 답변 검사가 다음부터 질문·선택지·근거 줄에서 풀이 없이 나오면 알린다'),
+          .describe('지어낸 말 실수일 때만: 사용자가 되물은 그 말(두 글자 이상, 예: "목적 칸". 한 글자 낱말은 그것이 든 묶음 말로 적는다). 답변 검사가 다음부터 질문·선택지·근거 줄에서 풀이 없이 나오면 알린다'),
       },
     },
     async (a) => {
@@ -101,12 +101,15 @@ export function registerMistakeTools({ server, store }: ToolContext): void {
       });
       const same = store.listMistakes({ group: m.group_name, limit: 1000 }).length;
       const added = a.invented_words?.length ? addInventedWords(store, a.invented_words) : [];
+      // One letter alone is not added (it stands in too many ordinary words): say so, so it is written again as a phrase.
+      const oneLetter = (a.invented_words ?? []).map((w) => w.trim()).filter((w) => w && [...w].length < 2);
       const similar = groupsBefore.includes(m.group_name) ? [] : similarGroups(m.group_name, groupsBefore);
       return ok(
         [
           `실수 #${m.id} 기록${m.recurred ? ` (재발: '${m.group_name}' ${same}번째)` : ''}`,
           formatMistake(m),
           ...(added.length ? [`지어낸 말 목록에 더함: ${added.join(', ')}(답변 검사가 다음 답부터 알림)`] : []),
+          ...(oneLetter.length ? [`한 글자라 지어낸 말 목록에 더하지 않음: ${oneLetter.join(', ')}. 답변 검사는 사용자가 되물은 묶음 말(예: "목적 칸")만 보니, 그 말로 적는다.`] : []),
           ...(similar.length
             ? [`새 분류 이름이다. 비슷한 기존 분류: ${similar.map((n) => `'${n}'`).join(', ')}. 같은 종류면 update_mistake의 group으로 그 이름으로 옮긴다(이름이 갈리면 재발로 안 센다).`]
             : []),
